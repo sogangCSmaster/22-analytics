@@ -11,6 +11,8 @@
 
 | 항목 | 결정 |
 |---|---|
+| 서비스 형태 | **대행사 내부 전용 도구 (SI 납품)**. 대행사가 광고주별 프로젝트를 운영하며 외부 판매·과금은 하지 않음 |
+| UI/UX | 토스 계열 PG 관리자 페이지 같은 **깔끔한 B2B 어드민 톤** (§12.1) |
 | 수집 입구 | Cloudflare Worker (엣지): 스크립트 배포, 이벤트 수신, 고객사 도메인 TLS |
 | 플랫폼 | AWS 서울 리전 (`ap-northeast-2`). 데이터는 국내에만 저장 |
 | 이벤트 저장·분석 | ClickHouse, Graviton EC2 소형 인스턴스 1대로 시작 |
@@ -91,8 +93,15 @@
 
 ## 2. 멀티테넌시와 키
 
+대행사 내부 도구이므로 테넌트 구조는 단순합니다.
+
+- **운영 주체는 대행사 하나**입니다. 시스템 관리자는 대행사 직원입니다.
+- **Organization은 "광고주"**를 뜻합니다. 광고주 하나가 사이트 여러 개(Project)를 가질 수 있습니다.
+- 회원가입, 플랜, 과금 기능은 없습니다. 계정은 관리자가 초대해서 만듭니다.
+- 광고주 담당자에게는 필요하면 **읽기 전용(viewer) 계정**을 발급해 리포트만 공유할 수 있습니다.
+
 ```
-Organization (대행사/광고주)
+Organization (광고주)
  └─ Project (웹사이트 1개)  ── project_id (u32), public_key "pk_..."
      ├─ Secret Keys         ── "sk_..." (S2S 주문 API, 리포팅 API)
      ├─ Allowed Origins     ── 수집을 허용할 도메인 목록
@@ -102,7 +111,8 @@ Organization (대행사/광고주)
      └─ Attribution Settings── lookback, 기본 모델, 반감기
 ```
 
-- 사용자와 조직은 N:M(`memberships`)이고 역할은 `owner | admin | analyst | viewer`입니다.
+- 전역 역할(`users.is_super_admin`)을 가진 대행사 관리자는 모든 광고주에 접근합니다.
+- 그 외 사용자와 조직은 N:M(`memberships`)이고 역할은 `admin | analyst | viewer`입니다. 대행사 AE는 담당 광고주에만 배정하고, 광고주 담당자는 `viewer`로 둡니다.
 - `pk_`는 공개 키입니다. 스니펫에 노출되므로 **Origin 검증과 rate limit**으로 보호합니다.
 - `sk_`는 비밀 키입니다. DB에는 `argon2` 해시와 prefix만 저장하고, 생성 시 한 번만 보여줍니다.
 - 프로젝트마다 `salt`(32바이트)를 둡니다. `member_id_hash`를 다시 해싱하는 데 씁니다(§9).
@@ -489,8 +499,8 @@ ORDER BY (project_id, day, channel, host, path, device_type, country);
 ### 6.3 PostgreSQL (메타데이터)
 
 ```
-users(id, email, password_hash, name, created_at, last_login_at)
-organizations(id, name, plan, created_at)
+users(id, email, password_hash, name, is_super_admin, created_at, last_login_at)
+organizations(id, name, memo, created_at)      -- 광고주
 memberships(user_id, org_id, role)
 projects(id serial→u32, org_id, name, public_key, timezone, currency,
          salt bytea, status, settings jsonb, settings_version, created_at)
@@ -731,23 +741,66 @@ GROUP BY model, lookback_days;
   9. **중복 소거 리포트**(합산 / 소거 / 중복률, 모델·lookback 전환, 매체 조합)
   10. 설정(수집 토글, 도메인, 키, 채널 규칙, 기여 설정, 커스텀 호스트명)
 
+### 12.1 UI/UX 가이드: PG 관리자 페이지 톤
+
+목표는 토스 계열 결제(PG) 관리자 페이지처럼 **숫자가 주인공인 깔끔한 B2B 어드민**입니다. 토스의 로고, 서체(Toss Product Sans), 고유 일러스트 같은 브랜드 자산은 쓰지 않습니다. 톤과 원칙만 참고하고, **자체 디자인 토큰**을 정의해 `crates/web`에 컴포넌트 라이브러리로 구현합니다.
+
+**디자인 원칙**
+1. **숫자 우선**: 핵심 지표는 큰 숫자(32~40px, Bold)로 보여주고, 라벨과 증감은 작은 회색 글씨로 붙입니다. 금액은 `1,234,000원`처럼 원 단위와 천 단위 구분을 씁니다.
+2. **넉넉한 여백과 낮은 대비의 면**: 흰 배경 위에 연회색 카드(`radius 16~20px`, 그림자 없음 또는 아주 약하게)를 둡니다.
+3. **강조색 하나**: 파란색 계열 primary 하나만 쓰고, 빨강(감소·오류)과 초록(증가·정상)은 상태 표시에만 씁니다.
+4. **쉬운 말**: "Attribution" 대신 "매출 기여", "Deduplicated revenue" 대신 "실제 매출"처럼 마케터 용어로 씁니다. 매뉴얼의 "쉽게 말해" 톤을 따릅니다.
+5. **빈 상태와 설치 안내**: 데이터가 없을 때는 다음 행동(스니펫 복사, 설치 확인)을 바로 할 수 있게 합니다.
+
+**디자인 토큰 (초안)**
+
+| 토큰 | 값 | 용도 |
+|---|---|---|
+| `font-family` | Pretendard Variable (OFL), 숫자는 `tabular-nums` | 전체 |
+| `color-primary` | `#3182F6` 계열 | 주요 버튼, 선택 상태, 차트 1번 계열 |
+| `color-text` / `-sub` / `-weak` | `#191F28` / `#4E5968` / `#8B95A1` | 본문 / 보조 / 비활성 |
+| `color-bg` / `-card` / `-line` | `#FFFFFF` / `#F2F4F6` / `#E5E8EB` | 배경 / 카드 / 구분선 |
+| `color-up` / `color-down` | 초록 / 빨강 계열 | 증감 표시 |
+| `radius` | 8 / 12 / 16 / 20 | 입력 / 버튼 / 카드 / 큰 카드 |
+| `space` | 4px 그리드 (4, 8, 12, 16, 24, 32, 48) | 간격 |
+| `type-scale` | 13 / 15 / 17 / 20 / 26 / 32 / 40 | 캡션 ~ 대형 지표 |
+
+**레이아웃**
+- 왼쪽 고정 사이드바: 상단에 광고주·프로젝트 전환기, 그 아래 메뉴(개요, 실시간, 유입, 페이지, 이벤트, 전자상거래, **실제 매출**, 설정)
+- 상단 바: 기간 선택(오늘, 7일, 30일, 직접 선택), 비교 기간 토글, 사용자 메뉴
+- 본문: 상단에 지표 카드 4개 → 추이 차트 → 상세 표
+- 표: 줄무늬 없이 얇은 구분선, 행 hover, 오른쪽 정렬 숫자, 정렬·CSV 내보내기
+- 상세 보기는 오른쪽 **사이드 패널(드로어)**로 열어 목록 맥락을 유지합니다. 예: 주문 하나를 클릭하면 그 주문의 터치포인트 타임라인과 모델별 배분을 보여줍니다.
+
+**핵심 화면: 실제 매출(중복 소거)**
+- 상단 카드 3개: `매체 합산 매출`(취소선 회색) → `실제 매출`(primary, 대형) → `중복률`
+- 모델 선택: 세그먼트 컨트롤(Last-Click, First-Click, Linear, Time-Decay)과 lookback(7일, 30일)
+- 매체별 표: 귀속 매출, 어시스트, 광고비, ROAS
+- 매체 조합 차트: 중복이 집중되는 조합 (예: 네이버 → 메타)
+- 안내 문구 카드: 매뉴얼 1.D(3)의 광고주 설명 문안을 그대로 복사할 수 있게 제공합니다.
+
+**컴포넌트 목록 (Dioxus)**
+`Button`, `TextField`, `Select`, `SegmentedControl`, `Toggle`, `DateRangePicker`, `StatCard`, `Card`, `Table`(정렬, 페이지네이션), `Drawer`, `Modal`, `Toast`, `Badge`, `Tabs`, `EmptyState`, `Skeleton`, `CodeBlock`(복사 버튼), `Chart`(ECharts 래퍼, 토큰 색상 적용)
+
+라이트 모드를 기본으로 하고, 다크 모드는 토큰만 정의해 두고 Phase 3에서 적용합니다.
+
 ---
 
 ## 13. 로드맵
 
 | 단계 | 범위 | 완료 기준 |
 |---|---|---|
-| **Phase 0** 기반 | workspace 골격, Terraform, compose, CH·PG 마이그레이션, CI(fmt, clippy, test, tracker 크기) | `docker compose up`으로 로컬 전체 기동 |
+| **Phase 0** 기반 | workspace 골격, Terraform, compose, CH·PG 마이그레이션, CI(fmt, clippy, test, tracker 크기), **디자인 토큰과 기본 컴포넌트** | `docker compose up`으로 로컬 전체 기동 |
 | **Phase 1** 수집 MVP | 트래커(pageview, SPA, custom event, 배치), Worker(collect, config, t.js), ingest, S3 아카이브, 조직·프로젝트·키 관리, 개요·실시간·채널·페이지 화면, 설치 검증 | 실제 사이트 1곳에서 7일간 유실률 1% 미만, 대시보드 p95 300ms 미만 |
 | **Phase 2** 매출·중복 소거 | 전자상거래 이벤트, S2S 주문 API(확정·취소·부분환불), 채널 규칙, 기여 엔진(Last/First/Linear/Time-Decay, 7·30일), 보존 검증, 중복 소거 리포트, 광고비 CSV와 ROAS | 매뉴얼 1.A 시나리오(ORD-9901) E2E 테스트 통과, 보존 검증 0건 |
 | **Phase 3** 정확도·운영 | 커스텀 호스트명(HttpOnly 쿠키), identity graph, 미분류 소스 화면, Google OAuth, 알림, CSV/API 내보내기, 리포팅 API | Safari 사용자의 7일 이후 재방문 매칭 확인 |
-| **Phase 4** 확장 | MMP(디파이너리, 에어브릿지) postback 수신, Web-to-App, 매체 광고비·리포트 API 연동, 플랜·과금 | — |
+| **Phase 4** 확장 | MMP(디파이너리, 에어브릿지) postback 수신, Web-to-App, 매체 광고비·리포트 API 연동, 광고주 공유용 리포트 링크·PDF | — |
 
 ---
 
 ## 14. 미결 사항
 
-1. **서비스 형태**: 대행사 내부 도구로 쓸지, 외부 판매 SaaS로 갈지. 과금(이벤트량 기준), 가입 플로우, 약관 범위가 달라집니다.
+1. **납품 범위와 운영 주체 (SI)**: AWS·Cloudflare 계정을 대행사 명의로 만들지, 납품 후 운영·유지보수를 누가 맡을지 정해야 합니다. 인프라는 처음부터 대행사 계정에 Terraform으로 구성하고, `RUNBOOK.md`(배포, 백업 복구, 장애 대응)를 납품물에 포함하는 것을 권장합니다.
 2. **도메인**: 공용 수집 도메인과 대시보드 도메인(가칭 `22analytics.io`)을 정해야 합니다.
 3. **`net_amount` 표준 정의**: 쿠폰, 포인트, 배송비 처리 기준의 기본값을 정해야 합니다.
 4. **Organic과 Referral을 기여 대상에 넣을지**: 기본값을 `include_organic=true`로 할지 정해야 합니다. 광고 매체만 볼 때는 끌 수 있게 합니다.
