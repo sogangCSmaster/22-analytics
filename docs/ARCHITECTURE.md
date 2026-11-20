@@ -128,7 +128,7 @@ Organization (광고주)
 <script async src="https://track.client.com/t.js" data-key="pk_7Hq2..."></script>
 
 <!-- 기본 (공용 도메인) -->
-<script async src="https://cdn.22analytics.io/t.js" data-key="pk_7Hq2..."></script>
+<script async src="https://collect.<agency-domain>/t.js" data-key="pk_7Hq2..."></script>
 
 <!-- 로드 전 호출을 위한 큐 스텁 -->
 <script>window.at=window.at||function(){(at.q=at.q||[]).push(arguments)};</script>
@@ -252,7 +252,7 @@ at('getVisitorId', id => ...);         // 비 HttpOnly 모드에서 주문서에
 ### 5.1 엔드포인트
 
 ```
-POST https://track.client.com/v1/orders      (또는 api.22analytics.io)
+POST https://track.client.com/v1/orders      (또는 collect.<agency-domain>)
 Authorization: Bearer sk_live_...
 Idempotency-Key: <선택. 없으면 order_id + event_type + 금액으로 계산>
 ```
@@ -726,7 +726,7 @@ GROUP BY model, lookback_days;
 
 ### 대시보드 (Dioxus)
 
-- 정적 WASM SPA로 빌드해 **Cloudflare Pages(무료)**에 배포합니다. API는 `api.22analytics.io`에서 Tunnel을 거쳐 `api`로 연결됩니다.
+- 정적 WASM SPA로 빌드해 **Cloudflare Pages(무료)**에 배포합니다. API는 `api.analytics.<agency-domain>`에서 Tunnel을 거쳐 `api`로 연결됩니다.
 - 공유 타입: `crates/core`의 요청·응답 DTO를 `web`과 `api`가 함께 씁니다.
 - 차트: ECharts를 `wasm-bindgen`이나 `document::eval`로 감싼 `Chart` 컴포넌트 하나를 둡니다.
 - 1차 화면:
@@ -798,11 +798,19 @@ GROUP BY model, lookback_days;
 
 ---
 
-## 14. 미결 사항
+## 14. 결정 사항 (2026-11-20 확정)
 
-1. **납품 범위와 운영 주체 (SI)**: AWS·Cloudflare 계정을 대행사 명의로 만들지, 납품 후 운영·유지보수를 누가 맡을지 정해야 합니다. 인프라는 처음부터 대행사 계정에 Terraform으로 구성하고, `RUNBOOK.md`(배포, 백업 복구, 장애 대응)를 납품물에 포함하는 것을 권장합니다.
-2. **도메인**: 공용 수집 도메인과 대시보드 도메인(가칭 `22analytics.io`)을 정해야 합니다.
-3. **`net_amount` 표준 정의**: 쿠폰, 포인트, 배송비 처리 기준의 기본값을 정해야 합니다.
-4. **Organic과 Referral을 기여 대상에 넣을지**: 기본값을 `include_organic=true`로 할지 정해야 합니다. 광고 매체만 볼 때는 끌 수 있게 합니다.
-5. **Worker 언어**: workers-rs로 PoC를 만든 뒤 번들 크기와 CPU 시간을 측정해서 확정합니다.
-6. **개인정보 법무 검토**: 처리위탁과 Cloudflare 경유에 대한 고지 문안.
+| # | 항목 | 결정 |
+|---|---|---|
+| D1 | 계정·운영 주체 | **AWS와 Cloudflare 모두 대행사 명의 계정**에 구축합니다. 개발 초기부터 대행사 계정에 IAM 역할을 받아 Terraform으로 구성하고, 개인 계정에 만들었다가 이관하는 과정은 두지 않습니다. 납품물에 `RUNBOOK.md`(배포, 백업 복구, 장애 대응, 키 교체), Terraform 상태(S3 backend + DynamoDB lock, 대행사 계정)와 운영자 계정 목록을 포함합니다. 납품 후 유지보수는 별도 계약 범위로 둡니다. |
+| D2 | 도메인 | **대행사 소유 도메인의 서브도메인**을 씁니다. 대행사 도메인의 DNS는 Cloudflare로 옮깁니다. <br>· `collect.<agency-domain>`: 공용 수집과 `t.js` <br>· `analytics.<agency-domain>`: 대시보드(Pages) <br>· `api.analytics.<agency-domain>`: 대시보드 API(Tunnel) <br>· 광고주별 `track.<광고주 도메인>`: 커스텀 호스트명(권장, 광고주가 CNAME으로 `collect.<agency-domain>`을 가리킴) |
+| D3 | `net_amount` 기본 정의 | **상품 판매가 합계 − 쿠폰·즉시할인 − 포인트·적립금 사용액, 배송비 제외, 부가세 포함**으로 정합니다. 매체 픽셀과 비교할 수 있도록 `gross_amount`(할인 전 결제 총액)도 함께 받아 저장합니다. 광고주 재무팀 기준이 다르면 프로젝트 설정의 메모와 연동 가이드로 개별 합의합니다(매뉴얼 2.A). |
+| D4 | 기여 대상 유입 | **자연검색과 추천(referral)을 기여 대상에 포함**합니다(`include_organic=true`, `include_referral=true`). Direct는 제외합니다(last non-direct). 이 유입을 빼면 Last-Click이 광고 매체를 과대평가하기 때문입니다. 리포트에는 "광고 매체만 보기" 필터를 제공합니다. |
+| D5 | Worker 언어 | **workers-rs(Rust)**로 시작합니다. Phase 1에서 압축 번들 1MB 이하, 요청당 CPU p99 5ms 이하를 확인하고, 기준을 넘으면 Worker만 TypeScript로 교체합니다. 교체해도 프로토콜과 스키마는 그대로입니다. |
+
+## 15. 남은 확인 사항 (대행사 측)
+
+1. **대행사 도메인 이름**과 Cloudflare DNS 이전 가능 여부
+2. **AWS·Cloudflare 계정 접근 권한**: 개발용 IAM 역할(최소 권한)과 Cloudflare API 토큰(Workers, KV, Queues, Pages, Tunnel, Custom Hostnames 범위)
+3. **개인정보 법무 검토**: 광고주 개인정보처리방침의 처리위탁(대행사) 항목과 Cloudflare 경유 고지 문안
+4. **파일럿 광고주 1곳**: Phase 1 검증(7일간 유실률 측정)에 쓸 실제 사이트
