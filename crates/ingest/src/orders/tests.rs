@@ -507,9 +507,19 @@ async fn final_states(db: &TestDb, project: i32) -> Vec<Value> {
         .unwrap();
     rows.into_iter()
         .map(|r| {
-            json!([r.order_id, r.source, r.status, r.visitor_id, r.member_hash, r.currency,
-                r.gross_amount, r.net_amount, r.refunded_amount, r.effective_amount,
-                analytics_core::timeutil::dt_to_ms(r.ordered_at)])
+            json!([
+                r.order_id,
+                r.source,
+                r.status,
+                r.visitor_id,
+                r.member_hash,
+                r.currency,
+                r.gross_amount,
+                r.net_amount,
+                r.refunded_amount,
+                r.effective_amount,
+                analytics_core::timeutil::dt_to_ms(r.ordered_at)
+            ])
         })
         .collect()
 }
@@ -577,7 +587,13 @@ async fn batch_of_100_uses_one_insert_per_table_and_matches_sequential() {
     for i in 0..5 {
         let body = confirm(&format!("P{i}"), 50_000).to_string();
         h.post(&confirm(&format!("P{i}"), 50_000)).await;
-        send(&h.app, "/v1/orders", &[("authorization", &other_auth)], body.into_bytes()).await;
+        send(
+            &h.app,
+            "/v1/orders",
+            &[("authorization", &other_auth)],
+            body.into_bytes(),
+        )
+        .await;
     }
     let items = mixed_batch();
 
@@ -814,9 +830,8 @@ async fn two_ingest_writers_converge_after_recheck() {
     // 동시에 처리해도, 다중 writer 모드(ORDERS_MULTI_WRITER)면 투영 후 이벤트를 다시 읽어 확인하므로
     // 마지막 상태는 모든 이벤트를 반영한다.
     let mut h = setup().await;
-    let multi = || {
-        Arc::new(OrderService::new(h.db.pg.clone(), h.db.ch.clone()).with_multi_writer(true))
-    };
+    let multi =
+        || Arc::new(OrderService::new(h.db.pg.clone(), h.db.ch.clone()).with_multi_writer(true));
     let (one, two) = (multi(), multi());
     h.app = app_for(one.clone());
     h.svc = one;
@@ -864,9 +879,8 @@ async fn two_ingest_writers_converge_after_recheck() {
 async fn two_ingest_writers_converge_with_batches() {
     // 다중 writer 모드의 일괄 경로: 한 프로세스는 일괄, 다른 프로세스는 단건으로 같은 주문들을 동시에 쓴다
     let h = setup().await;
-    let multi = || {
-        Arc::new(OrderService::new(h.db.pg.clone(), h.db.ch.clone()).with_multi_writer(true))
-    };
+    let multi =
+        || Arc::new(OrderService::new(h.db.pg.clone(), h.db.ch.clone()).with_multi_writer(true));
     let (a, b) = (app_for(multi()), app_for(multi()));
     let ids: Vec<String> = (0..6).map(|i| format!("W{i}")).collect();
     for id in &ids {
@@ -890,9 +904,14 @@ async fn two_ingest_writers_converge_with_batches() {
             let (app, auth2) = (b.clone(), auth.clone());
             let body = refund(id, 1_000, &format!("2026-11-20T13:00:{round:02}Z")).to_string();
             tasks.push(tokio::spawn(async move {
-                send(&app, "/v1/orders", &[("authorization", &auth2)], body.into_bytes())
-                    .await
-                    .0
+                send(
+                    &app,
+                    "/v1/orders",
+                    &[("authorization", &auth2)],
+                    body.into_bytes(),
+                )
+                .await
+                .0
             }));
         }
     }
@@ -901,7 +920,10 @@ async fn two_ingest_writers_converge_with_batches() {
     }
     for id in &ids {
         let o = h.order(id).await.unwrap();
-        assert_eq!(o.refunded_amount, 8_000, "{id}: 두 프로세스의 환불 모두 반영");
+        assert_eq!(
+            o.refunded_amount, 8_000,
+            "{id}: 두 프로세스의 환불 모두 반영"
+        );
     }
 }
 
@@ -936,7 +958,11 @@ async fn batch_write_failure_keeps_conflicts_and_retry_recovers() {
     assert_eq!(s, StatusCode::ACCEPTED, "{v}");
     assert_eq!(v["results"][1]["accepted"], true);
     assert_eq!(h.order("F2").await.unwrap().effective_amount, 2_000);
-    assert_eq!(h.event_count("F2").await, 1, "재전송은 이벤트를 다시 쓰지 않는다");
+    assert_eq!(
+        h.event_count("F2").await,
+        1,
+        "재전송은 이벤트를 다시 쓰지 않는다"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

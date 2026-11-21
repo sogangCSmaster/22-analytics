@@ -244,8 +244,15 @@ impl BatchCtx<'_> {
         batch: &[OrderForAttribution],
         report: &mut Report,
     ) -> anyhow::Result<()> {
-        let (written, rows) =
-            process_batch(self.ch, self.scope, batch, self.rules, self.cfg, self.now_ms).await?;
+        let (written, rows) = process_batch(
+            self.ch,
+            self.scope,
+            batch,
+            self.rules,
+            self.cfg,
+            self.now_ms,
+        )
+        .await?;
         report.orders_seen += batch.len();
         report.orders_written += written;
         report.rows_written += rows;

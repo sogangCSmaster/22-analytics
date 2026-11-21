@@ -858,7 +858,14 @@ async fn paging_fixture(db: &TestDb, p: u32) -> usize {
     for i in 0..n {
         let v = Uuid::new_v4();
         if i % 3 != 0 {
-            touches.push(TouchFixture::utm(p, v, ORDER_AT - 2 * DAY_MS, "naver", "cpc", ""));
+            touches.push(TouchFixture::utm(
+                p,
+                v,
+                ORDER_AT - 2 * DAY_MS,
+                "naver",
+                "cpc",
+                "",
+            ));
         }
         // 4건씩 같은 ordered_at
         let at = ORDER_AT - i64::from(i / 4) * MIN;
@@ -871,7 +878,14 @@ async fn paging_fixture(db: &TestDb, p: u32) -> usize {
             100 + u64::from(i),
         ));
     }
-    orders.push(OrderFixture::confirmed(p, "OLD", None, 5, NOW - 40 * DAY_MS, 1));
+    orders.push(OrderFixture::confirmed(
+        p,
+        "OLD",
+        None,
+        5,
+        NOW - 40 * DAY_MS,
+        1,
+    ));
     insert_touches(&db.ch, &touches).await.unwrap();
     insert_orders(&db.ch, &orders).await.unwrap();
     n as usize

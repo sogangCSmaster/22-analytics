@@ -123,7 +123,10 @@ async fn orders_version_skip_index_is_metadata_only_and_used() {
         .fetch_one()
         .await
         .unwrap();
-    assert_eq!(mutations, 0, "인덱스 추가는 새 파트·머지부터 적용 (MATERIALIZE 없음)");
+    assert_eq!(
+        mutations, 0,
+        "인덱스 추가는 새 파트·머지부터 적용 (MATERIALIZE 없음)"
+    );
     // changed_orders의 안쪽 조회(version > watermark)가 인덱스를 쓴다
     let plan: Vec<String> = db
         .ch
@@ -159,6 +162,10 @@ async fn guarded_client_limits_threads_and_memory() {
     assert_eq!((threads, memory), (2, 1_500_000_000));
     assert_eq!(exec, analytics_ch::MAX_EXECUTION_SECS.to_string());
     // 데이터베이스도 같다
-    let name: String = c.query("SELECT currentDatabase()").fetch_one().await.unwrap();
+    let name: String = c
+        .query("SELECT currentDatabase()")
+        .fetch_one()
+        .await
+        .unwrap();
     assert_eq!(name, db.ch_config.database);
 }

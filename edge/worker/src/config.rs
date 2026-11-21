@@ -134,7 +134,10 @@ pub(crate) mod tests {
     fn cache_uses_config_ttl() {
         let mut c = new_cache();
         c.put("pk_a".into(), Some(std::rc::Rc::new(project())), 0);
-        assert_eq!(c.get("pk_a", CONFIG_TTL_MS - 1), Some(Some(std::rc::Rc::new(project()))));
+        assert_eq!(
+            c.get("pk_a", CONFIG_TTL_MS - 1),
+            Some(Some(std::rc::Rc::new(project())))
+        );
         assert_eq!(c.get("pk_a", CONFIG_TTL_MS), None);
     }
 }

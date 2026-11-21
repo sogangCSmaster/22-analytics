@@ -30,9 +30,7 @@ use analytics_ch::ProjectScope;
 use analytics_ch::orders::{self as ch_orders, OrderRow};
 use analytics_core::Event;
 use analytics_core::cache::TtlCache;
-use analytics_core::orders::{
-    OrderEvent, OrderSource, OrderState, client_purchase_event, project,
-};
+use analytics_core::orders::{OrderEvent, OrderSource, OrderState, client_purchase_event, project};
 use analytics_core::settings::TrackingSettings;
 use analytics_core::timeutil::now_ms;
 use sqlx::{PgPool, Row};
@@ -387,10 +385,8 @@ impl OrderService {
                 Some(OrderRow::from_state(w.state.as_ref()?, version))
             })
             .collect();
-        let new_events: Vec<&OrderEvent> = work
-            .values()
-            .flat_map(|w| &w.events[w.stored..])
-            .collect();
+        let new_events: Vec<&OrderEvent> =
+            work.values().flat_map(|w| &w.events[w.stored..]).collect();
         let written = async {
             ch_orders::insert_order_events(&self.ch, &new_events).await?;
             ch_orders::insert_orders(&self.ch, &rows).await?;

@@ -20,8 +20,8 @@ use axum::{
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::{Arc, Mutex};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
 use uuid::Uuid;

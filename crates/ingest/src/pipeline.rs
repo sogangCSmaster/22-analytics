@@ -260,7 +260,10 @@ mod tests {
         }
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while metrics.insert_errors.load(Relaxed) == 0 {
-            assert!(std::time::Instant::now() < deadline, "insert가 시도되지 않음");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "insert가 시도되지 않음"
+            );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert_eq!(metrics.rows_inserted.load(Relaxed), 0);
@@ -300,7 +303,11 @@ mod tests {
         let mut buf: Vec<Event> = (0..15).map(|i| event(1, i)).collect();
         assert_eq!(trim_overflow(&mut buf, 10), 5);
         assert_eq!(buf.len(), 10);
-        assert_eq!(buf[0].event_id, uuid::Uuid::from_u128(6), "오래된 것부터 버린다");
+        assert_eq!(
+            buf[0].event_id,
+            uuid::Uuid::from_u128(6),
+            "오래된 것부터 버린다"
+        );
         assert_eq!(trim_overflow(&mut buf, 10), 0);
     }
 
