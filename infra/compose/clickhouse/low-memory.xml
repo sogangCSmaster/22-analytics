@@ -2,7 +2,22 @@
 <clickhouse>
     <max_server_memory_usage_to_ram_ratio>0.6</max_server_memory_usage_to_ram_ratio>
     <mark_cache_size>268435456</mark_cache_size>
+    <!-- 파일 로그를 끄고 콘솔(warning 이상)만 쓴다. 파일 로그 권한 오류가 stderr를 무한히 채우는 문제 방지 -->
     <logger>
         <level>warning</level>
+        <console>1</console>
+        <log remove="1"/>
+        <errorlog remove="1"/>
     </logger>
+    <!-- 시스템 로그 테이블은 짧게 보관 (디스크 무한 증가 방지) -->
+    <query_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></query_log>
+    <part_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></part_log>
+    <metric_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></metric_log>
+    <asynchronous_metric_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl></asynchronous_metric_log>
+    <query_thread_log remove="1"/>
+    <query_views_log remove="1"/>
+    <text_log remove="1"/>
+    <trace_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
 </clickhouse>
