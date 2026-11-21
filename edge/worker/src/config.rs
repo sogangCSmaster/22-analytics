@@ -122,6 +122,13 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn memory_cache_matches_public_config_max_age() {
+        // C2: 설정 캐시는 5분 (공개 설정 응답 max-age와 같다). isolate당 KV 읽기를 줄인다.
+        assert_eq!(CONFIG_TTL_MS, 300_000);
+        assert_eq!(CONFIG_TTL_MS, i64::from(PUBLIC_CONFIG_MAX_AGE) * 1000);
+    }
+
+    #[test]
     fn cache_uses_config_ttl() {
         let mut c = new_cache();
         c.put("pk_a".into(), Some(project()), 0);
