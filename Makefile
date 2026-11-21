@@ -34,6 +34,7 @@ web:       ## 대시보드 개발 서버
 
 test:      ## 전체 테스트 (DB 필요: make up migrate)
 	cargo test --workspace --exclude analytics-web --exclude analytics-edge
+	cargo test -p analytics-edge
 	cargo test -p analytics-web --no-default-features
 	cd tracker && npm run -s check
 
@@ -41,6 +42,7 @@ lint:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets -- -D warnings
 	cargo clippy -p analytics-web --target wasm32-unknown-unknown -- -D warnings
+	cargo clippy -p analytics-edge --target wasm32-unknown-unknown -- -D warnings
 
 fmt:
 	cargo fmt --all

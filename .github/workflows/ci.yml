@@ -37,9 +37,12 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo clippy -p analytics-web --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo clippy -p analytics-edge --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo build -p analytics-edge --target wasm32-unknown-unknown --release
       - run: cargo run -q -p analytics-jobs -- migrate
       - run: cargo test --workspace --exclude analytics-web --exclude analytics-edge
       - run: cargo test -p analytics-web --no-default-features
+      - run: cargo test -p analytics-edge
 
   tracker:
     runs-on: ubuntu-latest
