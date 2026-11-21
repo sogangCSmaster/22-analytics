@@ -185,4 +185,22 @@ mod render_tests {
             "{html}"
         );
     }
+
+    /// 워드마크는 원본 비율(180×50 = 3.6:1)대로 너비·높이를 함께 고정해야 찌그러지지 않는다.
+    #[test]
+    fn wordmark_keeps_original_aspect_ratio() {
+        use super::brand::{BrandLogo, LoginWordmark};
+        for html in [
+            dioxus_ssr::render_element(rsx! { BrandLogo {} }),
+            dioxus_ssr::render_element(rsx! { LoginWordmark {} }),
+        ] {
+            let attr = |name: &str| -> f64 {
+                let key = format!("{name}=\"");
+                let start = html.find(&key).unwrap_or_else(|| panic!("{name} 속성 없음: {html}")) + key.len();
+                html[start..].split('"').next().unwrap().parse().unwrap()
+            };
+            let ratio = attr("width") / attr("height");
+            assert!((ratio - 3.6).abs() < 0.05, "비율 {ratio}: {html}");
+        }
+    }
 }
