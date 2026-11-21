@@ -39,9 +39,11 @@ name = "analytics-ch"
 version = "0.1.0"
 dependencies = [
  "analytics-core",
+ "analytics-testkit",
  "anyhow",
  "clickhouse",
  "serde",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
