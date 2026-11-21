@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 
 const MAX_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
+/// 세그먼트 압축 레벨. 9는 수집 서버 CPU를 많이 쓰고(회전마다 64MB까지), 3과 크기 차이는 작다.
+const ZSTD_LEVEL: i32 = 3;
 
 /// 쓴 바이트 수를 세는 래퍼 (이벤트마다 중간 `Vec`을 만들지 않고 바로 버퍼에 직렬화한다).
 struct Counting<W> {
@@ -142,7 +144,7 @@ fn compress(path: &Path) -> anyhow::Result<()> {
     target.push(".zst");
     let input = File::open(path)?;
     let output = File::create(&target)?;
-    zstd::stream::copy_encode(input, output, 9)?;
+    zstd::stream::copy_encode(input, output, ZSTD_LEVEL)?;
     fs::remove_file(path)?;
     Ok(())
 }
