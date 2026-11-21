@@ -340,3 +340,30 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
     };
     (status, Json(json!({ "results": results }))).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panicked_batch_items_get_internal_error_not_null() {
+        // 작업이 패닉(JoinError)해 결과를 못 받은 항목은 null이 아니라 order_id를 담은 오류로 채운다
+        let order_ids = vec![json!("A"), json!("B"), Value::Null];
+        let mut results = vec![
+            json!({"order_id": "A", "accepted": true}),
+            Value::Null,
+            Value::Null,
+        ];
+        assert!(fill_missing_results(&mut results, &order_ids));
+        assert_eq!(results[0]["accepted"], true);
+        assert_eq!(
+            results[1],
+            json!({"order_id": "B", "accepted": false, "error": "internal",
+                "message": INTERNAL_MESSAGE})
+        );
+        assert_eq!(results[2]["order_id"], Value::Null);
+        assert_eq!(results[2]["error"], "internal");
+        let mut full = vec![json!({"accepted": true})];
+        assert!(!fill_missing_results(&mut full, &[json!("A")]));
+    }
+}

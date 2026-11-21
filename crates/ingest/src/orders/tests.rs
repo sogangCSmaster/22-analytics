@@ -1397,3 +1397,46 @@ async fn client_purchase_failure_does_not_skip_rest_of_batch() {
     );
     assert_eq!(svc.metrics.client_failed.load(Relaxed), 3);
 }
+
+// ── 문서화된 동작·희귀 케이스 ─────────────────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn equal_partial_refunds_same_ms_without_keys_collapse() {
+    // 문서화된 동작 (ARCHITECTURE §5.1): 키 없이 같은 금액·같은 시각의 부분 환불 두 건은 재전송과
+    // 구별할 수 없어 한 건으로 합쳐진다. 환불마다 Idempotency-Key를 보내면 각각 반영된다.
+    let h = setup().await;
+    h.post(&confirm("P1", 100_000)).await;
+    let r = refund("P1", 10_000, "2026-11-20T12:00:00.123Z");
+    assert_eq!(h.post(&r).await.0, StatusCode::ACCEPTED);
+    assert_eq!(h.post(&r).await.0, StatusCode::ACCEPTED);
+    assert_eq!(h.order("P1").await.unwrap().refunded_amount, 10_000);
+
+    h.post(&confirm("P2", 100_000)).await;
+    let r = refund("P2", 10_000, "2026-11-20T12:00:00.123Z");
+    assert_eq!(h.post_with_key(&r, "refund-1").await, StatusCode::ACCEPTED);
+    assert_eq!(h.post_with_key(&r, "refund-2").await, StatusCode::ACCEPTED);
+    assert_eq!(h.order("P2").await.unwrap().refunded_amount, 20_000);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refund_only_pending_order_contributes_nothing() {
+    let h = setup().await;
+    h.post(&refund("PD", 10_000, "2026-11-02T00:00:00Z")).await;
+    let o = h.order("PD").await.unwrap();
+    assert_eq!(o.status, "PENDING");
+    assert_eq!(
+        (o.net_amount, o.effective_amount, o.refunded_amount),
+        (0, 0, 10_000)
+    );
+    assert_eq!(h.oct_plus_nov().await, (0, 0), "PENDING은 매출 0");
+    // 확정이 오면 같은 행(같은 ordered_at)이 확정으로 바뀌고 한 번만 잡힌다
+    h.post(&confirm_at("PD", 50_000, "2026-11-01T00:00:00Z"))
+        .await;
+    let o = h.order("PD").await.unwrap();
+    assert_eq!(
+        (o.status.as_str(), o.effective_amount),
+        ("PARTIALLY_REFUNDED", 40_000)
+    );
+    assert_eq!(h.ordered_at_versions("PD").await.len(), 1);
+    assert_eq!(h.oct_plus_nov().await, (0, 40_000));
+}
