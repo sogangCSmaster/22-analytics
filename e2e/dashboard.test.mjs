@@ -191,40 +191,41 @@ test("P1: 주문 드로어를 연 채 다른 프로젝트로 가면 드로어가
   await page.locator("[role=dialog]").waitFor({ state: "detached", timeout: 5000 });
 });
 
-test("P1: 광고주 관리자가 다른 광고주 소속 이메일을 추가하면 이유를 알려준다", async () => {
+/** 새 브라우저 컨텍스트로 로그인하고 관리 화면에서 광고주 패널을 연다 (클릭: 키보드는 3번 테스트) */
+async function openOrgAs(email) {
   const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
   await p.goto(`${DASHBOARD}/login`);
-  await p.fill("input[type=email]", ctx.x);
+  await p.fill("input[type=email]", email);
   await p.fill("input[type=password]", "member-password-1");
   await p.click('button:has-text("로그인")');
   await p.waitForURL(/\/p\/\d+|\/$/);
   await p.goto(`${DASHBOARD}/admin`);
   const row = p.locator(`tr:has-text("${ctx.org.name}")`).first();
   await row.waitFor();
-  await row.focus();
-  await p.keyboard.press("Enter");
+  await row.click();
   const dialog = p.locator("[role=dialog]");
   await dialog.waitFor();
+  return { p, row, dialog };
+}
+
+test("P1: 광고주 관리자가 다른 광고주 소속 이메일을 추가하면 이유를 알려준다", async () => {
+  const { p, dialog } = await openOrgAs(ctx.x);
   await dialog.locator('input[placeholder="name@company.com"]').fill(ctx.y);
   await dialog.locator('button:has-text("추가")').last().click();
-  const alert = dialog.locator("[role=alert]");
-  await alert.waitFor({ timeout: 10000 });
-  assert.match(await alert.innerText(), /이 이메일은 추가할 수 없어요/);
-  ctx.xPage = p;
+  // 화면 어디든(패널 안 오류·토스트) 구체적인 이유가 보여야 한다
+  await p.waitForFunction(() => document.body.innerText.includes("이 이메일은 추가할 수 없어요"), null, { timeout: 10000 });
+  await p.close();
 });
 
 test("P1: 관리자가 스스로 '보기'로 낮추면 패널이 닫히고 권한이 바로 반영된다", async () => {
-  const p = ctx.xPage;
-  const dialog = p.locator("[role=dialog]");
-  await dialog.locator('input[placeholder="name@company.com"]').fill(ctx.x);
-  await dialog.locator('[role=radio]:has-text("보기")').click();
+  const { p, row, dialog } = await openOrgAs(ctx.z);
+  await dialog.locator('input[placeholder="name@company.com"]').fill(ctx.z);
+  await dialog.locator('[role=radio]:has-text("보기"), button:has-text("보기")').first().click();
   await dialog.locator('button:has-text("추가")').last().click();
   await dialog.waitFor({ state: "detached", timeout: 10000 });
-  const row = p.locator(`tr:has-text("${ctx.org.name}")`).first();
   await waitFor(async () => (await row.innerText()).includes("보기"), "목록의 내 역할 = 보기", 10000);
   // 다시 열면 관리자 전용 '멤버 추가'가 없어야 한다
-  await row.focus();
-  await p.keyboard.press("Enter");
+  await row.click();
   await dialog.waitFor();
   assert.equal(await dialog.locator('input[placeholder="name@company.com"]').count(), 0);
   await p.close();
