@@ -8,7 +8,7 @@ use serde_json::json;
 
 // ---- 프로젝트 -------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn create_project_generates_keys_and_defaults() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -67,7 +67,7 @@ async fn create_project_generates_keys_and_defaults() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn create_project_validation() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -95,7 +95,7 @@ async fn create_project_validation() {
     assert_eq!(r.status, StatusCode::NOT_FOUND, "없는 광고주");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn patch_project_and_paused_project() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -148,7 +148,7 @@ async fn patch_project_and_paused_project() {
 
 // ---- 수집 설정 ------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn settings_get_put_bumps_version_only_on_change() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -194,7 +194,7 @@ async fn settings_get_put_bumps_version_only_on_change() {
     assert_eq!(cfg.settings_version, 3);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn settings_unknown_fields_are_ignored_not_stored() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -215,7 +215,7 @@ async fn settings_unknown_fields_are_ignored_not_stored() {
     assert_eq!(stored["ecommerce"], true);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn settings_validation() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -243,7 +243,7 @@ async fn settings_validation() {
 
 // ---- 허용 도메인 ----------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn origins_are_normalized_and_idempotent() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -320,7 +320,7 @@ async fn origins_are_normalized_and_idempotent() {
     assert_eq!(cfg.allowed_origins.len(), 3);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn origin_validation_rejects_urls_and_junk() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -365,7 +365,7 @@ async fn origin_validation_rejects_urls_and_junk() {
 
 // ---- 채널 규칙 ------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn channel_rules_crud() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -433,7 +433,7 @@ async fn channel_rules_crud() {
     assert_eq!(app.audit_count("channel_rule.delete").await, 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn channel_rule_validation() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -482,7 +482,7 @@ async fn channel_rule_validation() {
 
 // ---- 기여 설정 ------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn attribution_settings_get_put() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -512,7 +512,7 @@ async fn attribution_settings_get_put() {
     assert_eq!(r.body["half_life_hours"], 2160);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn attribution_settings_validation() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -554,7 +554,7 @@ async fn attribution_settings_validation() {
 
 // ---- 스니펫 ---------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn snippet_contains_public_key_and_tracker_host() {
     let app =
         TestApp::with_config(|c| c.tracker_host = "https://collect.agency.test/".into()).await;
@@ -575,7 +575,7 @@ async fn snippet_contains_public_key_and_tracker_host() {
     assert!(html.contains("window.at=window.at||function(){(at.q=at.q||[]).push(arguments)};"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn snippet_default_tracker_host() {
     let app = TestApp::new().await;
     let f = app.fixture().await;

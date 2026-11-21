@@ -8,7 +8,7 @@ use serde_json::json;
 
 // ---- CSRF -----------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn mutations_require_allowed_origin() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;
@@ -49,7 +49,7 @@ async fn mutations_require_allowed_origin() {
     assert_eq!(n, 1, "거부된 요청은 아무것도 만들지 않는다");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn mutations_require_json_content_type() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;
@@ -82,7 +82,7 @@ async fn mutations_require_json_content_type() {
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn login_and_logout_are_csrf_protected() {
     let app = TestApp::new().await;
     app.user("ae@agency.test", PASSWORD, false).await;
@@ -109,7 +109,7 @@ async fn login_and_logout_are_csrf_protected() {
     assert_eq!(me.status, StatusCode::OK, "강제 로그아웃 CSRF 차단");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn delete_is_csrf_protected() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -130,7 +130,7 @@ async fn delete_is_csrf_protected() {
     assert_eq!(r.status, StatusCode::FORBIDDEN);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn get_requests_need_no_origin() {
     let app = TestApp::new().await;
     let (_, cookie) = app.member("ae@agency.test").await;
@@ -142,7 +142,7 @@ async fn get_requests_need_no_origin() {
 
 // ---- CORS -----------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cors_allows_only_dashboard_origins_with_credentials() {
     let app = TestApp::new().await;
     let pre = |origin: &str| {
@@ -167,7 +167,7 @@ async fn cors_allows_only_dashboard_origins_with_credentials() {
     assert!(bad.headers.get("access-control-allow-origin").is_none());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn custom_dashboard_origins_from_config() {
     let app = TestApp::with_config(|c| {
         c.dashboard_origins = vec!["https://analytics.agency.test".into()];
@@ -211,7 +211,7 @@ async fn super_admin_with_origin(app: &TestApp, origin: &str) -> String {
 
 // ---- 테넌트 격리 (IDOR) ----------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn member_of_org_a_cannot_see_org_b_project_returns_404() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -278,7 +278,7 @@ async fn member_of_org_a_cannot_see_org_b_project_returns_404() {
     assert_eq!(name, "사이트 B");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn channel_rule_of_other_project_is_404() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -302,11 +302,28 @@ async fn channel_rule_of_other_project_is_404() {
         )
         .await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
+    // DELETE는 멱등이라 없는 id와 똑같이 204를 주되, 남의 규칙은 지워지지 않아야 한다.
     let r = app.call(Req::delete(&path).cookie(&f.root)).await;
-    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let missing = app
+        .call(
+            Req::delete(&format!(
+                "/v1/projects/{}/channel-rules/999999",
+                f.project_id
+            ))
+            .cookie(&f.root),
+        )
+        .await;
+    assert_eq!(r.status, missing.status);
+    assert_eq!(r.text, missing.text);
+    let still: String = sqlx::query_scalar("SELECT channel FROM channel_rules WHERE id = $1")
+        .bind(rule_id)
+        .fetch_one(&app.db.pg)
+        .await
+        .unwrap();
+    assert_eq!(still, "naver_sa");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn non_numeric_and_overflow_ids_are_404() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -325,7 +342,7 @@ async fn non_numeric_and_overflow_ids_are_404() {
 
 // ---- 권한 -----------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn unauthenticated_requests_are_401() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -345,7 +362,7 @@ async fn unauthenticated_requests_are_401() {
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn viewer_cannot_mutate() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -399,7 +416,7 @@ async fn viewer_cannot_mutate() {
     assert_eq!(role, "viewer");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn analyst_cannot_manage_org_or_members() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -420,7 +437,7 @@ async fn analyst_cannot_manage_org_or_members() {
     assert_eq!(r.status, StatusCode::FORBIDDEN);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn non_super_admin_cannot_create_orgs_or_users() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -449,7 +466,7 @@ async fn non_super_admin_cannot_create_orgs_or_users() {
     assert_eq!(n, 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn org_admin_cannot_touch_other_org_members() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -470,7 +487,7 @@ async fn org_admin_cannot_touch_other_org_members() {
 
 // ---- 인젝션·과대 페이로드 ---------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn sql_injection_strings_are_stored_literally() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;
@@ -504,7 +521,7 @@ fn urlencode(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn oversized_json_body_is_413() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;
@@ -523,7 +540,7 @@ async fn oversized_json_body_is_413() {
     assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn health_endpoints_still_work() {
     let app = TestApp::new().await;
     let r = app.call(Req::get("/healthz")).await;

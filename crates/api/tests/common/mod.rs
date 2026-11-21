@@ -2,6 +2,10 @@
 //!
 //! 실제 포트를 열지 않고 `build_router`로 만든 Router를 `tower::ServiceExt::oneshot`으로 호출한다.
 //! DB는 테스트마다 격리된 [`TestDb`]를 쓴다.
+//!
+//! 테스트는 `#[tokio::test(flavor = "multi_thread")]`로 돌린다. `TestDb::drop`이 별도 스레드에서
+//! `pool.close()`를 기다리는 동안 현재 스레드를 막는데, current_thread 런타임이면 풀 연결의
+//! I/O를 처리할 스레드가 없어 교착된다.
 #![allow(dead_code)]
 
 use analytics_api::{ApiConfig, AppState, build_router};
@@ -17,8 +21,10 @@ pub const ORIGIN: &str = "http://localhost:8080";
 pub const PASSWORD: &str = "correct horse battery";
 
 pub struct TestApp {
-    pub db: TestDb,
+    // 필드 순서 중요: router(풀 복제본을 가진 AppState)가 db보다 먼저 drop돼야
+    // TestDb::drop의 pool.close()가 막히지 않는다.
     pub router: Router,
+    pub db: TestDb,
 }
 
 pub struct Resp {

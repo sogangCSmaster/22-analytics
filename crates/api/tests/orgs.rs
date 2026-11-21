@@ -8,7 +8,7 @@ use serde_json::json;
 
 // ---- 사용자 ---------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn super_admin_creates_and_lists_users() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;
@@ -39,7 +39,7 @@ async fn super_admin_creates_and_lists_users() {
     assert_eq!(found.body["items"][0]["name"], "김에이");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn duplicate_email_is_409_case_insensitive() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;
@@ -63,7 +63,7 @@ async fn duplicate_email_is_409_case_insensitive() {
     assert_eq!(r.error_code(), "email_taken");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn user_input_validation() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;
@@ -91,7 +91,7 @@ async fn user_input_validation() {
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn pagination_bounds() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;
@@ -132,7 +132,7 @@ async fn pagination_bounds() {
 
 // ---- 광고주 ---------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn org_crud() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;
@@ -171,7 +171,7 @@ async fn org_crud() {
     assert_eq!(r.body.as_array().unwrap().len(), 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn org_name_validation() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;
@@ -211,7 +211,7 @@ async fn org_name_validation() {
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn org_list_is_scoped_to_membership() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -225,7 +225,7 @@ async fn org_list_is_scoped_to_membership() {
     assert_eq!(r.body.as_array().unwrap().len(), 2);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn org_admin_can_update_own_org() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -242,7 +242,7 @@ async fn org_admin_can_update_own_org() {
 
 // ---- 멤버 -----------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn members_add_upsert_list_remove() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -300,7 +300,7 @@ async fn members_add_upsert_list_remove() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn add_member_validation() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -324,7 +324,7 @@ async fn add_member_validation() {
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn removed_member_loses_access_immediately() {
     let app = TestApp::new().await;
     let f = app.fixture().await;

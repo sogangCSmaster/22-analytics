@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 // ---- 해피 케이스 ----------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn login_sets_secure_session_cookie_and_me_works() {
     let app = TestApp::new().await;
     app.user("ae@agency.test", PASSWORD, false).await;
@@ -51,7 +51,7 @@ async fn login_sets_secure_session_cookie_and_me_works() {
     assert!(last_login.is_some(), "last_login_at 기록");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn secure_flag_when_configured() {
     let app = TestApp::with_config(|c| c.cookie_secure = true).await;
     app.user("ae@agency.test", PASSWORD, false).await;
@@ -59,7 +59,7 @@ async fn secure_flag_when_configured() {
     assert!(r.set_cookie().unwrap().contains("Secure"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn email_is_case_insensitive_and_trimmed() {
     let app = TestApp::new().await;
     app.user("ae@agency.test", PASSWORD, false).await;
@@ -67,7 +67,7 @@ async fn email_is_case_insensitive_and_trimmed() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn me_lists_orgs_and_projects_with_role() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -93,7 +93,7 @@ async fn me_lists_orgs_and_projects_with_role() {
 
 // ---- 멱등성 ---------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn logout_twice_is_ok_and_invalidates_session() {
     let app = TestApp::new().await;
     let (_, cookie) = app.member("ae@agency.test").await;
@@ -113,14 +113,14 @@ async fn logout_twice_is_ok_and_invalidates_session() {
     assert_eq!(n, 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn logout_without_session_is_noop() {
     let app = TestApp::new().await;
     let r = app.call(Req::post("/v1/auth/logout")).await;
     assert_eq!(r.status, StatusCode::NO_CONTENT);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn logout_only_kills_own_session() {
     let app = TestApp::new().await;
     app.user("ae@agency.test", PASSWORD, false).await;
@@ -134,7 +134,7 @@ async fn logout_only_kills_own_session() {
 
 // ---- 경계값·희귀 케이스 ----------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn me_without_cookie_is_401() {
     let app = TestApp::new().await;
     let r = app.call(Req::get("/v1/auth/me")).await;
@@ -142,7 +142,7 @@ async fn me_without_cookie_is_401() {
     assert_eq!(r.error_code(), "unauthorized");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn session_expiring_exactly_now_is_rejected() {
     let app = TestApp::new().await;
     let (_, cookie) = app.member("ae@agency.test").await;
@@ -154,7 +154,7 @@ async fn session_expiring_exactly_now_is_rejected() {
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn expired_session_is_rejected() {
     let app = TestApp::new().await;
     let (_, cookie) = app.member("ae@agency.test").await;
@@ -166,7 +166,7 @@ async fn expired_session_is_rejected() {
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn session_near_expiry_is_extended() {
     let app = TestApp::new().await;
     let (_, cookie) = app.member("ae@agency.test").await;
@@ -184,7 +184,7 @@ async fn session_near_expiry_is_extended() {
     assert!(extended, "남은 기간이 7일 미만이면 14일로 연장");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn deleted_user_session_is_dead() {
     let app = TestApp::new().await;
     let (id, cookie) = app.member("ae@agency.test").await;
@@ -197,7 +197,7 @@ async fn deleted_user_session_is_dead() {
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn login_rejects_bad_input() {
     let app = TestApp::new().await;
     // 필드 누락
@@ -215,7 +215,7 @@ async fn login_rejects_bad_input() {
 
 // ---- 외부 공격 ------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn unknown_email_and_wrong_password_look_identical() {
     let app = TestApp::with_config(|c| {
         c.login_limit.max_per_email = 1000;
@@ -253,7 +253,7 @@ async fn unknown_email_and_wrong_password_look_identical() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn brute_force_on_one_email_is_rate_limited() {
     let app = TestApp::new().await;
     app.user("ae@agency.test", PASSWORD, false).await;
@@ -282,7 +282,7 @@ async fn brute_force_on_one_email_is_rate_limited() {
     assert!(r.set_cookie().is_none());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn brute_force_from_one_ip_is_rate_limited() {
     let app = TestApp::with_config(|c| c.login_limit.max_per_ip = 3).await;
     app.user("ae@agency.test", PASSWORD, false).await;
@@ -315,7 +315,7 @@ async fn brute_force_from_one_ip_is_rate_limited() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn login_rotates_session_against_fixation() {
     let app = TestApp::new().await;
     app.user("ae@agency.test", PASSWORD, false).await;
@@ -351,7 +351,7 @@ async fn login_rotates_session_against_fixation() {
     assert_eq!(me.status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn forged_or_tampered_cookies_are_rejected() {
     let app = TestApp::new().await;
     let (_, cookie) = app.member("ae@agency.test").await;
@@ -387,7 +387,7 @@ async fn forged_or_tampered_cookies_are_rejected() {
     assert_eq!(ok.status, StatusCode::OK);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn password_hash_never_in_responses() {
     let app = TestApp::new().await;
     let root = app.super_admin().await;

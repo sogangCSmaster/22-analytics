@@ -18,7 +18,7 @@ fn range(project_id: i32, from: &str, to: &str) -> Req {
     ))
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn upload_and_query_ad_spend() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -50,7 +50,7 @@ async fn upload_and_query_ad_spend() {
     assert_eq!(rows[2]["campaign"], "리타게팅, 11월");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn upload_is_idempotent_upsert() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -83,7 +83,7 @@ async fn upload_is_idempotent_upsert() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn upload_validation_is_all_or_nothing() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -122,7 +122,7 @@ async fn upload_validation_is_all_or_nothing() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn upload_rejects_bad_content_type_and_oversized_body() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
@@ -144,7 +144,7 @@ async fn upload_rejects_bad_content_type_and_oversized_body() {
     assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE, "{}", r.text);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn ad_spend_range_validation() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
