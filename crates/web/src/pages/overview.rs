@@ -43,7 +43,7 @@ impl Metric {
 /// 채널 구성: 상위 n개 + 나머지는 "기타".
 pub fn top_with_rest(rows: &[(String, i64)], n: usize) -> Vec<(String, i64)> {
     let mut v: Vec<(String, i64)> = rows.to_vec();
-    v.sort_by(|a, b| b.1.cmp(&a.1));
+    v.sort_by_key(|b| std::cmp::Reverse(b.1));
     if v.len() <= n + 1 {
         return v;
     }
@@ -115,8 +115,8 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                     }
                 }
                 div { class: "grid grid-4",
-                    StatCard { label: "방문자", value: format::count(o.current.visitors), delta: d(o.current.visitors, o.previous.visitors), show_delta: true, sub: format!("이전 {}", format::count(o.previous.visitors)), spark: sv.clone() }
-                    StatCard { label: "세션", value: format::count(o.current.sessions), delta: d(o.current.sessions, o.previous.sessions), show_delta: true, sub: format!("이전 {}", format::count(o.previous.sessions)), spark: ss.clone() }
+                    StatCard { label: "방문자", value: format::count(o.current.visitors), delta: d(o.current.visitors, o.previous.visitors), show_delta: true, sub: format!("이전 {}", format::compact(o.previous.visitors)), spark: sv.clone() }
+                    StatCard { label: "세션", value: format::count(o.current.sessions), delta: d(o.current.sessions, o.previous.sessions), show_delta: true, sub: format!("이전 {}", format::compact(o.previous.sessions)), spark: ss.clone() }
                     StatCard { label: "페이지뷰", value: format::count(o.current.pageviews), delta: d(o.current.pageviews, o.previous.pageviews), show_delta: true, sub: format!("세션당 {}", per(o.current.pageviews, o.current.sessions)), spark: sp.clone() }
                     StatCard {
                         label: "매출",

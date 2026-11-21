@@ -6,6 +6,7 @@ use super::dates::DateRange;
 use analytics_core::attribution::Model;
 
 /// 컴파일 시 `API_BASE`로 바꿀 수 있다.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub fn api_base() -> &'static str {
     option_env!("API_BASE").unwrap_or("http://localhost:8082")
 }

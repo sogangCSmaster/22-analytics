@@ -80,7 +80,7 @@ pub fn LineChart(
                 svg {
                     view_box: "0 0 {f.w} {f.h}",
                     role: "img",
-                    aria_label: "{aria_label}",
+                    "aria-label": "{aria_label}",
                     preserve_aspect_ratio: "none",
                     defs {
                         linearGradient { id: "area-fill", x1: "0", y1: "0", x2: "0", y2: "1",
@@ -227,7 +227,7 @@ pub fn ColumnChart(
     rsx! {
         div { class: "chart column-chart",
             div { class: "plot", style: "height: {height}px",
-                svg { view_box: "0 0 {f.w} {f.h}", role: "img", aria_label: "{aria_label}", preserve_aspect_ratio: "none",
+                svg { view_box: "0 0 {f.w} {f.h}", role: "img", "aria-label": "{aria_label}", preserve_aspect_ratio: "none",
                     for (k, t) in grid.iter().enumerate() {
                         line { key: "g{k}", x1: "{f.pad_l}", x2: "{f.w - f.pad_r}", y1: "{f.y(*t, top)}", y2: "{f.y(*t, top)}", stroke: "var(--line)", stroke_width: "1", vector_effect: "non-scaling-stroke" }
                     }
@@ -371,27 +371,34 @@ pub fn FunnelChart(steps: Vec<(String, u64, f64, f64)>) -> Element {
     rsx! {
         div { class: "funnel", role: "list",
             for (i, (label, visitors, rate_prev, rate_first)) in steps.into_iter().enumerate() {
+                Fragment { key: "{i}",
                 if i > 0 {
-                    div { key: "d{i}", class: "funnel-drop",
+                    div { class: "funnel-drop",
                         span { class: "arrow", "↓" }
                         "다음 단계로 {format::pct(rate_prev, 1)}"
                         span { class: "muted", " · {format::pct((1.0 - rate_prev).max(0.0), 1)} 이탈" }
                     }
                 }
-                div { key: "s{i}", class: "funnel-step", role: "listitem",
+                div { class: "funnel-step", role: "listitem",
                     div { class: "funnel-head",
                         span { class: "funnel-idx", "{i + 1}" }
                         span { class: "funnel-label", "{label}" }
                         span { class: "funnel-value", "{format::count(visitors)}명" }
                     }
                     div { class: "funnel-track",
-                        div { class: "funnel-fill", style: "width: {ratio_pct(visitors as f64, first).max(if visitors > 0 { 0.8 } else { 0.0 }):.1}%" }
+                        div { class: "funnel-fill", style: "width: {funnel_width(visitors, first):.1}%" }
                     }
                     div { class: "funnel-rate", "첫 단계 대비 {format::pct(rate_first, 1)}" }
+                }
                 }
             }
         }
     }
+}
+
+fn funnel_width(v: u64, first: f64) -> f64 {
+    let w = ratio_pct(v as f64, first);
+    if v > 0 { w.max(0.8) } else { w }
 }
 
 /// 지표 카드 안의 작은 추이선.
@@ -412,7 +419,7 @@ pub fn Sparkline(values: Vec<f64>) -> Element {
         .fold(0.0f64, f64::max);
     let top = if max > 0.0 { max } else { 1.0 };
     rsx! {
-        svg { class: "sparkline", view_box: "0 0 80 28", width: "80", height: "28", aria_hidden: "true",
+        svg { class: "sparkline", view_box: "0 0 80 28", width: "80", height: "28", "aria-hidden": "true",
             path { d: "{line_path(&values, &f, top)}", fill: "none", stroke: "var(--chart-1)", stroke_width: "1.75", stroke_linejoin: "round", stroke_linecap: "round" }
         }
     }

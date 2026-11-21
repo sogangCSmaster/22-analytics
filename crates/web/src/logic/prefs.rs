@@ -88,7 +88,9 @@ pub fn resolve(me: &MeResponse, wanted: Option<i32>) -> Option<Selection> {
 }
 
 /// 사이드바 전환기용: (광고주, [(프로젝트 id, 이름, 일시정지 여부)])
-pub fn project_tree(me: &MeResponse) -> Vec<(String, Vec<(i32, String, bool)>)> {
+pub type ProjectTree = Vec<(String, Vec<(i32, String, bool)>)>;
+
+pub fn project_tree(me: &MeResponse) -> ProjectTree {
     me.orgs
         .iter()
         .map(|o| {

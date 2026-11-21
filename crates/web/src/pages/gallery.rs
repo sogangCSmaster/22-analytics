@@ -1,6 +1,6 @@
 //! 컴포넌트 갤러리: 디자인 토큰과 기본 컴포넌트를 한 화면에서 확인한다.
 
-use crate::components::chart::{BarList, SplitBar, TrendChart};
+use crate::components::chart::{BarList, ColumnChart, FunnelChart, LineChart, Series, ShareBar};
 use crate::components::ui::*;
 use dioxus::prelude::*;
 
@@ -44,7 +44,7 @@ pub fn Gallery() -> Element {
         div { class: "grid grid-3",
             StatCard { label: "매체 합산 매출", value: "2억 원", sub: "ROAS 500%", style: StatStyle::Struck }
             StatCard { label: "실제 매출", value: "1.3억 원", sub: "주문번호 기준", style: StatStyle::Hero }
-            StatCard { label: "방문자", value: "48,210", delta: 0.082, sub: "지난 기간 대비" }
+            StatCard { label: "방문자", value: "48,210", delta: 0.082, sub: "지난 기간 대비", spark: vec![3.0, 5.0, 4.0, 6.0, 8.0, 7.0, 9.0] }
         }
 
         div { class: "grid grid-2",
@@ -76,21 +76,30 @@ pub fn Gallery() -> Element {
         }
 
         Card { title: "차트",
-            TrendChart {
-                values: vec![120, 180, 160, 240, 210, 300, 280],
+            LineChart {
+                series: vec![
+                    Series { name: "이번 주".into(), values: vec![120.0, 180.0, 160.0, 240.0, 210.0, 300.0, 280.0], muted: false },
+                    Series { name: "지난주".into(), values: vec![100.0, 150.0, 170.0, 190.0, 200.0, 220.0, 260.0], muted: true },
+                ],
                 labels: ["월", "화", "수", "목", "금", "토", "일"].iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                height: 180,
+                height: 200,
             }
             div { style: "margin-top: 24px;",
-                BarList { items: vec![("네이버".to_string(), 120), ("메타".to_string(), 80), ("구글".to_string(), 40)] }
-            }
-            div { style: "margin-top: 24px;",
-                SplitBar {
-                    parts: vec![
-                        ("네이버".to_string(), 50_000, "var(--chart-1)".to_string()),
-                        ("메타".to_string(), 50_000, "var(--chart-2)".to_string()),
-                    ],
+                ColumnChart {
+                    values: (0..30).map(|i| ((i * 7) % 11) as f64).collect::<Vec<_>>(),
+                    labels: (0..30).map(|i| format!("14:{i:02}")).collect::<Vec<_>>(),
+                    highlight_last: true,
+                    value_name: "페이지뷰",
                 }
+            }
+            div { style: "margin-top: 24px;",
+                BarList { items: vec![("네이버".to_string(), 120), ("메타".to_string(), 80), ("<script>alert(1)</script>".to_string(), 40)], show_share: true }
+            }
+            div { style: "margin-top: 24px;",
+                ShareBar { parts: vec![("네이버".to_string(), 50_000), ("메타".to_string(), 30_000), ("구글".to_string(), 20_000)], money: true }
+            }
+            div { style: "margin-top: 24px;",
+                FunnelChart { steps: vec![("상품 조회".to_string(), 1200, 1.0, 1.0), ("장바구니 담기".to_string(), 420, 0.35, 0.35), ("결제 시작".to_string(), 180, 0.43, 0.15), ("구매".to_string(), 96, 0.53, 0.08)] }
             }
         }
 

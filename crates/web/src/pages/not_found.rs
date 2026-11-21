@@ -11,7 +11,7 @@ pub fn NotFound(segments: Vec<String>) -> Element {
                 icon: "?",
                 title: "페이지를 찾을 수 없어요",
                 desc: "{path} 주소가 없거나 이동했어요.",
-                action: rsx! { Link { class: "btn btn-primary", to: Route::Overview {}, "개요로 가기" } },
+                action: rsx! { Link { class: "btn btn-primary", to: Route::Home {}, "처음으로 가기" } },
             }
         }
     }

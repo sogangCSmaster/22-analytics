@@ -1,5 +1,13 @@
+pub mod acquisition;
+pub mod admin;
+pub mod events;
+pub mod funnel;
 pub mod gallery;
-pub mod install;
+pub mod home;
+pub mod login;
 pub mod not_found;
 pub mod overview;
+pub mod page_report;
+pub mod realtime;
 pub mod revenue;
+pub mod settings;

@@ -147,6 +147,7 @@ impl DateRange {
         }
     }
 
+    #[allow(dead_code)] // 빈 날 채우기용 (API가 이미 채워 준다)
     pub fn each_day(self) -> Vec<Day> {
         (self.from.0..=self.to.0).map(Day).collect()
     }

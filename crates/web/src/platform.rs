@@ -64,6 +64,7 @@ mod imp {
 
     pub async fn sleep_ms(_ms: u32) {}
 
+    #[allow(dead_code)]
     pub fn current_path() -> String {
         "/".into()
     }

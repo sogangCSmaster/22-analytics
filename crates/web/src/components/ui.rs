@@ -247,6 +247,7 @@ pub fn TextField(
     autocomplete: Option<String>,
 ) -> Element {
     let invalid = if error.is_some() { "invalid" } else { "" };
+    let has_error = error.is_some();
     rsx! {
         div { class: "field",
             label {
@@ -257,7 +258,7 @@ pub fn TextField(
                     value: "{value}",
                     disabled,
                     autocomplete: autocomplete.unwrap_or_else(|| "off".into()),
-                    aria_invalid: error.is_some(),
+                    aria_invalid: has_error,
                     placeholder: placeholder.unwrap_or_default(),
                     oninput: move |e| oninput.call(e.value()),
                 }
