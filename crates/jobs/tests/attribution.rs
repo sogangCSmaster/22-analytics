@@ -850,17 +850,17 @@ async fn full_run_respects_since_days() {
     );
 }
 
-/// 같은 시각 주문(키셋 동률), 기간 밖 주문, 터치 있는/없는 주문이 섞인 픽스처.
+/// 같은 시각 주문, 입력 순서와 다른 order_id 순서, 기간 밖 주문, 터치 있는/없는 주문이 섞인 픽스처.
 async fn paging_fixture(db: &TestDb, p: u32) -> usize {
     let mut touches = Vec::new();
     let mut orders = Vec::new();
-    let n = 23;
+    let n: u32 = 23;
     for i in 0..n {
         let v = Uuid::new_v4();
         if i % 3 != 0 {
             touches.push(TouchFixture::utm(p, v, ORDER_AT - 2 * DAY_MS, "naver", "cpc", ""));
         }
-        // 4건씩 같은 ordered_at: 페이지 경계가 동률 한가운데에 걸린다
+        // 4건씩 같은 ordered_at
         let at = ORDER_AT - i64::from(i / 4) * MIN;
         orders.push(OrderFixture::confirmed(
             p,
@@ -879,7 +879,7 @@ async fn paging_fixture(db: &TestDb, p: u32) -> usize {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn full_run_pages_orders_and_matches_unpaged_result() {
-    // 전체 재연산은 주문을 한 번에 다 읽지 않고 (ordered_at, order_id) 키셋 페이지로 읽는다
+    // 전체 재연산은 주문을 한 번에 다 읽지 않고 키셋 페이지로 이어 읽는다 (메모리 상한)
     let db = TestDb::new().await;
     let (paged, whole) = (project(&db.pg).await, project(&db.pg).await);
     let n = paging_fixture(&db, paged).await;

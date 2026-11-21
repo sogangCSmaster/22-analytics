@@ -87,14 +87,30 @@ async fn orders_since_and_by_ids() {
     )
     .await
     .unwrap();
-    let since = a::orders_since(&db.ch, scope(P), 5_000).await.unwrap();
-    assert_eq!(
-        since
-            .iter()
-            .map(|o| o.order_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["edge", "new"]
-    );
+    let ids = |v: &[a::OrderForAttribution]| -> Vec<String> {
+        v.iter().map(|o| o.order_id.clone()).collect()
+    };
+    let since = a::orders_since_page(&db.ch, scope(P), 5_000, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(ids(&since), vec!["edge", "new"]);
+    // 키셋 페이지: order_id 오름차순으로 이어 읽는다
+    let p1 = a::orders_since_page(&db.ch, scope(P), 0, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(ids(&p1), vec!["edge", "new"]);
+    let p2 = a::orders_since_page(&db.ch, scope(P), 0, Some("new"), 2)
+        .await
+        .unwrap();
+    assert_eq!(ids(&p2), vec!["old"]);
+    let p3 = a::orders_since_page(&db.ch, scope(P), 0, Some("old"), 2)
+        .await
+        .unwrap();
+    assert!(p3.is_empty());
+    let hostile = a::orders_since_page(&db.ch, scope(P), 0, Some("x' OR 1=1 --"), 10)
+        .await
+        .unwrap();
+    assert!(hostile.is_empty(), "커서 값은 바인딩된다");
     let by = a::orders_by_ids(
         &db.ch,
         scope(P),

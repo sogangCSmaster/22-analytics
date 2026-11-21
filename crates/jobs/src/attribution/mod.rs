@@ -24,6 +24,26 @@ pub const JOB_INCREMENTAL: &str = "attribution";
 pub const DEFAULT_FULL_DAYS: u32 = 35;
 /// 한 번에 처리하는 주문 수.
 pub const BATCH_ORDERS: usize = 500;
+/// 전체 재연산이 한 번에 읽는 주문 수 (키셋 페이지). 클라이언트 메모리는 페이지 크기로 묶인다.
+pub const PAGE_ORDERS: usize = 2_000;
+
+/// 페이지·배치 크기 (테스트에서 작게 줄여 페이지 경계를 확인한다).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// 전체 재연산에서 한 번에 읽는 주문 수
+    pub page_orders: usize,
+    /// 한 번에 계산·쓰는 주문 수 (조회 3번 + 쓰기 1번 단위)
+    pub batch_orders: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            page_orders: PAGE_ORDERS,
+            batch_orders: BATCH_ORDERS,
+        }
+    }
+}
 /// 증분 조회 겹침 구간 (ms). watermark 직전에 늦게 커밋된 version을 놓치지 않기 위해
 /// `version > watermark − OVERLAP` 로 다시 읽는다. 바뀐 게 없으면 쓰지 않으므로 비용이 작다.
 pub const INCREMENTAL_OVERLAP_MS: u64 = 120_000;
@@ -49,6 +69,8 @@ pub struct Report {
     pub orders_written: usize,
     /// 쓴 행 수 (삭제 표시 포함)
     pub rows_written: usize,
+    /// 주문 조회 횟수 (전체 재연산은 키셋 페이지 수, 나머지는 1)
+    pub pages: usize,
 }
 
 /// 프로젝트 하나 또는 활성 프로젝트 전체를 실행한다. `now_ms`는 computed_at과 기간 계산 기준.
@@ -70,6 +92,7 @@ pub async fn run(
                 total.orders_seen += r.orders_seen;
                 total.orders_written += r.orders_written;
                 total.rows_written += r.rows_written;
+                total.pages += r.pages;
             }
             Err(e) => {
                 tracing::error!(project_id = p, error = %format!("{e:#}"), "기여 연산 실패");
@@ -98,47 +121,88 @@ pub async fn run_project(
     mode: &Mode,
     now_ms: i64,
 ) -> anyhow::Result<Report> {
+    run_project_with(ch, pg, project_id, mode, now_ms, Limits::default()).await
+}
+
+/// [`run_project`]에 페이지·배치 크기를 지정한다.
+///
+/// 전체 재연산은 주문을 한 번에 다 읽지 않는다: `order_id` 키셋 페이지(`page_orders`건)를 이어 읽으며
+/// 페이지마다 `batch_orders`건씩 처리하므로 메모리는 페이지 크기로 묶인다 (350만 주문 → 540MB였다).
+/// 증분·지정 주문은 바뀐 주문만이라 작으므로 한 번에 읽는다.
+pub async fn run_project_with(
+    ch: &Client,
+    pg: &PgPool,
+    project_id: u32,
+    mode: &Mode,
+    now_ms: i64,
+    limits: Limits,
+) -> anyhow::Result<Report> {
+    anyhow::ensure!(
+        limits.page_orders > 0 && limits.batch_orders > 0,
+        "페이지·배치 크기는 1 이상"
+    );
     let scope = ProjectScope::authorized(project_id);
     let cfg = settings::load(pg, project_id).await?;
     let rules = settings::channel_rules(pg, project_id).await?;
-
-    let watermark = match mode {
-        Mode::Incremental => settings::get_watermark(pg, JOB_INCREMENTAL, project_id)
-            .await?
-            .map(|w| w.max(0) as u64),
-        _ => None,
+    let ctx = BatchCtx {
+        ch,
+        scope,
+        rules: &rules,
+        cfg: &cfg,
+        now_ms,
+        batch_orders: limits.batch_orders,
     };
-    let orders = match mode {
-        Mode::Incremental => {
-            let since = watermark
-                .unwrap_or(0)
-                .saturating_sub(INCREMENTAL_OVERLAP_MS);
-            ch_attr::changed_orders(ch, scope, since).await?
-        }
-        Mode::Full { since_days } => {
-            let from = now_ms - i64::from(*since_days) * DAY_MS;
-            ch_attr::orders_since(ch, scope, from).await?
-        }
-        Mode::Orders(ids) => ch_attr::orders_by_ids(ch, scope, ids).await?,
-    };
-
     let mut report = Report {
         projects: 1,
         ..Default::default()
     };
-    let mut wm = watermark;
-    for batch in orders.chunks(BATCH_ORDERS) {
-        let (written, rows) = process_batch(ch, scope, batch, &rules, &cfg, now_ms).await?;
-        report.orders_seen += batch.len();
-        report.orders_written += written;
-        report.rows_written += rows;
-        if *mode == Mode::Incremental {
-            // changed_orders는 version 오름차순: 이 배치까지는 반영이 끝났다.
-            let batch_max = batch.iter().map(|o| o.version).max().unwrap_or(0);
-            if wm.is_none_or(|w| batch_max > w) {
-                settings::set_watermark(pg, JOB_INCREMENTAL, project_id, batch_max as i64).await?;
-                wm = Some(batch_max);
+
+    match mode {
+        Mode::Incremental => {
+            let watermark = settings::get_watermark(pg, JOB_INCREMENTAL, project_id)
+                .await?
+                .map(|w| w.max(0) as u64);
+            let since = watermark
+                .unwrap_or(0)
+                .saturating_sub(INCREMENTAL_OVERLAP_MS);
+            let orders = ch_attr::changed_orders(ch, scope, since).await?;
+            report.pages = 1;
+            let mut wm = watermark;
+            for batch in orders.chunks(limits.batch_orders) {
+                ctx.process(batch, &mut report).await?;
+                // changed_orders는 version 오름차순: 이 배치까지는 반영이 끝났다.
+                let batch_max = batch.iter().map(|o| o.version).max().unwrap_or(0);
+                if wm.is_none_or(|w| batch_max > w) {
+                    settings::set_watermark(pg, JOB_INCREMENTAL, project_id, batch_max as i64)
+                        .await?;
+                    wm = Some(batch_max);
+                }
             }
+        }
+        Mode::Full { since_days } => {
+            let from = now_ms - i64::from(*since_days) * DAY_MS;
+            let mut after: Option<String> = None;
+            loop {
+                let page = ch_attr::orders_since_page(
+                    ch,
+                    scope,
+                    from,
+                    after.as_deref(),
+                    limits.page_orders,
+                )
+                .await?;
+                report.pages += 1;
+                ctx.process_all(&page, &mut report).await?;
+                if page.len() < limits.page_orders {
+                    break;
+                }
+                after = page.last().map(|o| o.order_id.clone());
+            }
+        }
+        Mode::Orders(ids) => {
+            let orders = ch_attr::orders_by_ids(ch, scope, ids).await?;
+            report.pages = 1;
+            ctx.process_all(&orders, &mut report).await?;
         }
     }
     tracing::info!(
@@ -147,9 +211,46 @@ pub async fn run_project(
         seen = report.orders_seen,
         written = report.orders_written,
         rows = report.rows_written,
+        pages = report.pages,
         "기여 연산 완료"
     );
     Ok(report)
+}
+
+/// 배치 처리에 필요한 공통 입력.
+struct BatchCtx<'a> {
+    ch: &'a Client,
+    scope: ProjectScope,
+    rules: &'a [ChannelRule],
+    cfg: &'a AttributionSettings,
+    now_ms: i64,
+    batch_orders: usize,
+}
+
+impl BatchCtx<'_> {
+    async fn process_all(
+        &self,
+        orders: &[OrderForAttribution],
+        report: &mut Report,
+    ) -> anyhow::Result<()> {
+        for batch in orders.chunks(self.batch_orders) {
+            self.process(batch, report).await?;
+        }
+        Ok(())
+    }
+
+    async fn process(
+        &self,
+        batch: &[OrderForAttribution],
+        report: &mut Report,
+    ) -> anyhow::Result<()> {
+        let (written, rows) =
+            process_batch(self.ch, self.scope, batch, self.rules, self.cfg, self.now_ms).await?;
+        report.orders_seen += batch.len();
+        report.orders_written += written;
+        report.rows_written += rows;
+        Ok(())
+    }
 }
 
 /// 주문 배치 하나: 조회 3번(identity, 터치포인트, 기존 결과) + 쓰기 1번.
