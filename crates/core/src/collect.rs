@@ -80,11 +80,13 @@ pub fn process(
     if batch.e.is_empty() || batch.e.len() > event::MAX_EVENTS_PER_BATCH {
         return Err(Reject::Invalid("이벤트 수"));
     }
-    let origin_host = ctx
-        .origin
-        .and_then(host_of)
-        .or_else(|| ctx.referer.and_then(host_of))
-        .ok_or(Reject::OriginNotAllowed)?;
+    // Referer는 Origin 헤더가 아예 없을 때만 쓴다. `Origin: null`처럼 값이 있지만 해석할 수 없으면
+    // 거부한다 (sandbox iframe 등에서 Referer를 위조·유지한 요청이 허용 도메인으로 통과하지 않게).
+    let origin_host = match ctx.origin {
+        Some(o) => host_of(o),
+        None => ctx.referer.and_then(host_of),
+    }
+    .ok_or(Reject::OriginNotAllowed)?;
     if !urlx::host_allowed(&origin_host, &cfg.allowed_origins) {
         return Err(Reject::OriginNotAllowed);
     }
