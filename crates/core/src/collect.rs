@@ -80,11 +80,13 @@ pub fn process(
     if batch.e.is_empty() || batch.e.len() > event::MAX_EVENTS_PER_BATCH {
         return Err(Reject::Invalid("이벤트 수"));
     }
-    let origin_host = ctx
-        .origin
-        .and_then(host_of)
-        .or_else(|| ctx.referer.and_then(host_of))
-        .ok_or(Reject::OriginNotAllowed)?;
+    // Referer는 Origin 헤더가 아예 없을 때만 쓴다. `Origin: null`처럼 값이 있지만 해석할 수 없으면
+    // 거부한다 (sandbox iframe 등에서 Referer를 위조·유지한 요청이 허용 도메인으로 통과하지 않게).
+    let origin_host = match ctx.origin {
+        Some(o) => host_of(o),
+        None => ctx.referer.and_then(host_of),
+    }
+    .ok_or(Reject::OriginNotAllowed)?;
     if !urlx::host_allowed(&origin_host, &cfg.allowed_origins) {
         return Err(Reject::OriginNotAllowed);
     }
@@ -550,6 +552,30 @@ mod tests {
         assert_eq!(
             process(&ctx("HeadlessChrome/120"), &cfg(), b, counter()),
             Err(Reject::Bot)
+        );
+    }
+
+    #[test]
+    fn present_but_invalid_origin_does_not_fall_back_to_referer() {
+        // `Origin: null`(sandbox iframe, file:// 등)이나 해석할 수 없는 Origin은 거부한다.
+        // Referer로 대신하는 것은 Origin 헤더가 아예 없을 때뿐이다.
+        let b = batch(vec![ev("page_view", "https://client.com/")]);
+        for bad in ["null", "", "not a url", "https://"] {
+            let mut c = ctx(CHROME);
+            c.origin = Some(bad);
+            c.referer = Some("https://www.client.com/p/1");
+            assert_eq!(
+                process(&c, &cfg(), b.clone(), counter()),
+                Err(Reject::OriginNotAllowed),
+                "{bad:?}"
+            );
+        }
+        let mut c = ctx(CHROME);
+        c.origin = None;
+        c.referer = Some("https://www.client.com/p/1");
+        assert!(
+            process(&c, &cfg(), b, counter()).is_ok(),
+            "Origin이 없으면 Referer"
         );
     }
 

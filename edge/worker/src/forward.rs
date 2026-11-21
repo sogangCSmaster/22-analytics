@@ -1,6 +1,6 @@
 //! 원점(ingest) 전달: 서명된 요청 생성, 결과 분류, Queue 메시지와 재시도 정책.
 //!
-//! 서명은 `analytics_core::edge_auth`(HMAC-SHA256, `"{ts}.{body}"`)를 쓴다. 클라이언트 헤더는
+//! 서명은 `analytics_core::edge_auth` v1(내부 경로·타임스탬프·본문 해시·전달 헤더)을 쓴다. 클라이언트 헤더는
 //! 하나도 복사하지 않고 매번 새로 만든다. 따라서 클라이언트가 보낸 `x-edge-*` 헤더는 원점에
 //! 닿지 않는다.
 
@@ -8,8 +8,8 @@ use analytics_core::Event;
 use analytics_core::edge_auth::{self, HEADER_SIGNATURE, HEADER_TIMESTAMP};
 use serde::{Deserialize, Serialize};
 
-pub const COLLECT_PATH: &str = "/internal/collect";
-pub const ORDERS_PATH: &str = "/internal/orders";
+pub const COLLECT_PATH: &str = edge_auth::COLLECT_PATH;
+pub const ORDERS_PATH: &str = edge_auth::ORDERS_PATH;
 
 /// Cloudflare Queue 메시지 한도는 128KB. JSON 래핑 여유를 두고 본문을 이 크기 이하로 나눈다.
 pub const MAX_QUEUE_BODY: usize = 100 * 1024;
@@ -43,7 +43,19 @@ pub fn join_url(origin_url: &str, path: &str) -> String {
     format!("{}{path}", origin_url.trim_end_matches('/'))
 }
 
-/// 서명 헤더를 붙인 원점 요청. 본문은 바이트 그대로 서명한다.
+/// 원점에 전달하는 클라이언트 유래 헤더. 비어 있으면 보내지 않고, 서명에는 `""`로 들어간다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Forwarded<'a> {
+    pub path: &'a str,
+    pub authorization: &'a str,
+    pub idempotency_key: &'a str,
+}
+
+pub const HEADER_FORWARDED_AUTHORIZATION: &str = "x-forwarded-authorization";
+pub const HEADER_FORWARDED_PATH: &str = "x-forwarded-path";
+pub const HEADER_IDEMPOTENCY_KEY: &str = "idempotency-key";
+
+/// 서명 헤더를 붙인 원점 요청 (전달 헤더 없음). 본문은 바이트 그대로 서명한다.
 pub fn signed(
     origin_url: &str,
     path: &str,
@@ -51,14 +63,46 @@ pub fn signed(
     body: Vec<u8>,
     now_ms: i64,
 ) -> ForwardRequest {
-    let signature = edge_auth::sign(secret, now_ms, &body);
+    signed_with(origin_url, path, secret, body, now_ms, Forwarded::default())
+}
+
+/// 전달 헤더까지 서명한 원점 요청 (v1: 내부 경로·타임스탬프·본문 해시·전달 헤더).
+pub fn signed_with(
+    origin_url: &str,
+    path: &str,
+    secret: &[u8],
+    body: Vec<u8>,
+    now_ms: i64,
+    fwd: Forwarded<'_>,
+) -> ForwardRequest {
+    let signature = edge_auth::sign(
+        secret,
+        &edge_auth::SignedRequest {
+            internal_path: path,
+            timestamp_ms: now_ms,
+            body: &body,
+            forwarded_path: fwd.path,
+            forwarded_authorization: fwd.authorization,
+            idempotency_key: fwd.idempotency_key,
+        },
+    );
+    let mut headers: Vec<(String, String)> = vec![
+        ("content-type".into(), "application/json".into()),
+        (HEADER_TIMESTAMP.into(), now_ms.to_string()),
+        (HEADER_SIGNATURE.into(), signature),
+    ];
+    for (name, v) in [
+        (HEADER_FORWARDED_AUTHORIZATION, fwd.authorization),
+        (HEADER_FORWARDED_PATH, fwd.path),
+        (HEADER_IDEMPOTENCY_KEY, fwd.idempotency_key),
+    ] {
+        if !v.is_empty() {
+            headers.push((name.into(), v.to_owned()));
+        }
+    }
     ForwardRequest {
         url: join_url(origin_url, path),
-        headers: vec![
-            ("content-type".into(), "application/json".into()),
-            (HEADER_TIMESTAMP.into(), now_ms.to_string()),
-            (HEADER_SIGNATURE.into(), signature),
-        ],
+        headers,
         body,
     }
 }
@@ -213,7 +257,7 @@ impl RetryPolicy {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use analytics_core::edge_auth::verify;
+    use analytics_core::edge_auth::{SignedRequest, verify};
     use uuid::Uuid;
 
     pub(crate) const SECRET: &[u8] = b"edge-shared-secret";
@@ -256,15 +300,27 @@ pub(crate) mod tests {
         }
     }
 
-    fn verifies(req: &ForwardRequest, now: i64) -> bool {
+    /// 원점(ingest)이 하는 것과 같이 요청 헤더로 서명 대상을 다시 만들어 검증한다.
+    pub(crate) fn origin_verifies(
+        req: &ForwardRequest,
+        internal_path: &str,
+        body: &[u8],
+        now: i64,
+    ) -> bool {
         let ts: i64 = req.header(HEADER_TIMESTAMP).unwrap().parse().unwrap();
-        verify(
-            SECRET,
-            ts,
-            &req.body,
-            req.header(HEADER_SIGNATURE).unwrap(),
-            now,
-        )
+        let signed = SignedRequest {
+            internal_path,
+            timestamp_ms: ts,
+            body,
+            forwarded_path: req.header("x-forwarded-path").unwrap_or(""),
+            forwarded_authorization: req.header("x-forwarded-authorization").unwrap_or(""),
+            idempotency_key: req.header("idempotency-key").unwrap_or(""),
+        };
+        verify(SECRET, &signed, req.header(HEADER_SIGNATURE).unwrap(), now)
+    }
+
+    fn verifies(req: &ForwardRequest, now: i64) -> bool {
+        req.url.ends_with(COLLECT_PATH) && origin_verifies(req, COLLECT_PATH, &req.body, now)
     }
 
     // ── 해피 ──
@@ -311,25 +367,43 @@ pub(crate) mod tests {
             NOW,
         );
         let sig = req.header(HEADER_SIGNATURE).unwrap();
+        let c = |ts, body| SignedRequest::collect(ts, body);
+        assert!(verify(SECRET, &c(NOW, &req.body), sig, NOW));
         let mut tampered = req.body.clone();
         let i = tampered.len() / 2;
         tampered[i] ^= 1;
-        assert!(!verify(SECRET, NOW, &tampered, sig, NOW));
+        assert!(!verify(SECRET, &c(NOW, &tampered), sig, NOW));
         let mut extended = req.body.clone();
         extended.push(b' ');
-        assert!(!verify(SECRET, NOW, &extended, sig, NOW));
+        assert!(!verify(SECRET, &c(NOW, &extended), sig, NOW));
         assert!(!verify(
             SECRET,
-            NOW,
-            &req.body[..req.body.len() - 1],
+            &c(NOW, &req.body[..req.body.len() - 1]),
             sig,
             NOW
         ));
-        assert!(!verify(b"wrong", NOW, &req.body, sig, NOW));
+        assert!(!verify(b"wrong", &c(NOW, &req.body), sig, NOW));
         assert!(
-            !verify(SECRET, NOW + 1, &req.body, sig, NOW),
+            !verify(SECRET, &c(NOW + 1, &req.body), sig, NOW),
             "타임스탬프도 서명에 포함"
         );
+    }
+
+    #[test]
+    fn collect_signature_is_bound_to_collect_path() {
+        let req = signed("https://o", COLLECT_PATH, SECRET, b"{}".to_vec(), NOW);
+        assert!(origin_verifies(&req, COLLECT_PATH, &req.body, NOW));
+        assert!(
+            !origin_verifies(&req, ORDERS_PATH, &req.body, NOW),
+            "다른 내부 경로로 재생할 수 없다"
+        );
+    }
+
+    #[test]
+    fn requeued_message_resigned_in_v1_format() {
+        let m = &queue_messages(&[event(1)])[0];
+        let r = m.to_request("https://o", SECRET, NOW + 60_000);
+        assert!(origin_verifies(&r, COLLECT_PATH, &r.body, NOW + 60_000));
     }
 
     #[test]

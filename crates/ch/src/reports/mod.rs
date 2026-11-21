@@ -41,7 +41,8 @@ pub const TZ: &str = "Asia/Seoul";
 /// 한 번에 조회할 수 있는 최대 일수.
 pub const MAX_RANGE_DAYS: u32 = 400;
 /// SQL 조각: 취소되지 않은 주문 (`orders.status`). 주문 writer가 상태를 대문자로 쓴다.
-pub(crate) const NOT_CANCELLED: &str = "status != 'CANCELLED'";
+/// 확정 전(PENDING: 환불·취소만 먼저 도착) 주문은 매출 0이므로 주문 수에서도 제외한다.
+pub(crate) const NOT_CANCELLED: &str = "status NOT IN ('CANCELLED', 'PENDING')";
 /// SQL 조각: `FINAL` 조회 설정. 주문 시각(파티션 키 `toYYYYMM(ordered_at)`)은 한 행 안에서 바뀌지
 /// 않으므로 같은 키의 버전은 같은 파티션에 있다 → 파티션끼리 병합하지 않아도 된다.
 pub(crate) const FINAL_SETTINGS: &str = "SETTINGS do_not_merge_across_partitions_select_final = 1";

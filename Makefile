@@ -26,10 +26,10 @@ tracker:   ## t.js 빌드 + 크기 검사
 ingest: tracker  ## 수집 서버 (엣지 에뮬레이션) → http://localhost:8081/dev/
 	EDGE_EMULATION=true cargo run -p analytics-ingest
 
-api:       ## API 서버 → http://localhost:8080
+api:       ## API 서버 → http://localhost:8082
 	cargo run -p analytics-api
 
-web:       ## 대시보드 개발 서버
+web:       ## 대시보드 개발 서버 → http://localhost:8080
 	dx serve --platform web --package analytics-web
 
 test:      ## 전체 테스트 (DB 필요: make up migrate)

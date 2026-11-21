@@ -14,6 +14,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
 use tower::ServiceExt;
 
 const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef-edge";
@@ -125,6 +126,57 @@ impl H {
             .await
             .unwrap()
             .len()
+    }
+    /// FINAL 없이 본 orders 행들의 서로 다른 ordered_at (ms).
+    async fn ordered_at_versions(&self, id: &str) -> Vec<i64> {
+        self.db
+            .ch
+            .query(
+                "SELECT DISTINCT toUnixTimestamp64Milli(ordered_at) FROM orders \
+                 WHERE project_id = ? AND order_id = ? ORDER BY 1",
+            )
+            .bind(self.project as u32)
+            .bind(id)
+            .fetch_all()
+            .await
+            .unwrap()
+    }
+    /// 리포트처럼 기간(UTC, [from, to))으로 거른 FINAL 매출 합계.
+    async fn range_revenue(&self, from: &str, to: &str) -> i64 {
+        self.db
+            .ch
+            .query(
+                "SELECT toInt64(sum(effective_amount)) FROM orders FINAL \
+                 WHERE project_id = ? AND ordered_at >= toDateTime64(?, 3, 'UTC') \
+                   AND ordered_at < toDateTime64(?, 3, 'UTC') \
+                 SETTINGS do_not_merge_across_partitions_select_final = 1",
+            )
+            .bind(self.project as u32)
+            .bind(from)
+            .bind(to)
+            .fetch_one()
+            .await
+            .unwrap()
+    }
+    /// 10월 + 11월 매출 (월 경계를 걸친 주문이 한 번만 잡히는지).
+    async fn oct_plus_nov(&self) -> (i64, i64) {
+        (
+            self.range_revenue("2026-10-01 00:00:00", "2026-11-01 00:00:00")
+                .await,
+            self.range_revenue("2026-11-01 00:00:00", "2026-12-01 00:00:00")
+                .await,
+        )
+    }
+    async fn post_with_key(&self, body: &Value, key: &str) -> StatusCode {
+        let auth = format!("Bearer {}", self.key);
+        send(
+            &self.app,
+            "/v1/orders",
+            &[("authorization", &auth), ("idempotency-key", key)],
+            body.to_string().into_bytes(),
+        )
+        .await
+        .0
     }
     /// FINAL 없이 본 orders 행 수 (투영을 몇 번 썼는지).
     async fn projection_writes(&self, id: &str) -> u64 {
@@ -266,8 +318,19 @@ async fn idempotency_key_header_first_wins() {
     )
     .await;
     assert_eq!(s, StatusCode::ACCEPTED);
-    // 같은 키로 다른 금액을 재전송해도 처음 것만 반영된다
+    // 같은 키로 같은 요청 재전송은 202 (한 번만 반영)
     let (s, _) = send(
+        &h.app,
+        "/v1/orders",
+        &hdr,
+        refund("O1", 10_000, "2026-11-20T12:00:00Z")
+            .to_string()
+            .into_bytes(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    // 같은 키로 다른 금액을 보내면 조용히 버리지 않고 409로 알린다
+    let (s, v) = send(
         &h.app,
         "/v1/orders",
         &hdr,
@@ -276,7 +339,10 @@ async fn idempotency_key_header_first_wins() {
             .into_bytes(),
     )
     .await;
-    assert_eq!(s, StatusCode::ACCEPTED);
+    assert_eq!(
+        (s, err_code(&v)),
+        (StatusCode::CONFLICT, "idempotency_key_reused")
+    );
     let o = h.order("O1").await.unwrap();
     assert_eq!(o.refunded_amount, 10_000);
     assert_eq!(h.event_count("O1").await, 1);
@@ -291,6 +357,53 @@ async fn idempotency_key_header_first_wins() {
     .await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(err_code(&v), "invalid_idempotency_key");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn same_explicit_key_on_confirm_and_refund_both_apply() {
+    // 가맹점이 확정·환불 모두 `Idempotency-Key: <order_id>`를 보낸다
+    let h = setup().await;
+    let auth = format!("Bearer {}", h.key);
+    let hdr = [("authorization", auth.as_str()), ("idempotency-key", "O1")];
+    let (s, _) = send(
+        &h.app,
+        "/v1/orders",
+        &hdr,
+        confirm("O1", 100_000).to_string().into_bytes(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let (s, _) = send(
+        &h.app,
+        "/v1/orders",
+        &hdr,
+        refund("O1", 30_000, "2026-11-20T12:00:00Z")
+            .to_string()
+            .into_bytes(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let o = h.order("O1").await.unwrap();
+    assert_eq!(o.status, "PARTIALLY_REFUNDED", "환불이 버려지지 않는다");
+    assert_eq!(o.effective_amount, 70_000);
+    assert_eq!(h.event_count("O1").await, 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_item_reusing_key_with_other_payload_is_rejected() {
+    let h = setup().await;
+    let mut a = confirm("O1", 100_000);
+    a["idempotency_key"] = json!("k1");
+    let (s, _) = h.batch(&json!([a.clone()])).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let mut b = confirm("O1", 1);
+    b["idempotency_key"] = json!("k1");
+    let (s, v) = h.batch(&json!([a, b])).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    assert_eq!(v["results"][0]["accepted"], true);
+    assert_eq!(v["results"][1]["accepted"], false);
+    assert_eq!(v["results"][1]["error"], "idempotency_key_reused");
+    assert_eq!(h.order("O1").await.unwrap().net_amount, 100_000);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -490,6 +603,83 @@ async fn concurrent_requests_for_same_order_do_not_race() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn two_ingest_writers_converge_after_recheck() {
+    // 줄무늬 잠금은 프로세스 안에서만 직렬화한다. ingest 두 대(서로 다른 OrderService)가 같은 주문을
+    // 동시에 처리해도, 투영 후 이벤트를 다시 읽어 확인하므로 마지막 상태는 모든 이벤트를 반영한다.
+    let h = setup().await;
+    let other = app_for(Arc::new(OrderService::new(
+        h.db.pg.clone(),
+        h.db.ch.clone(),
+    )));
+    let ids: Vec<String> = (0..4).map(|i| format!("R{i}")).collect();
+    for id in &ids {
+        h.post(&confirm(id, 1_000_000)).await;
+    }
+    let mut tasks = vec![];
+    for id in &ids {
+        for i in 0..8 {
+            let app = if i % 2 == 0 {
+                h.app.clone()
+            } else {
+                other.clone()
+            };
+            let auth = format!("Bearer {}", h.key);
+            let body = refund(id, 1_000, &format!("2026-11-20T12:00:{i:02}Z")).to_string();
+            tasks.push(tokio::spawn(async move {
+                send(
+                    &app,
+                    "/v1/orders",
+                    &[("authorization", &auth)],
+                    body.into_bytes(),
+                )
+                .await
+                .0
+            }));
+        }
+    }
+    for t in tasks {
+        assert_eq!(t.await.unwrap(), StatusCode::ACCEPTED);
+    }
+    for id in &ids {
+        let o = h.order(id).await.unwrap();
+        assert_eq!(
+            o.refunded_amount, 8_000,
+            "{id}: 다른 프로세스의 환불도 반영"
+        );
+        assert_eq!(o.effective_amount, 992_000);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recheck_rewrites_when_events_changed_after_projection() {
+    // 투영 직후 다른 writer가 이벤트를 추가한 상황을 직접 만든다: 이벤트만 넣고 투영은 쓰지 않는다.
+    let h = setup().await;
+    h.post(&confirm("RC", 100_000)).await;
+    let v = analytics_core::orders::validate(
+        &analytics_core::orders::OrderProject {
+            project_id: h.project as u32,
+            currency: "KRW",
+            salt_hex: &h.salt,
+        },
+        &refund("RC", 5_000, "2026-11-20T12:00:00Z"),
+        None,
+        crate::internal::now_ms(),
+    )
+    .unwrap();
+    ch_orders::insert_order_event(&h.db.ch, &v.event)
+        .await
+        .unwrap();
+    assert_eq!(h.order("RC").await.unwrap().effective_amount, 100_000);
+    let changed = h.svc.reproject(h.scope(), "RC").await.unwrap();
+    assert!(changed, "이벤트와 투영이 다르면 다시 쓴다");
+    assert_eq!(h.order("RC").await.unwrap().effective_amount, 95_000);
+    assert!(
+        !h.svc.reproject(h.scope(), "RC").await.unwrap(),
+        "같으면 쓰지 않는다"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn same_ms_events_in_one_batch() {
     let h = setup().await;
     let at = "2026-11-20T12:00:00.000Z";
@@ -673,8 +863,98 @@ async fn malformed_and_hostile_payloads() {
     assert!(v["message"].is_string());
 }
 
-fn signed(body: &[u8], ts: i64) -> (String, String) {
-    (ts.to_string(), edge_auth::sign(SECRET, ts, body))
+/// Worker와 같은 방식(v1)으로 `/internal/orders` 요청을 서명한다.
+fn signed_for(
+    secret: &[u8],
+    body: &[u8],
+    ts: i64,
+    path: &str,
+    auth: &str,
+    idem: &str,
+) -> (String, String) {
+    let req = edge_auth::SignedRequest {
+        internal_path: edge_auth::ORDERS_PATH,
+        timestamp_ms: ts,
+        body,
+        forwarded_path: path,
+        forwarded_authorization: auth,
+        idempotency_key: idem,
+    };
+    (ts.to_string(), edge_auth::sign(secret, &req))
+}
+
+fn edge_headers(ts: &str, sig: &str, path: &str, auth: &str) -> Vec<(String, String)> {
+    vec![
+        ("x-edge-timestamp".to_owned(), ts.to_owned()),
+        ("x-edge-signature".to_owned(), sig.to_owned()),
+        ("x-forwarded-path".to_owned(), path.to_owned()),
+        ("x-forwarded-authorization".to_owned(), auth.to_owned()),
+    ]
+}
+
+async fn post_internal(app: &Router, headers: Vec<(String, String)>, b: Vec<u8>) -> StatusCode {
+    let hs: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    send(app, "/internal/orders", &hs, b).await.0
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn internal_signature_covers_forwarded_headers_and_path() {
+    let h = setup().await;
+    let body = confirm("X1", 1).to_string().into_bytes();
+    let auth = format!("Bearer {}", h.key);
+    let now = crate::internal::now_ms();
+
+    // 단건 경로로 서명한 요청을 일괄 경로로 바꿔 보낼 수 없다
+    let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", &auth, "");
+    let s = post_internal(
+        &h.app,
+        edge_headers(&ts, &sig, "/v1/orders:batch", &auth),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "x-forwarded-path 바꿔치기");
+    // 다른 Authorization으로 바꿔치기
+    let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", "Bearer sk_live_a", "");
+    let s = post_internal(
+        &h.app,
+        edge_headers(&ts, &sig, "/v1/orders", &auth),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::UNAUTHORIZED,
+        "x-forwarded-authorization 바꿔치기"
+    );
+    // 서명되지 않은 멱등 키 추가
+    let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", &auth, "");
+    let mut hs = edge_headers(&ts, &sig, "/v1/orders", &auth);
+    hs.push(("idempotency-key".into(), "injected".into()));
+    let s = post_internal(&h.app, hs, body.clone()).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "idempotency-key 주입");
+    // /internal/collect용 서명을 /internal/orders에 재생
+    let csig = edge_auth::sign(SECRET, &edge_auth::SignedRequest::collect(now, &body));
+    let s = post_internal(
+        &h.app,
+        edge_headers(&now.to_string(), &csig, "/v1/orders", &auth),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "교차 경로 재생");
+    // (이전 형식 서명 거부는 core edge_auth 단위 테스트가 확인한다)
+    // 극단 타임스탬프는 패닉 없이 401
+    let (ts, sig) = signed_for(SECRET, &body, i64::MIN, "/v1/orders", &auth, "");
+    let s = post_internal(
+        &h.app,
+        edge_headers(&ts, &sig, "/v1/orders", &auth),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(h.event_count("X1").await, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -683,15 +963,9 @@ async fn internal_route_with_edge_signature() {
     let body = confirm("E1", 1234).to_string().into_bytes();
     let auth = format!("Bearer {}", h.key);
     let now = crate::internal::now_ms();
+    let signed = |body: &[u8], ts: i64| signed_for(SECRET, body, ts, "/v1/orders", &auth, "");
     let (ts, sig) = signed(&body, now);
-    let hdr = |ts: &str, sig: &str, path: &str, auth: &str| {
-        vec![
-            ("x-edge-timestamp".to_owned(), ts.to_owned()),
-            ("x-edge-signature".to_owned(), sig.to_owned()),
-            ("x-forwarded-path".to_owned(), path.to_owned()),
-            ("x-forwarded-authorization".to_owned(), auth.to_owned()),
-        ]
-    };
+    let hdr = |ts: &str, sig: &str, path: &str, auth: &str| edge_headers(ts, sig, path, auth);
     let post = |headers: Vec<(String, String)>, b: Vec<u8>| {
         let app = h.app.clone();
         async move {
@@ -726,28 +1000,35 @@ async fn internal_route_with_edge_signature() {
     let (ots, osig) = signed(&body, old);
     let (s, _) = post(hdr(&ots, &osig, "/v1/orders", &auth), body.clone()).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED, "오래된 서명 재사용");
-    let wrong = edge_auth::sign(b"wrong-secret-wrong-secret-wrong-secret", now, &body);
+    let (_, wrong) = signed_for(
+        b"wrong-secret-wrong-secret-wrong-secret",
+        &body,
+        now,
+        "/v1/orders",
+        &auth,
+        "",
+    );
     let (s, _) = post(hdr(&ts, &wrong, "/v1/orders", &auth), body.clone()).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
 
     // 서명이 맞아도 원 요청의 키는 원점에서 다시 검증한다
-    let (s, v) = post(
-        hdr(&ts, &sig, "/v1/orders", "Bearer sk_live_forged"),
-        body.clone(),
-    )
-    .await;
+    let forged = "Bearer sk_live_forged";
+    let (_, fsig) = signed_for(SECRET, &body, now, "/v1/orders", forged, "");
+    let (s, v) = post(hdr(&ts, &fsig, "/v1/orders", forged), body.clone()).await;
     assert_eq!((s, err_code(&v)), (StatusCode::UNAUTHORIZED, "invalid_key"));
-    let (s, _) = post(hdr(&ts, &sig, "/v1/orders", ""), body.clone()).await;
+    let (_, esig) = signed_for(SECRET, &body, now, "/v1/orders", "", "");
+    let (s, _) = post(hdr(&ts, &esig, "/v1/orders", ""), body.clone()).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
     // 모르는 경로
-    let (s, _) = post(hdr(&ts, &sig, "/v1/collect", &auth), body.clone()).await;
+    let (_, usig) = signed_for(SECRET, &body, now, "/v1/collect", &auth, "");
+    let (s, _) = post(hdr(&ts, &usig, "/v1/collect", &auth), body.clone()).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 
     // 일괄 + 엣지가 전달한 idempotency-key
     let batch = json!({"orders": [confirm("E3", 1)]})
         .to_string()
         .into_bytes();
-    let (bts, bsig) = signed(&batch, now);
+    let (bts, bsig) = signed_for(SECRET, &batch, now, "/v1/orders:batch", &auth, "");
     let (s, v) = post(hdr(&bts, &bsig, "/v1/orders:batch", &auth), batch).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{v}");
     assert_eq!(v["results"][0]["accepted"], true);
@@ -755,7 +1036,7 @@ async fn internal_route_with_edge_signature() {
     let r = refund("E1", 5, "2026-11-20T12:00:00Z")
         .to_string()
         .into_bytes();
-    let (rts, rsig) = signed(&r, now);
+    let (rts, rsig) = signed_for(SECRET, &r, now, "/v1/orders", &auth, "edge-key-1");
     let mut with_key = hdr(&rts, &rsig, "/v1/orders", &auth);
     with_key.push(("idempotency-key".into(), "edge-key-1".into()));
     let (s, _) = post(with_key, r).await;
@@ -763,7 +1044,10 @@ async fn internal_route_with_edge_signature() {
     let evs = ch_orders::order_events(&h.db.ch, h.scope(), "E1")
         .await
         .unwrap();
-    assert!(evs.iter().any(|e| e.idempotency_key == "edge-key-1"));
+    assert!(
+        evs.iter()
+            .any(|e| e.idempotency_key == "ORDER_REFUNDED:edge-key-1")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -860,9 +1144,19 @@ async fn event_append_failure_writes_no_projection() {
 // ── 클라이언트 purchase → 주문 ─────────────────────────────
 
 fn purchase(project: i32, order_id: &str, value: i64, event_id: u128) -> analytics_core::Event {
+    purchase_at(project, order_id, value, event_id, 1_795_167_912_000)
+}
+
+fn purchase_at(
+    project: i32,
+    order_id: &str,
+    value: i64,
+    event_id: u128,
+    ts_ms: i64,
+) -> analytics_core::Event {
     let raw = json!({
-        "project_id": project, "event_id": uuid::Uuid::from_u128(event_id), "ts_ms": 1_795_167_912_000i64,
-        "received_at_ms": 1_795_167_913_000i64, "event_name": "purchase",
+        "project_id": project, "event_id": uuid::Uuid::from_u128(event_id), "ts_ms": ts_ms,
+        "received_at_ms": ts_ms + 1000, "event_name": "purchase",
         "visitor_id": uuid::Uuid::from_u128(77), "session_id": uuid::Uuid::from_u128(3),
         "is_session_start": false, "member_hash": "", "url": "https://a.com/done", "host": "a.com",
         "path": "/done", "title": "", "referrer": "", "referrer_host": "", "utm_source": "",
@@ -878,7 +1172,7 @@ fn purchase(project: i32, order_id: &str, value: i64, event_id: u128) -> analyti
 async fn client_purchase_projected_when_enabled() {
     let h = setup_with(json!({"client_purchase_as_order": true})).await;
     let e = purchase(h.project, "C1", 50_000, 1);
-    h.svc.client_purchases(&[e.clone(), e]).await.unwrap();
+    h.svc.client_purchases(&[e.clone(), e]).await;
     let o = h.order("C1").await.unwrap();
     assert_eq!(o.source, "client");
     assert_eq!(o.effective_amount, 50_000);
@@ -891,8 +1185,7 @@ async fn client_purchase_ignored_when_disabled() {
     let h = setup().await;
     h.svc
         .client_purchases(&[purchase(h.project, "C1", 50_000, 1)])
-        .await
-        .unwrap();
+        .await;
     assert!(h.order("C1").await.is_none());
     assert_eq!(h.event_count("C1").await, 0);
 }
@@ -905,14 +1198,12 @@ async fn s2s_always_wins_over_client() {
     let before = h.order("O1").await.unwrap();
     h.svc
         .client_purchases(&[purchase(h.project, "O1", 999, 1)])
-        .await
-        .unwrap();
+        .await;
     assert_eq!(h.order("O1").await.unwrap(), before);
     // 클라이언트 먼저 → S2S가 오면 S2S로 바뀐다
     h.svc
         .client_purchases(&[purchase(h.project, "O2", 999, 2)])
-        .await
-        .unwrap();
+        .await;
     assert_eq!(h.order("O2").await.unwrap().source, "client");
     h.post(&confirm("O2", 100_000)).await;
     let o = h.order("O2").await.unwrap();
@@ -930,4 +1221,222 @@ async fn project_context_lookup() {
     assert!(!ctx.client_purchase_as_order);
     assert!(h.svc.project(999_999).await.unwrap().is_none());
     let _ = OrderStatus::Confirmed;
+}
+
+// ── ordered_at 고정 (파티션 간 중복 방지) ───────────────────
+
+fn ms(rfc3339: &str) -> i64 {
+    let t = time::OffsetDateTime::parse(rfc3339, &time::format_description::well_known::Rfc3339)
+        .unwrap();
+    (t.unix_timestamp_nanos() / 1_000_000) as i64
+}
+
+fn confirm_at(id: &str, net: i64, at: &str) -> Value {
+    with(confirm(id, net), "ordered_at", json!(at))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ordered_at_frozen_when_s2s_replaces_client_across_months() {
+    // 클라이언트 purchase 10/31 23:59(UTC) → S2S 확정 11/1 00:10: 다른 월 파티션
+    let h = setup_with(json!({"client_purchase_as_order": true})).await;
+    let at = ms("2026-10-31T23:59:00Z");
+    h.svc
+        .client_purchases(&[purchase_at(h.project, "M1", 50_000, 1, at)])
+        .await;
+    assert_eq!(h.order("M1").await.unwrap().source, "client");
+    let (s, _) = h
+        .post(&confirm_at("M1", 100_000, "2026-11-01T09:10:00+09:00"))
+        .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let o = h.order("M1").await.unwrap();
+    assert_eq!((o.source.as_str(), o.effective_amount), ("s2s", 100_000));
+    assert_eq!(h.projection_writes("M1").await, 2);
+    assert_eq!(
+        h.ordered_at_versions("M1").await,
+        vec![at],
+        "모든 버전이 처음 행의 ordered_at을 유지"
+    );
+    let (oct, nov) = h.oct_plus_nov().await;
+    assert_eq!(oct + nov, 100_000, "월 범위 합계에 한 번만 ({oct} + {nov})");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refund_before_confirm_across_months_counted_once() {
+    let h = setup().await;
+    let (s, _) = h.post(&refund("M2", 10_000, "2026-11-02T00:00:00Z")).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let pending = h.order("M2").await.unwrap();
+    assert_eq!(pending.status, "PENDING");
+    h.post(&confirm_at("M2", 100_000, "2026-10-31T23:00:00Z"))
+        .await;
+    let o = h.order("M2").await.unwrap();
+    assert_eq!(
+        (o.status.as_str(), o.effective_amount),
+        ("PARTIALLY_REFUNDED", 90_000)
+    );
+    assert_eq!(h.ordered_at_versions("M2").await.len(), 1);
+    assert_eq!(o.ordered_at, pending.ordered_at);
+    let (oct, nov) = h.oct_plus_nov().await;
+    assert_eq!(oct + nov, 90_000, "{oct} + {nov}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn confirm_correction_across_months_counted_once() {
+    let h = setup().await;
+    h.post(&confirm_at("M3", 100_000, "2026-10-31T23:30:00Z"))
+        .await;
+    // 정정 확정 (다른 시각 → 다른 기본 멱등 키)
+    h.post(&confirm_at("M3", 80_000, "2026-11-01T01:00:00Z"))
+        .await;
+    let o = h.order("M3").await.unwrap();
+    assert_eq!(o.net_amount, 80_000, "늦은 확정 금액");
+    assert_eq!(h.projection_writes("M3").await, 2);
+    assert_eq!(
+        h.ordered_at_versions("M3").await,
+        vec![ms("2026-10-31T23:30:00Z")]
+    );
+    let (oct, nov) = h.oct_plus_nov().await;
+    assert_eq!((oct, nov), (80_000, 0));
+}
+
+// ── 클라이언트 purchase 남용 방지 ──────────────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_purchase_cannot_rewrite_amount() {
+    // 공개 키만으로 보낸 나중 purchase가 클라이언트 주문 금액을 바꾸지 못한다
+    let h = setup_with(json!({"client_purchase_as_order": true})).await;
+    let r = h
+        .svc
+        .client_purchases(&[purchase(h.project, "C1", 50_000, 1)])
+        .await;
+    assert_eq!((r.applied, r.failed), (1, 0));
+    h.svc
+        .client_purchases(&[purchase_at(h.project, "C1", 1, 2, 1_795_167_999_000)])
+        .await;
+    let o = h.order("C1").await.unwrap();
+    assert_eq!(o.effective_amount, 50_000);
+    assert_eq!(h.event_count("C1").await, 2, "이벤트는 남긴다 (감사용)");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_events_per_order_are_capped() {
+    let h = setup_with(json!({"client_purchase_as_order": true})).await;
+    let evs: Vec<_> = (0..(super::MAX_CLIENT_EVENTS_PER_ORDER as u128 + 5))
+        .map(|i| purchase(h.project, "C1", 1000, 100 + i))
+        .collect();
+    let r = h.svc.client_purchases(&evs).await;
+    assert_eq!(r.applied, super::MAX_CLIENT_EVENTS_PER_ORDER);
+    assert_eq!(r.capped, 5);
+    assert_eq!(
+        h.event_count("C1").await,
+        super::MAX_CLIENT_EVENTS_PER_ORDER
+    );
+    assert_eq!(h.svc.metrics.client_capped.load(Relaxed), 5);
+    // S2S 이벤트는 상한과 무관하게 받는다
+    assert_eq!(h.post(&confirm("C1", 7)).await.0, StatusCode::ACCEPTED);
+    assert_eq!(h.order("C1").await.unwrap().source, "s2s");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn background_client_projection_is_bounded() {
+    let db = TestDb::new().await;
+    let (project, _) = make_project(&db, json!({"client_purchase_as_order": true})).await;
+    // 동시 작업 한도 0: 모두 버리고 지표로 센다 (작업을 무한히 띄우지 않는다)
+    let svc = Arc::new(OrderService::with_client_concurrency(
+        db.pg.clone(),
+        db.ch.clone(),
+        0,
+    ));
+    svc.spawn_client_purchases(&[purchase(project, "B1", 1, 1), purchase(project, "B2", 1, 2)]);
+    assert_eq!(svc.metrics.client_dropped.load(Relaxed), 2);
+    // 한도 안이면 백그라운드에서 반영된다
+    let svc = Arc::new(OrderService::with_client_concurrency(
+        db.pg.clone(),
+        db.ch.clone(),
+        1,
+    ));
+    svc.spawn_client_purchases(&[purchase(project, "B3", 1, 3)]);
+    let scope = ProjectScope::authorized(project as u32);
+    let mut found = false;
+    for _ in 0..100 {
+        if ch_orders::current_order(&db.ch, scope, "B3")
+            .await
+            .unwrap()
+            .is_some()
+        {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(found);
+    assert_eq!(svc.metrics.client_dropped.load(Relaxed), 0);
+    assert!(
+        ch_orders::current_order(&db.ch, scope, "B1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_purchase_failure_does_not_skip_rest_of_batch() {
+    let h = setup_with(json!({"client_purchase_as_order": true})).await;
+    let dead = analytics_ch::Client::default().with_url("http://127.0.0.1:1");
+    let svc = OrderService::new(h.db.pg.clone(), dead);
+    let evs = [
+        purchase(h.project, "F1", 1, 1),
+        purchase(h.project, "F2", 1, 2),
+        purchase(h.project, "F3", 1, 3),
+    ];
+    let r = svc.client_purchases(&evs).await;
+    assert_eq!(
+        (r.applied, r.failed),
+        (0, 3),
+        "실패한 건 뒤의 건도 시도한다"
+    );
+    assert_eq!(svc.metrics.client_failed.load(Relaxed), 3);
+}
+
+// ── 문서화된 동작·희귀 케이스 ─────────────────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn equal_partial_refunds_same_ms_without_keys_collapse() {
+    // 문서화된 동작 (ARCHITECTURE §5.1): 키 없이 같은 금액·같은 시각의 부분 환불 두 건은 재전송과
+    // 구별할 수 없어 한 건으로 합쳐진다. 환불마다 Idempotency-Key를 보내면 각각 반영된다.
+    let h = setup().await;
+    h.post(&confirm("P1", 100_000)).await;
+    let r = refund("P1", 10_000, "2026-11-20T12:00:00.123Z");
+    assert_eq!(h.post(&r).await.0, StatusCode::ACCEPTED);
+    assert_eq!(h.post(&r).await.0, StatusCode::ACCEPTED);
+    assert_eq!(h.order("P1").await.unwrap().refunded_amount, 10_000);
+
+    h.post(&confirm("P2", 100_000)).await;
+    let r = refund("P2", 10_000, "2026-11-20T12:00:00.123Z");
+    assert_eq!(h.post_with_key(&r, "refund-1").await, StatusCode::ACCEPTED);
+    assert_eq!(h.post_with_key(&r, "refund-2").await, StatusCode::ACCEPTED);
+    assert_eq!(h.order("P2").await.unwrap().refunded_amount, 20_000);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refund_only_pending_order_contributes_nothing() {
+    let h = setup().await;
+    h.post(&refund("PD", 10_000, "2026-11-02T00:00:00Z")).await;
+    let o = h.order("PD").await.unwrap();
+    assert_eq!(o.status, "PENDING");
+    assert_eq!(
+        (o.net_amount, o.effective_amount, o.refunded_amount),
+        (0, 0, 10_000)
+    );
+    assert_eq!(h.oct_plus_nov().await, (0, 0), "PENDING은 매출 0");
+    // 확정이 오면 같은 행(같은 ordered_at)이 확정으로 바뀌고 한 번만 잡힌다
+    h.post(&confirm_at("PD", 50_000, "2026-11-01T00:00:00Z"))
+        .await;
+    let o = h.order("PD").await.unwrap();
+    assert_eq!(
+        (o.status.as_str(), o.effective_amount),
+        ("PARTIALLY_REFUNDED", 40_000)
+    );
+    assert_eq!(h.ordered_at_versions("PD").await.len(), 1);
+    assert_eq!(h.oct_plus_nov().await, (0, 40_000));
 }

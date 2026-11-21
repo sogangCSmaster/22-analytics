@@ -17,9 +17,9 @@ pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
 /// 원점 장애 시 `Retry-After` (초)
 pub const RETRY_AFTER_SECS: u32 = 30;
 
-pub const HEADER_FORWARDED_AUTHORIZATION: &str = "x-forwarded-authorization";
-pub const HEADER_FORWARDED_PATH: &str = "x-forwarded-path";
-pub const HEADER_IDEMPOTENCY_KEY: &str = "idempotency-key";
+pub use crate::forward::{
+    HEADER_FORWARDED_AUTHORIZATION, HEADER_FORWARDED_PATH, HEADER_IDEMPOTENCY_KEY,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct OrdersRequest<'a> {
@@ -45,25 +45,23 @@ pub fn build_forward(
     if req.body.is_empty() {
         return Err(EdgeResponse::error(400, "empty_body"));
     }
-    let mut f = forward::signed(
+    // 전달 헤더도 서명에 포함된다 (원점이 같은 값으로 다시 계산한다).
+    let idempotency_key = req
+        .idempotency_key
+        .filter(|k| valid_idempotency_key(k))
+        .unwrap_or("");
+    Ok(forward::signed_with(
         origin_url,
         forward::ORDERS_PATH,
         secret,
         req.body.to_vec(),
         now_ms,
-    );
-    f.headers.extend([
-        (
-            HEADER_FORWARDED_AUTHORIZATION.into(),
-            authorization.to_owned(),
-        ),
-        (HEADER_FORWARDED_PATH.into(), req.kind.public_path().into()),
-    ]);
-    if let Some(k) = req.idempotency_key.filter(|k| valid_idempotency_key(k)) {
-        f.headers
-            .push((HEADER_IDEMPOTENCY_KEY.into(), k.to_owned()));
-    }
-    Ok(f)
+        forward::Forwarded {
+            path: req.kind.public_path(),
+            authorization,
+            idempotency_key,
+        },
+    ))
 }
 
 fn is_header_text(s: &str) -> bool {
@@ -115,8 +113,8 @@ pub fn map_response(reply: Option<OriginReply>) -> EdgeResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::forward::tests::{NOW, SECRET};
-    use analytics_core::edge_auth::{HEADER_SIGNATURE, HEADER_TIMESTAMP, verify};
+    use crate::forward::tests::{NOW, SECRET, origin_verifies};
+    use analytics_core::edge_auth::{HEADER_SIGNATURE, HEADER_TIMESTAMP, SignedRequest, verify};
 
     const BODY: &[u8] =
         br#"{"event_type":"PURCHASE_CONFIRMED","order_id":"ORD-9901","net_amount":100000}"#;
@@ -131,14 +129,7 @@ mod tests {
     }
 
     fn verifies(f: &ForwardRequest) -> bool {
-        let ts: i64 = f.header(HEADER_TIMESTAMP).unwrap().parse().unwrap();
-        verify(
-            SECRET,
-            ts,
-            &f.body,
-            f.header(HEADER_SIGNATURE).unwrap(),
-            NOW,
-        )
+        origin_verifies(f, forward::ORDERS_PATH, &f.body, NOW)
     }
 
     // ── 해피 ──
@@ -168,6 +159,46 @@ mod tests {
         let f = build_forward(&r, "https://origin", SECRET, NOW).unwrap();
         assert_eq!(f.header(HEADER_FORWARDED_PATH), Some("/v1/orders:batch"));
         assert_eq!(f.header(HEADER_IDEMPOTENCY_KEY), Some("ORD-9901:confirm"));
+        assert!(verifies(&f), "멱등 키까지 서명된다");
+    }
+
+    #[test]
+    fn forwarded_headers_are_covered_by_signature() {
+        let mut r = req(BODY);
+        r.idempotency_key = Some("k-1");
+        let f = build_forward(&r, "https://origin", SECRET, NOW).unwrap();
+        assert!(verifies(&f));
+        let ts: i64 = f.header(HEADER_TIMESTAMP).unwrap().parse().unwrap();
+        let sig = f.header(HEADER_SIGNATURE).unwrap();
+        let base = SignedRequest {
+            internal_path: forward::ORDERS_PATH,
+            timestamp_ms: ts,
+            body: BODY,
+            forwarded_path: "/v1/orders",
+            forwarded_authorization: "Bearer sk_live_abcdefgh12345678",
+            idempotency_key: "k-1",
+        };
+        assert!(verify(SECRET, &base, sig, NOW));
+        for changed in [
+            SignedRequest {
+                forwarded_path: "/v1/orders:batch",
+                ..base
+            },
+            SignedRequest {
+                forwarded_authorization: "Bearer sk_live_attacker",
+                ..base
+            },
+            SignedRequest {
+                idempotency_key: "",
+                ..base
+            },
+            SignedRequest {
+                internal_path: forward::COLLECT_PATH,
+                ..base
+            },
+        ] {
+            assert!(!verify(SECRET, &changed, sig, NOW), "{changed:?}");
+        }
     }
 
     #[test]
@@ -296,12 +327,10 @@ mod tests {
         let f = build_forward(&req(raw), "https://o", SECRET, NOW).unwrap();
         assert_eq!(f.body, raw);
         assert!(verifies(&f));
-        let sig = f.header(HEADER_SIGNATURE).unwrap();
-        assert!(!verify(
-            SECRET,
-            NOW,
+        assert!(!origin_verifies(
+            &f,
+            forward::ORDERS_PATH,
             br#"{"order_id":"A","net_amount":1}"#,
-            sig,
             NOW
         ));
     }

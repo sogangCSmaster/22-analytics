@@ -84,6 +84,16 @@ impl ApiError {
         )
     }
 
+    /// 리포트 저장소(ClickHouse) 장애. 원인은 로그에만 남긴다.
+    pub fn storage_unavailable(err: anyhow::Error) -> Self {
+        tracing::error!(error = ?err, "리포트 저장소 오류");
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "storage_unavailable",
+            "리포트 저장소에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도하세요",
+        )
+    }
+
     pub fn internal(err: anyhow::Error) -> Self {
         tracing::error!(error = ?err, "내부 오류");
         Self::new(

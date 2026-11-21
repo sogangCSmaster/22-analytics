@@ -2,6 +2,8 @@
 //!
 //! 다른 패키지와의 계약:
 //! - `orders`는 항상 `FINAL`로 읽는다 (ReplacingMergeTree(version)).
+//! - 한 주문의 `ordered_at`(파티션 키)은 버전이 바뀌어도 그대로다 (`analytics_core::orders::project`).
+//!   그래서 같은 주문의 모든 버전이 한 파티션에 있고, 리포트는 파티션 간 병합 없이 `FINAL`을 쓸 수 있다.
 //! - `version`은 unix ms 근사값이며 주문마다 엄격히 증가한다: `max(이전 version + 1, now_ms)`.
 //! - 기여 연산 잡은 `version > watermark`로 바뀐 주문을 찾는다 ([`orders_changed_since`]).
 //! - `order_events`는 append-only다. 같은 멱등 키의 중복 행이 있을 수 있으므로

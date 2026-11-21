@@ -238,7 +238,13 @@ at('getVisitorId', id => ...);         // 비 HttpOnly 모드에서 주문서에
 
 ### 4.2 원점 인증
 
-- Worker에서 Tunnel로 가는 요청에는 `X-Edge-Auth: HMAC(secret, body)` 헤더를 붙입니다.
+- Worker에서 Tunnel로 가는 요청에는 `x-edge-timestamp`, `x-edge-signature` 헤더를 붙입니다.
+  서명은 `hex(HMAC-SHA256(secret, canonical))`이고 canonical(v1)은 다음 7줄을 `\n`으로 잇습니다
+  (`analytics_core::edge_auth`):
+  `v1`, 내부 경로(`/internal/collect`·`/internal/orders`), 타임스탬프(ms), `sha256_hex(body)`,
+  `x-forwarded-path`, `x-forwarded-authorization`, `idempotency-key` (없는 헤더는 빈 문자열).
+  내부 경로와 전달 헤더까지 덮으므로 한 경로용 서명을 다른 경로에 재생하거나 전달 헤더만 바꿔치기할 수
+  없습니다. 타임스탬프 허용 오차는 ±5분입니다.
 - `ingest`는 Tunnel 인터페이스로만 listen합니다(compose 내부 네트워크).
 
 ### 4.3 KV 동기화
@@ -284,6 +290,13 @@ Idempotency-Key: <선택. 없으면 order_id + event_type + 금액으로 계산>
 ```
 
 - 응답: `202 {"accepted": true}`. 실패하면 `4xx`와 오류 코드를 반환합니다.
+- **멱등 키**: 명시한 `Idempotency-Key`(일괄은 항목별 `idempotency_key`)는 `{event_type}:{key}`로
+  저장합니다. 확정과 환불에 같은 키(예: `order_id`)를 써도 서로를 중복으로 보지 않습니다.
+  같은 (유형, 키)로 금액·발생 시각이 **다른** 요청을 보내면 `409 idempotency_key_reused`를 돌려줍니다
+  (같은 내용 재전송은 `202`). 키가 없으면 `sha256(order_id|event_type|금액|발생 시각)`을 씁니다.
+- **부분 환불에는 `Idempotency-Key`를 붙이세요.** 키 없이 같은 금액의 부분 환불 두 건을 같은 시각(ms)으로
+  보내면 기본 키가 같아 한 건으로 합쳐집니다(재전송과 구별할 수 없음). 환불 건마다 고유한 키
+  (예: 환불 ID)를 보내면 각각 반영됩니다.
 - 일괄 전송 엔드포인트 `POST /v1/orders:batch`는 최대 500건입니다. 백필과 재동기화용입니다.
 - `net_amount`의 정의(쿠폰·포인트·배송비 처리)는 프로젝트별 설정 문서로 남깁니다. 매뉴얼 2.A(2)를 따릅니다.
 
@@ -292,13 +305,24 @@ Idempotency-Key: <선택. 없으면 order_id + event_type + 금액으로 계산>
 - 모든 주문 이벤트는 `order_events`에 **append-only**로 쌓습니다.
 - 현재 상태는 `orders`(ReplacingMergeTree)에 투영합니다.
   - `effective_amount = net_amount − Σ refund_amount` (0 미만이면 0)
-  - `status`: `CONFIRMED | PARTIALLY_REFUNDED | CANCELLED`
+  - `status`: `CONFIRMED | PARTIALLY_REFUNDED | CANCELLED` (확정 전에 환불만 온 주문은 `PENDING`, effective 0)
+  - **`ordered_at`은 처음 투영한 값으로 고정합니다.** `orders`·`attributed_revenue`는
+    `PARTITION BY toYYYYMM(ordered_at)`인 ReplacingMergeTree인데, 엔진은 파티션을 넘어 중복을 없애지 않습니다.
+    버전마다 `ordered_at`이 달라져 다른 월로 넘어가면(확정 정정, 확정 전 환불·취소, 클라이언트 행을 S2S가
+    대체) 예전 행이 그 월에 남아 월 범위 리포트에서 이중 집계됩니다. 그래서 `orders` 행이 한 번 생기면 이후
+    모든 버전은 이전 행의 `ordered_at`을 그대로 씁니다(`analytics_core::orders::project`). 그 결과 확정 전에
+    환불이 먼저 온 주문은 환불 시각이, 클라이언트 주문을 S2S가 대체한 경우 클라이언트 시각이 주문 시각이 됩니다.
 - 같은 `order_id`가 여러 번 들어와도 매출은 **한 번만** 확정됩니다. 매뉴얼 2.E(1)과 같습니다.
 - 주문 상태가 바뀌면 `order_changes`에 변경을 기록하고, 이 기록이 기여 연산을 다시 트리거합니다(§7).
 
 ### 5.3 S2S가 없는 프로젝트
 
-`client_purchase_as_order = on`이면 트래커의 `purchase` 이벤트(`order_id` 필수)를 `source='client'`인 주문으로 투영합니다. 같은 `order_id`의 S2S 주문이 들어오면 S2S가 우선합니다. 대시보드에는 **"클라이언트 기준: 유실 가능"** 배지를 표시합니다(FIM-04).
+`client_purchase_as_order = on`이면 트래커의 `purchase` 이벤트(`order_id` 필수)를 `source='client'`인 주문으로 투영합니다. 같은 `order_id`의 S2S 주문이 들어오면 S2S가 우선합니다.
+
+- 공개 키(`pk_`)만 있으면 누구나 `purchase`를 보낼 수 있으므로, 클라이언트 주문은 **첫 확정**의 금액·식별자를
+  씁니다(S2S는 가장 늦은 확정이 정정으로 이깁니다). 주문당 클라이언트 이벤트는 50건까지만 받습니다.
+- 투영은 수집 응답을 늦추지 않도록 백그라운드에서 하며, 동시 작업은 64개까지입니다. 넘치면 버리고
+  `ingest_client_purchases_dropped_total`로 셉니다(실패·상한 초과는 `_failed_total`, `_capped_total`). 대시보드에는 **"클라이언트 기준: 유실 가능"** 배지를 표시합니다(FIM-04).
 
 ---
 
@@ -683,6 +707,9 @@ GROUP BY model, lookback_days;
 | SSM | Session Manager로 접속 (SSH 포트 없음) | Parameter Store로 비밀값 관리 |
 | IaC | Terraform | `infra/terraform` |
 
+- **ingest는 한 대(단일 writer)를 권장합니다.** 같은 주문의 처리 직렬화(줄무늬 잠금)는 프로세스 안에서만
+  유효합니다. 여러 대를 띄우면 투영을 쓴 뒤 이벤트를 다시 읽어 달라졌으면 다시 쓰는 재확인(최대 3회)으로
+  수렴시키지만, 이는 보정일 뿐 직렬화를 보장하지 않습니다(같은 ms의 version 충돌 등).
 - **ClickHouse 메모리 설정**: 8GB 장비에서는 `max_server_memory_usage_to_ram_ratio=0.6`, `async_insert=0`(ingest가 직접 배치), `max_threads=2`로 둡니다.
 - **Tiered storage**: 30일이 지난 파티션은 S3 disk로 `MOVE`합니다(`TTL ... TO VOLUME 'cold'`).
 - **백업**:
