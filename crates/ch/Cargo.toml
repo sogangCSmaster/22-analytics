@@ -11,9 +11,11 @@ analytics-core.workspace = true
 anyhow.workspace = true
 clickhouse.workspace = true
 serde.workspace = true
+thiserror.workspace = true
 time.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+analytics-testkit.workspace = true
 tokio.workspace = true
