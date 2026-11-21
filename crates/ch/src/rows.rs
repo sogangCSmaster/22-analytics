@@ -3,12 +3,14 @@
 use analytics_core::Event;
 use analytics_core::timeutil::ms_to_dt;
 use clickhouse::Row;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Row, Serialize, Deserialize)]
-pub struct EventRow {
+/// `events` INSERT용 행. 이벤트의 문자열을 빌려 쓰므로 행마다 복사하지 않는다.
+/// (`events`를 행 단위로 다시 읽는 코드는 없어서 소유 타입은 두지 않는다.)
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct EventRow<'a> {
     pub project_id: u32,
     #[serde(with = "clickhouse::serde::uuid")]
     pub event_id: Uuid,
@@ -16,95 +18,100 @@ pub struct EventRow {
     pub ts: OffsetDateTime,
     #[serde(with = "clickhouse::serde::time::datetime64::millis")]
     pub received_at: OffsetDateTime,
-    pub event_name: String,
+    pub event_name: &'a str,
     #[serde(with = "clickhouse::serde::uuid")]
     pub visitor_id: Uuid,
     #[serde(with = "clickhouse::serde::uuid")]
     pub session_id: Uuid,
     pub is_session_start: u8,
-    pub member_hash: String,
-    pub url: String,
-    pub host: String,
-    pub path: String,
-    pub title: String,
-    pub referrer: String,
-    pub referrer_host: String,
-    pub utm_source: String,
-    pub utm_medium: String,
-    pub utm_campaign: String,
-    pub utm_content: String,
-    pub utm_term: String,
-    pub click_id: String,
-    pub click_id_type: String,
-    pub channel: String,
-    pub country: String,
-    pub region: String,
-    pub city: String,
-    pub device_type: String,
-    pub browser: String,
-    pub os: String,
+    pub member_hash: &'a str,
+    pub url: &'a str,
+    pub host: &'a str,
+    pub path: &'a str,
+    pub title: &'a str,
+    pub referrer: &'a str,
+    pub referrer_host: &'a str,
+    pub utm_source: &'a str,
+    pub utm_medium: &'a str,
+    pub utm_campaign: &'a str,
+    pub utm_content: &'a str,
+    pub utm_term: &'a str,
+    pub click_id: &'a str,
+    pub click_id_type: &'a str,
+    pub channel: &'a str,
+    pub country: &'a str,
+    pub region: &'a str,
+    pub city: &'a str,
+    pub device_type: &'a str,
+    pub browser: &'a str,
+    pub os: &'a str,
     pub screen_w: u16,
     #[serde(rename = "props.key")]
-    pub props_key: Vec<String>,
+    pub props_key: Vec<&'a str>,
     #[serde(rename = "props.value")]
-    pub props_value: Vec<String>,
-    pub ec_order_id: String,
+    pub props_value: Vec<&'a str>,
+    pub ec_order_id: &'a str,
     pub ec_value: i64,
-    pub ec_currency: String,
+    pub ec_currency: &'a str,
     #[serde(rename = "items.id")]
-    pub items_id: Vec<String>,
+    pub items_id: Vec<&'a str>,
     #[serde(rename = "items.name")]
-    pub items_name: Vec<String>,
+    pub items_name: Vec<&'a str>,
     #[serde(rename = "items.price")]
     pub items_price: Vec<i64>,
     #[serde(rename = "items.qty")]
     pub items_qty: Vec<u32>,
 }
 
-impl From<&Event> for EventRow {
-    fn from(e: &Event) -> Self {
-        let (props_key, props_value) = e.props.iter().cloned().unzip();
-        let ec = e.ec.clone().unwrap_or_default();
+impl<'a> From<&'a Event> for EventRow<'a> {
+    fn from(e: &'a Event) -> Self {
+        let (props_key, props_value) = e
+            .props
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .unzip();
+        let ec = e.ec.as_ref();
+        let items = ec.map(|ec| ec.items.as_slice()).unwrap_or_default();
         Self {
             project_id: e.project_id,
             event_id: e.event_id,
             ts: ms_to_dt(e.ts_ms),
             received_at: ms_to_dt(e.received_at_ms),
-            event_name: e.event_name.clone(),
+            event_name: &e.event_name,
             visitor_id: e.visitor_id,
             session_id: e.session_id,
             is_session_start: e.is_session_start as u8,
-            member_hash: e.member_hash.clone(),
-            url: e.url.clone(),
-            host: e.host.clone(),
-            path: e.path.clone(),
-            title: e.title.clone(),
-            referrer: e.referrer.clone(),
-            referrer_host: e.referrer_host.clone(),
-            utm_source: e.utm_source.clone(),
-            utm_medium: e.utm_medium.clone(),
-            utm_campaign: e.utm_campaign.clone(),
-            utm_content: e.utm_content.clone(),
-            utm_term: e.utm_term.clone(),
-            click_id: e.click_id.clone(),
-            click_id_type: e.click_id_type.clone(),
-            channel: e.channel.clone(),
-            country: e.country.clone(),
-            region: e.region.clone(),
-            city: e.city.clone(),
-            device_type: e.device_type.clone(),
-            browser: e.browser.clone(),
-            os: e.os.clone(),
+            member_hash: &e.member_hash,
+            url: &e.url,
+            host: &e.host,
+            path: &e.path,
+            title: &e.title,
+            referrer: &e.referrer,
+            referrer_host: &e.referrer_host,
+            utm_source: &e.utm_source,
+            utm_medium: &e.utm_medium,
+            utm_campaign: &e.utm_campaign,
+            utm_content: &e.utm_content,
+            utm_term: &e.utm_term,
+            click_id: &e.click_id,
+            click_id_type: &e.click_id_type,
+            channel: &e.channel,
+            country: &e.country,
+            region: &e.region,
+            city: &e.city,
+            device_type: &e.device_type,
+            browser: &e.browser,
+            os: &e.os,
             screen_w: e.screen_w,
             props_key,
             props_value,
-            ec_order_id: ec.order_id,
-            ec_value: ec.value,
-            ec_currency: ec.currency,
-            items_id: ec.items.iter().map(|i| i.id.clone()).collect(),
-            items_name: ec.items.iter().map(|i| i.name.clone()).collect(),
-            items_price: ec.items.iter().map(|i| i.price).collect(),
-            items_qty: ec.items.iter().map(|i| i.qty).collect(),
+            ec_order_id: ec.map_or("", |ec| ec.order_id.as_str()),
+            ec_value: ec.map_or(0, |ec| ec.value),
+            ec_currency: ec.map_or("", |ec| ec.currency.as_str()),
+            items_id: items.iter().map(|i| i.id.as_str()).collect(),
+            items_name: items.iter().map(|i| i.name.as_str()).collect(),
+            items_price: items.iter().map(|i| i.price).collect(),
+            items_qty: items.iter().map(|i| i.qty).collect(),
         }
     }
 }
@@ -114,7 +121,7 @@ pub async fn insert_events(client: &clickhouse::Client, events: &[Event]) -> any
     if events.is_empty() {
         return Ok(());
     }
-    let mut insert = client.insert::<EventRow>("events").await?;
+    let mut insert = client.insert::<EventRow<'_>>("events").await?;
     for e in events {
         insert.write(&EventRow::from(e)).await?;
     }
