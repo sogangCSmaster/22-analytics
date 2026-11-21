@@ -114,7 +114,7 @@ Organization (광고주)
 - 전역 역할(`users.is_super_admin`)을 가진 대행사 관리자는 모든 광고주에 접근합니다.
 - 그 외 사용자와 조직은 N:M(`memberships`)이고 역할은 `admin | analyst | viewer`입니다. 대행사 AE는 담당 광고주에만 배정하고, 광고주 담당자는 `viewer`로 둡니다.
 - `pk_`는 공개 키입니다. 스니펫에 노출되므로 **Origin 검증과 rate limit**으로 보호합니다.
-- `sk_`는 비밀 키입니다. DB에는 `argon2` 해시와 prefix만 저장하고, 생성 시 한 번만 보여줍니다.
+- `sk_`는 비밀 키입니다. 형식은 `sk_live_<prefix 8자>_<랜덤 40자>`이고, DB에는 prefix와 전체 키의 sha256만 저장합니다. 키 자체가 고엔트로피라 argon2 없이도 안전하고, 매 요청 검증이 빠릅니다. 생성 시 한 번만 보여줍니다.
 - 프로젝트마다 `salt`(32바이트)를 둡니다. `member_id_hash`를 다시 해싱하는 데 씁니다(§9).
 
 ---
