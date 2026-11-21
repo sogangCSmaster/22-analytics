@@ -117,7 +117,6 @@ mod tests {
     use crate::config::tests::project;
     use crate::cookie::VISITOR_COOKIE;
     use crate::forward::{self, tests::SECRET};
-    use analytics_core::edge_auth::{HEADER_SIGNATURE, HEADER_TIMESTAMP, verify};
 
     const CHROME: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
     const NOW: i64 = 1_763_631_912_000;
@@ -222,12 +221,10 @@ mod tests {
             forward::collect_body(&o.events).into_bytes(),
             NOW,
         );
-        let ts: i64 = fwd.header(HEADER_TIMESTAMP).unwrap().parse().unwrap();
-        assert!(verify(
-            SECRET,
-            ts,
+        assert!(forward::tests::origin_verifies(
+            &fwd,
+            forward::COLLECT_PATH,
             &fwd.body,
-            fwd.header(HEADER_SIGNATURE).unwrap(),
             NOW
         ));
     }

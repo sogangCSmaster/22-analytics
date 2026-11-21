@@ -2,14 +2,16 @@
 //!
 //! - 로컬(`EDGE_EMULATION=true`): `POST /v1/orders`, `POST /v1/orders:batch` (`Authorization: Bearer sk_...`)
 //! - 운영: `POST /internal/orders` (Worker가 전달). 계약:
-//!   - `x-edge-timestamp`, `x-edge-signature`: 원 요청 본문(raw)에 대한 HMAC ([`edge_auth`])
+//!   - `x-edge-timestamp`, `x-edge-signature`: v1 서명 ([`edge_auth`]). 내부 경로·본문 해시와
+//!     아래 전달 헤더 3개(없으면 빈 문자열)를 모두 덮는다
 //!   - `x-forwarded-authorization`: 클라이언트의 `Authorization` 헤더 원문 (원점이 다시 검증)
 //!   - `x-forwarded-path`: `/v1/orders` 또는 `/v1/orders:batch`
 //!   - `idempotency-key`: 클라이언트의 `Idempotency-Key` (있을 때만)
 //!   - 본문은 클라이언트 원문. 응답 상태·본문은 Worker가 그대로 클라이언트에 돌려준다.
 //!
 //! 응답: 단건 `202 {"accepted":true,"warnings":[...]}`, 일괄 `202 {"results":[...]}`,
-//! 오류 `{"error":"code","message":"..."}` (400/401/403/404/413/422/503).
+//! 오류 `{"error":"code","message":"..."}` (400/401/403/404/409/413/422/503).
+//! 409 `idempotency_key_reused`: 같은 (이벤트 유형, 멱등 키)로 금액·시각이 다른 요청이 이미 있다.
 
 use super::{OrderService, ProjectCtx};
 use crate::internal::now_ms;
@@ -96,7 +98,15 @@ async fn internal(State(st): State<OrdersHttp>, headers: HeaderMap, body: Bytes)
             "엣지 서명이 없습니다",
         );
     };
-    if !edge_auth::verify(&st.edge_secret, ts, &body, sig, now_ms()) {
+    let signed = edge_auth::SignedRequest {
+        internal_path: edge_auth::ORDERS_PATH,
+        timestamp_ms: ts,
+        body: &body,
+        forwarded_path: header(&headers, HEADER_FORWARDED_PATH).unwrap_or(""),
+        forwarded_authorization: header(&headers, HEADER_FORWARDED_AUTH).unwrap_or(""),
+        idempotency_key: header(&headers, HEADER_IDEMPOTENCY_KEY).unwrap_or(""),
+    };
+    if !edge_auth::verify(&st.edge_secret, &signed, sig, now_ms()) {
         return error(
             StatusCode::UNAUTHORIZED,
             "invalid_signature",
@@ -118,6 +128,13 @@ async fn internal(State(st): State<OrdersHttp>, headers: HeaderMap, body: Bytes)
 
 fn error(status: StatusCode, code: &str, message: &str) -> Response {
     (status, Json(json!({ "error": code, "message": message }))).into_response()
+}
+
+const KEY_REUSED: &str = "idempotency_key_reused";
+const KEY_REUSED_MESSAGE: &str = "같은 멱등 키로 내용이 다른 요청이 이미 처리되었습니다";
+
+fn key_reused() -> Response {
+    error(StatusCode::CONFLICT, KEY_REUSED, KEY_REUSED_MESSAGE)
 }
 
 fn storage_unavailable(e: &anyhow::Error) -> Response {
@@ -224,6 +241,7 @@ async fn single(
         Err(e) => return error(StatusCode::UNPROCESSABLE_ENTITY, e.code(), &e.to_string()),
     };
     match st.svc.apply(v.event).await {
+        Ok(a) if a.conflict => key_reused(),
         Ok(_) => (
             StatusCode::ACCEPTED,
             Json(json!({ "accepted": true, "warnings": v.warnings })),
@@ -273,8 +291,12 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
     let sem = Arc::new(Semaphore::new(BATCH_CONCURRENCY));
     let mut set = tokio::task::JoinSet::new();
     let mut results: Vec<Value> = vec![Value::Null; items.len()];
+    let order_ids: Vec<Value> = items
+        .iter()
+        .map(|item| item.get("order_id").cloned().unwrap_or(Value::Null))
+        .collect();
     for (i, item) in items.into_iter().enumerate() {
-        let order_id = item.get("order_id").cloned().unwrap_or(Value::Null);
+        let order_id = order_ids[i].clone();
         let validated = core_orders::validate(&order_project(project), &item, None, now);
         let v = match validated {
             Ok(v) => v,
@@ -303,6 +325,8 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
             }
         };
         results[i] = match r {
+            Ok(a) if a.conflict => json!({ "order_id": order_id, "accepted": false,
+                "error": KEY_REUSED, "message": KEY_REUSED_MESSAGE }),
             Ok(_) => json!({ "order_id": order_id, "accepted": true, "warnings": warnings }),
             Err(e) => {
                 tracing::error!(error = %e, "주문 저장 실패");
@@ -312,6 +336,10 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
             }
         };
     }
+    // 작업이 패닉한 항목(JoinError)은 결과가 비어 있다: order_id를 담은 internal 오류로 채운다.
+    if fill_missing_results(&mut results, &order_ids) {
+        storage_failed = true;
+    }
     // 일부라도 저장에 실패하면 5xx: 고객사는 같은 배치를 다시 보내면 된다 (멱등).
     let status = if storage_failed {
         StatusCode::SERVICE_UNAVAILABLE
@@ -319,4 +347,47 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
         StatusCode::ACCEPTED
     };
     (status, Json(json!({ "results": results }))).into_response()
+}
+
+const INTERNAL_MESSAGE: &str = "내부 오류입니다. 같은 요청을 다시 보내 주세요";
+
+/// 결과가 비어 있는(`null`) 항목을 `{order_id, accepted:false, error:"internal"}`로 채운다.
+/// 하나라도 채웠으면 `true`.
+fn fill_missing_results(results: &mut [Value], order_ids: &[Value]) -> bool {
+    let mut filled = false;
+    for (r, order_id) in results.iter_mut().zip(order_ids) {
+        if r.is_null() {
+            *r = json!({ "order_id": order_id, "accepted": false, "error": "internal",
+                "message": INTERNAL_MESSAGE });
+            filled = true;
+        }
+    }
+    filled
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panicked_batch_items_get_internal_error_not_null() {
+        // 작업이 패닉(JoinError)해 결과를 못 받은 항목은 null이 아니라 order_id를 담은 오류로 채운다
+        let order_ids = vec![json!("A"), json!("B"), Value::Null];
+        let mut results = vec![
+            json!({"order_id": "A", "accepted": true}),
+            Value::Null,
+            Value::Null,
+        ];
+        assert!(fill_missing_results(&mut results, &order_ids));
+        assert_eq!(results[0]["accepted"], true);
+        assert_eq!(
+            results[1],
+            json!({"order_id": "B", "accepted": false, "error": "internal",
+                "message": INTERNAL_MESSAGE})
+        );
+        assert_eq!(results[2]["order_id"], Value::Null);
+        assert_eq!(results[2]["error"], "internal");
+        let mut full = vec![json!({"accepted": true})];
+        assert!(!fill_missing_results(&mut full, &[json!("A")]));
+    }
 }

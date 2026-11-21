@@ -4,6 +4,7 @@
 //! - [`fold`]: 한 주문의 모든 이벤트로 현재 상태([`OrderState`])를 계산한다.
 //!   입력 순서와 무관하고(정렬 후 계산), 같은 멱등 키는 한 번만 반영한다.
 //! - [`client_purchase_event`]: 트래커 `purchase` 이벤트를 `source='client'` 주문 이벤트로 바꾼다.
+//! - [`project`]: `orders`에 쓸 상태. [`fold`]에 더해 이전 행의 `ordered_at`을 유지한다 (파티션 고정).
 //!
 //! I/O는 하지 않는다. 현재 시각은 호출자가 주입한다.
 
@@ -164,6 +165,24 @@ pub struct OrderEvent {
     pub received_at_ms: i64,
     /// 원본 JSON (감사용)
     pub raw: String,
+}
+
+impl OrderEvent {
+    /// 같은 멱등 키의 두 이벤트가 같은 요청(재전송)인지. 수신 시각·원문·식별자는 비교하지 않고
+    /// 금액과 발생 시각만 본다 (기본 멱등 키는 이 값들로 만들므로 기본 키끼리는 항상 같다).
+    pub fn same_payload(&self, other: &OrderEvent) -> bool {
+        (
+            self.event_type,
+            self.net_amount,
+            self.refund_amount,
+            self.occurred_at_ms,
+        ) == (
+            other.event_type,
+            other.net_amount,
+            other.refund_amount,
+            other.occurred_at_ms,
+        )
+    }
 }
 
 /// 주문 현재 상태. ClickHouse `orders` 행과 대응한다 (`version` 제외).
@@ -334,7 +353,9 @@ pub fn validate(
     }
 
     let idempotency_key = match idempotency_key.or(w.idempotency_key.as_deref()) {
-        Some(k) if valid_idempotency_key(k) => k.to_owned(),
+        // 명시 키는 이벤트 유형으로 네임스페이스를 붙인다: 가맹점이 확정·환불에 같은 키
+        // (예: order_id)를 보내도 서로를 중복으로 판정하지 않는다. 기본 키는 이미 유형을 포함한다.
+        Some(k) if valid_idempotency_key(k) => format!("{}:{k}", event_type.as_str()),
         Some(_) => return Err(OrderError::InvalidIdempotencyKey),
         None => {
             let amt = match event_type {
@@ -407,7 +428,8 @@ pub const PURCHASE_EVENT: &str = "purchase";
 /// - 같은 멱등 키는 가장 먼저 받은 것 하나만 반영한다.
 /// - (occurred_at, received_at, 멱등 키) 순으로 정렬해 계산하므로 입력 순서와 무관하다.
 /// - S2S 이벤트가 하나라도 있으면 클라이언트 이벤트는 무시한다 (S2S 우선).
-/// - 확정이 여러 번이면 가장 늦은 확정의 금액을 쓴다 (매출은 한 번만).
+/// - 확정이 여러 번이면 S2S는 가장 늦은 확정, 클라이언트만 있으면 가장 이른 확정의 금액을 쓴다
+///   (매출은 한 번만).
 /// - 취소가 있으면 도착 순서와 관계없이 CANCELLED (effective 0).
 /// - 환불은 모두 합산한다. 합계가 net 이상이면 CANCELLED와 같게 취급한다.
 pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
@@ -442,7 +464,14 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
     let first = *evs.first()?;
 
     let is_confirm = |e: &&&OrderEvent| e.event_type == OrderEventType::PurchaseConfirmed;
-    let last_confirm = evs.iter().rev().find(is_confirm).copied();
+    // 반영할 확정 순서: S2S는 늦은 확정 우선(금액 정정), 클라이언트만 있으면 첫 확정 우선
+    // (공개 키만 있으면 누구나 purchase를 보낼 수 있으므로 나중 이벤트가 금액을 바꾸지 못하게 한다).
+    let confirms: Vec<&OrderEvent> = if has_s2s {
+        evs.iter().rev().filter(is_confirm).copied().collect()
+    } else {
+        evs.iter().filter(is_confirm).copied().collect()
+    };
+    let chosen_confirm = confirms.first().copied();
     let cancelled = evs
         .iter()
         .any(|e| e.event_type == OrderEventType::OrderCancelled);
@@ -451,15 +480,15 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
         .filter(|e| e.event_type == OrderEventType::OrderRefunded)
         .fold(0i64, |acc, e| acc.saturating_add(e.refund_amount));
 
-    // 식별자: 늦은 확정 이벤트 우선, 없으면 다른 이벤트 중 가장 늦은 값.
-    let mut by_priority = evs.iter().rev().filter(is_confirm).chain(evs.iter().rev());
+    // 식별자: 반영한 확정 순서대로, 없으면 다른 이벤트 중 가장 늦은 값.
+    let mut by_priority = confirms.iter().chain(evs.iter().rev());
     let visitor_id = by_priority.clone().find_map(|e| e.visitor_id);
     let member_hash = by_priority
         .find(|e| !e.member_hash.is_empty())
         .map(|e| e.member_hash.clone())
         .unwrap_or_default();
 
-    let (net_amount, gross_amount, ordered_at_ms, currency) = match last_confirm {
+    let (net_amount, gross_amount, ordered_at_ms, currency) = match chosen_confirm {
         Some(c) => (
             c.net_amount,
             c.gross_amount,
@@ -470,7 +499,7 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
     };
     let (status, refunded_amount, effective_amount) = if cancelled {
         (OrderStatus::Cancelled, refunds.max(net_amount), 0)
-    } else if last_confirm.is_none() {
+    } else if chosen_confirm.is_none() {
         (OrderStatus::Pending, refunds, 0)
     } else if net_amount > 0 && refunds >= net_amount {
         (OrderStatus::Cancelled, refunds, 0)
@@ -498,6 +527,21 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
         effective_amount,
         ordered_at_ms,
     })
+}
+
+/// `orders`에 쓸 상태: [`fold`] + **`ordered_at` 고정**.
+///
+/// `orders`(와 `attributed_revenue`)는 `ReplacingMergeTree`이고 `PARTITION BY toYYYYMM(ordered_at)`이다.
+/// 엔진은 파티션을 넘어 중복을 없애지 않으므로, 버전마다 `ordered_at`이 달라 다른 월로 넘어가면
+/// 예전 행이 그 월에 남아 월 범위 리포트에서 이중 집계된다. 그래서 이전 행(`prev`)이 있으면
+/// 그 `ordered_at`을 그대로 쓴다. 즉 한 주문의 `ordered_at`은 **처음 투영한 값으로 고정**된다
+/// (확정 정정, 확정 전 환불·취소, 클라이언트 행을 S2S가 대체하는 경우 모두).
+pub fn project(events: &[OrderEvent], prev: Option<&OrderState>) -> Option<OrderState> {
+    let mut state = fold(events)?;
+    if let Some(p) = prev {
+        state.ordered_at_ms = p.ordered_at_ms;
+    }
+    Some(state)
 }
 
 fn amount(v: Option<i64>, field: &'static str) -> Result<Option<i64>, OrderError> {
@@ -682,10 +726,51 @@ mod tests {
 
     #[test]
     fn explicit_idempotency_key_wins() {
+        // 명시 키는 이벤트 유형으로 네임스페이스를 붙여 저장한다
         let v = validate(&project(), &confirm_json(), Some("retry-abc-1"), NOW).unwrap();
-        assert_eq!(v.event.idempotency_key, "retry-abc-1");
+        assert_eq!(v.event.idempotency_key, "PURCHASE_CONFIRMED:retry-abc-1");
         let body_key = with(confirm_json(), "idempotency_key", json!("body-key"));
-        assert_eq!(ok(body_key).event.idempotency_key, "body-key");
+        assert_eq!(
+            ok(body_key).event.idempotency_key,
+            "PURCHASE_CONFIRMED:body-key"
+        );
+    }
+
+    #[test]
+    fn explicit_key_reused_across_event_types_does_not_collide() {
+        // 가맹점이 확정·환불 모두 `Idempotency-Key: <order_id>`를 보내는 경우
+        let c = validate(&project(), &confirm_json(), Some("ORD-1"), NOW).unwrap();
+        let r = json!({ "event_type": "ORDER_REFUNDED", "order_id": "ORD-20261120-009901",
+            "refund_amount": 1000, "refunded_at": "2026-11-20T12:00:00Z" });
+        let r = validate(&project(), &r, Some("ORD-1"), NOW).unwrap();
+        assert_ne!(c.event.idempotency_key, r.event.idempotency_key);
+        assert_eq!(r.event.idempotency_key, "ORDER_REFUNDED:ORD-1");
+        let s = fold(&[c.event, r.event]).unwrap();
+        assert_eq!(s.status, OrderStatus::PartiallyRefunded);
+        assert_eq!(s.effective_amount, 99_000);
+    }
+
+    #[test]
+    fn same_payload_detects_key_reuse_with_different_content() {
+        let a = validate(&project(), &confirm_json(), Some("K"), NOW)
+            .unwrap()
+            .event;
+        let mut b = a.clone();
+        b.received_at_ms += 1000;
+        b.raw = "{}".into();
+        assert!(
+            a.same_payload(&b),
+            "재전송(수신 시각·원문만 다름)은 같은 요청"
+        );
+        let mut c = a.clone();
+        c.net_amount -= 1;
+        assert!(!a.same_payload(&c));
+        let mut d = a.clone();
+        d.occurred_at_ms += 1;
+        assert!(!a.same_payload(&d));
+        let mut e = a.clone();
+        e.refund_amount = 5;
+        assert!(!a.same_payload(&e));
     }
 
     #[test]
@@ -1103,6 +1188,58 @@ mod tests {
         assert_eq!(s.net_amount, 80_000);
         assert_eq!(s.ordered_at_ms, 2_000);
         assert_eq!(s.status, OrderStatus::Confirmed);
+    }
+
+    #[test]
+    fn project_freezes_ordered_at_of_previous_row() {
+        // orders는 toYYYYMM(ordered_at)로 파티션된다. 이전 행의 ordered_at을 유지해야
+        // 같은 주문의 버전들이 한 파티션에 남아 FINAL이 중복을 없앤다.
+        let first = [refund("r", 1_000, 5_000)];
+        let prev = super::project(&first, None).unwrap();
+        assert_eq!(prev.ordered_at_ms, 5_000);
+        let more = [refund("r", 1_000, 5_000), confirm("c", 100_000, 1_000)];
+        assert_eq!(
+            fold(&more).unwrap().ordered_at_ms,
+            1_000,
+            "fold 자체는 확정 시각"
+        );
+        let next = super::project(&more, Some(&prev)).unwrap();
+        assert_eq!(next.ordered_at_ms, 5_000, "투영은 이전 행의 시각을 유지");
+        assert_eq!(next.status, OrderStatus::PartiallyRefunded);
+        // 확정 정정도 마찬가지
+        let a = super::project(&[confirm("c1", 100_000, 1_000)], None).unwrap();
+        let b = super::project(
+            &[confirm("c1", 100_000, 1_000), confirm("c2", 90_000, 9_000)],
+            Some(&a),
+        )
+        .unwrap();
+        assert_eq!((b.net_amount, b.ordered_at_ms), (90_000, 1_000));
+        assert!(super::project(&[], Some(&a)).is_none());
+    }
+
+    #[test]
+    fn client_only_order_keeps_first_confirm() {
+        // 공개 키(pk)만 있으면 누구나 purchase를 보낼 수 있으므로, 클라이언트 주문은 첫 확정을 쓴다.
+        let mut first = confirm("client:1", 50_000, 1_000);
+        first.source = OrderSource::Client;
+        first.visitor_id = Some(Uuid::from_u128(1));
+        let mut forged = confirm("client:2", 1, 2_000);
+        forged.source = OrderSource::Client;
+        forged.visitor_id = Some(Uuid::from_u128(2));
+        for p in permutations(&[first.clone(), forged.clone()]) {
+            let s = fold(&p).unwrap();
+            assert_eq!(
+                s.net_amount, 50_000,
+                "나중 클라이언트 확정이 금액을 바꾸지 못한다"
+            );
+            assert_eq!(s.ordered_at_ms, 1_000);
+            assert_eq!(s.visitor_id, Some(Uuid::from_u128(1)));
+        }
+        // S2S가 오면 S2S의 최신 확정이 이긴다
+        let s2s = [confirm("a", 100_000, 3_000), confirm("b", 90_000, 4_000)];
+        let all = [first, forged, s2s[0].clone(), s2s[1].clone()];
+        let s = fold(&all).unwrap();
+        assert_eq!((s.source, s.net_amount), (OrderSource::S2s, 90_000));
     }
 
     #[test]
