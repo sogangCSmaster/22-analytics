@@ -102,3 +102,29 @@ impl AppCtx {
 pub fn use_app() -> AppCtx {
     use_context::<AppCtx>()
 }
+
+/// 이전 기간 리포트: 비교를 켰을 때만 같은 API를 `range.previous()`로 부른다 (끄면 `Ok(None)`).
+/// `path`는 이전 기간을 받아 요청 경로를 만든다 (안에서 읽은 신호가 바뀌면 다시 부른다).
+pub fn use_previous<T: serde::de::DeserializeOwned + Clone + 'static>(
+    mut path: impl FnMut(DateRange) -> String + 'static,
+) -> Resource<ApiResult<Option<T>>> {
+    let ctx = use_app();
+    use_resource(move || {
+        let (r, cmp) = (ctx.range(), ctx.compare());
+        let p = cmp.then(|| path(r.previous()));
+        async move {
+            match p {
+                None => Ok(None),
+                Some(p) => crate::api::get::<T>(&p).await.map(Some),
+            }
+        }
+    })
+}
+
+/// 불러온 이전 기간 값 (비교를 껐거나, 불러오는 중이거나, 실패했으면 None → 비교 표시 없이 그린다)
+pub fn loaded_prev<T: Clone + 'static>(r: &Resource<ApiResult<Option<T>>>) -> Option<T> {
+    match &*r.read() {
+        Some(Ok(Some(v))) => Some(v.clone()),
+        _ => None,
+    }
+}

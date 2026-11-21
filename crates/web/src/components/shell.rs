@@ -6,8 +6,11 @@ use crate::components::brand::{BrandLogo, BrandSymbol};
 use crate::components::icon::{Icon, IconName};
 use crate::components::ui::{Button, Size, Skeleton, Toggle, Variant};
 use crate::logic::dates::{Preset, custom_range};
-use crate::logic::view::is_escape;
+use crate::logic::view::{
+    DEMO_TOAST, DEMO_TOAST_KEY, DEMO_TOAST_MS, is_escape, should_show_demo_toast,
+};
 use crate::logic::{errors::ApiError, prefs, table::contains_ci};
+use crate::platform;
 use crate::state::{AppCtx, use_app};
 use analytics_core::dto::admin::{MeResponse, Role};
 use dioxus::prelude::*;
@@ -79,6 +82,16 @@ pub fn Shell() -> Element {
     // 접근할 수 없는 프로젝트 주소
     let forbidden = pid.is_some() && ctx.selection(pid.unwrap_or_default()).is_none();
     let uses_range = route.uses_range();
+    // 데모: 로그인 뒤(이 브라우저 세션에서 처음) 한 번만 안내 알림을 띄운다. 상단 바에 상시 배지는 두지 않는다.
+    use_effect(move || {
+        let shown = platform::session_get(DEMO_TOAST_KEY);
+        if should_show_demo_toast(cfg!(feature = "demo"), shown.as_deref()) {
+            platform::session_set(DEMO_TOAST_KEY, "1");
+            ctx.toast.with_mut(|t| {
+                t.show_for(DEMO_TOAST.into(), DEMO_TOAST_MS);
+            });
+        }
+    });
 
     rsx! {
         div { class: "shell",
@@ -90,47 +103,34 @@ pub fn Shell() -> Element {
                 BrandLogo {}
                 ProjectSwitcher { current: nav_pid }
                 nav { class: "nav", onclick: move |_| nav_open.set(false),
-                    if let Some(p) = nav_pid {
-                        div { class: "nav-section", "리포트" }
-                        NavLink { to: Route::Overview { pid: p }, label: "개요", icon: IconName::Overview }
-                        NavLink { to: Route::Realtime { pid: p }, label: "실시간", icon: IconName::Realtime }
-                        NavLink { to: Route::Acquisition { pid: p }, label: "유입", icon: IconName::Acquisition }
-                        NavLink { to: Route::Pages { pid: p }, label: "페이지", icon: IconName::Pages }
-                        NavLink { to: Route::Events { pid: p }, label: "이벤트", icon: IconName::Events }
-                        NavLink { to: Route::Funnel { pid: p }, label: "전자상거래", icon: IconName::Funnel }
-                        NavLink { to: Route::Revenue { pid: p }, label: "실제 매출", icon: IconName::Revenue }
-                        div { class: "nav-section", "설정" }
-                        NavLink { to: Route::Settings { pid: p, tab: String::new() }, label: "설치·수집 설정", icon: IconName::Settings }
+                    for sec in nav_sections(nav_pid, show_admin) {
+                        div { key: "{sec.title}", class: "nav-section", "{sec.title}" }
+                        for it in sec.items {
+                            NavLink { key: "{it.label}", to: it.to, label: it.label, icon: it.icon }
+                        }
                     }
-                    if show_admin {
-                        div { class: "nav-section", "관리" }
-                        NavLink { to: Route::Admin {}, label: "광고주·사용자", icon: IconName::Admin }
-                    }
-                    div { class: "nav-section", "개발" }
-                    NavLink { to: Route::Gallery {}, label: "컴포넌트", icon: IconName::Components }
                 }
                 UserBlock {}
             }
             div { class: "main",
-                header { class: "topbar",
-                    button {
-                        class: "icon-btn menu-btn",
-                        aria_label: "메뉴 열기",
-                        onclick: move |_| nav_open.toggle(),
-                        Icon { name: IconName::Menu }
-                    }
-                    if uses_range {
-                        RangePicker {}
-                    } else {
+                header { class: if uses_range { "topbar has-range" } else { "topbar" },
+                    div { class: "topbar-head",
+                        button {
+                            class: "icon-btn menu-btn",
+                            aria_label: "메뉴 열기",
+                            onclick: move |_| nav_open.toggle(),
+                            Icon { name: IconName::Menu }
+                        }
+                        // 기간 선택이 있는 화면에서는 모바일에서만 보인다 (데스크톱은 사이드바에 프로젝트가 있다)
                         div { class: "topbar-title",
                             if let Some(s) = &selection {
-                                span { class: "muted", "{s.org_name} · " }
-                                "{s.project_name}"
+                                span { class: "muted topbar-org", "{s.org_name} · " }
+                                span { class: "topbar-project", "{s.project_name}" }
                             }
                         }
                     }
-                    if cfg!(feature = "demo") {
-                        span { class: "demo-badge", title: "백엔드 없이 브라우저 안에서 만든 예시 데이터입니다", "데모 · 예시 데이터" }
+                    if uses_range {
+                        RangePicker {}
                     }
                 }
                 main { id: "main", class: "content",
@@ -201,10 +201,7 @@ pub fn nav_sections(pid: Option<i32>, show_admin: bool) -> Vec<NavSection> {
             items: vec![item(Route::Admin {}, "광고주·사용자", IconName::Admin)],
         });
     }
-    out.push(NavSection {
-        title: "개발",
-        items: vec![item(Route::Gallery {}, "컴포넌트", IconName::Components)],
-    });
+    // 컴포넌트 모음(/dev/components)은 개발용이라 메뉴에 두지 않는다 (주소로만 연다).
     out
 }
 
@@ -396,7 +393,8 @@ fn RangePicker() -> Element {
                     label: "이전 기간과 비교",
                     onchange: move |v| ctx.update_prefs(|s| s.compare = v),
                 }
-                span { "이전 기간 비교" }
+                span { class: "compare-long", "이전 기간 비교" }
+                span { class: "compare-short", aria_hidden: "true", "비교" }
             }
             if custom_open() {
                 div { class: "popover range-pop",

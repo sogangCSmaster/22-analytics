@@ -20,6 +20,21 @@ mod imp {
         }
     }
 
+    fn session() -> Option<web_sys::Storage> {
+        web_sys::window()?.session_storage().ok().flatten()
+    }
+
+    /// sessionStorage (탭을 닫으면 사라진다)
+    pub fn session_get(key: &str) -> Option<String> {
+        session()?.get_item(key).ok().flatten()
+    }
+
+    pub fn session_set(key: &str, value: &str) {
+        if let Some(s) = session() {
+            let _ = s.set_item(key, value);
+        }
+    }
+
     pub async fn sleep_ms(ms: u32) {
         gloo_timers::future::TimeoutFuture::new(ms).await;
     }
@@ -78,6 +93,12 @@ mod imp {
     }
 
     pub fn storage_set(_key: &str, _value: &str) {}
+
+    pub fn session_get(_key: &str) -> Option<String> {
+        None
+    }
+
+    pub fn session_set(_key: &str, _value: &str) {}
 
     pub async fn sleep_ms(_ms: u32) {}
 

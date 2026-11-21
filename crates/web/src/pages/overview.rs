@@ -4,13 +4,16 @@ use crate::Route;
 use crate::api;
 use crate::components::chart::{BarList, LineChart, Series, ShareBar};
 use crate::components::ui::{
-    Card, EmptyState, SegmentedControl, SkeletonBlock, SkeletonCards, StatCard, StatStyle, load,
-    load_state,
+    Card, ChangeTag, CmpCells, CmpHead, EmptyState, SegmentedControl, SkeletonBlock, SkeletonCards,
+    StatCard, StatStyle, load, load_state,
 };
 use crate::format;
+use crate::logic::compare::{change, top_with_rest_prev};
 use crate::logic::dates::Day;
 use crate::logic::{labels, query, query::Report};
-use crate::state::use_app;
+use crate::pages::acquisition::pair_channels;
+use crate::pages::page_report::pair_pages;
+use crate::state::{loaded_prev, use_app, use_previous};
 use analytics_core::dto::reports::{
     ChannelTrafficRow, OverviewReport, PageRow, TimeseriesPoint, TimeseriesReport,
 };
@@ -93,6 +96,13 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
         let (p, r) = (pid(), ctx.range());
         async move { api::get::<Vec<PageRow>>(&query::pages(p, r, "", 8)).await }
     });
+    // 비교를 켰을 때만: 채널·페이지의 이전 기간
+    let prev_channels_res =
+        use_previous::<Vec<ChannelTrafficRow>>(move |r| query::report(pid(), Report::Channels, r));
+    let prev_pages_res =
+        use_previous::<Vec<PageRow>>(move |r| query::pages(pid(), r, "", PREV_PAGES_LIMIT));
+    let prev_channels = loaded_prev(&prev_channels_res);
+    let prev_pages = loaded_prev(&prev_pages_res);
 
     let range = ctx.range();
     let spark = |m: Metric| -> Option<Vec<f64>> {
@@ -109,15 +119,25 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
         spark(Metric::Pageviews),
     );
 
+    let cmp = ctx.compare();
     rsx! {
         crate::components::ui::PageHead {
             title: "개요",
-            desc: format!("{} · 이전 {}일과 비교", range.label(), range.days()),
+            desc: if cmp { format!("{} · 이전 {}일과 비교", range.label(), range.days()) } else { range.label() },
         }
 
         {load(overview, rsx! { SkeletonCards {} }, |o| {
-            let d = |c: u64, p: u64| crate::logic::compare::change(c as f64, Some(p as f64));
+            // 비교를 껐으면 증감도, 이전 값도 보이지 않는다.
+            let d = |c: f64, p: f64| cmp.then(|| change(c, Some(p)));
+            let prev_sub = |p: u64, rest: Option<String>| -> Option<String> {
+                match (cmp, rest) {
+                    (true, Some(r)) => Some(format!("이전 {} · {r}", format::compact(p))),
+                    (true, None) => Some(format!("이전 {}", format::compact(p))),
+                    (false, r) => r,
+                }
+            };
             let empty = o.current.events == 0 && o.previous.events == 0;
+            let (c, p) = (&o.current, &o.previous);
             rsx! {
                 if empty {
                     Card { filled: true,
@@ -132,14 +152,14 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                     }
                 }
                 div { class: "grid grid-4",
-                    StatCard { label: "방문자", value: format::count(o.current.visitors), change: d(o.current.visitors, o.previous.visitors), sub: format!("이전 {}", format::compact(o.previous.visitors)), spark: sv.clone() }
-                    StatCard { label: "세션", value: format::count(o.current.sessions), change: d(o.current.sessions, o.previous.sessions), sub: format!("이전 {}", format::compact(o.previous.sessions)), spark: ss.clone() }
-                    StatCard { label: "페이지뷰", value: format::count(o.current.pageviews), change: d(o.current.pageviews, o.previous.pageviews), sub: format!("세션당 {}", per(o.current.pageviews, o.current.sessions)), spark: sp.clone() }
+                    StatCard { label: "방문자", value: format::count(c.visitors), change: d(c.visitors as f64, p.visitors as f64), sub: prev_sub(p.visitors, None), spark: sv.clone() }
+                    StatCard { label: "세션", value: format::count(c.sessions), change: d(c.sessions as f64, p.sessions as f64), sub: prev_sub(p.sessions, None), spark: ss.clone() }
+                    StatCard { label: "페이지뷰", value: format::count(c.pageviews), change: d(c.pageviews as f64, p.pageviews as f64), sub: prev_sub(p.pageviews, Some(format!("세션당 {}", per(c.pageviews, c.sessions)))), spark: sp.clone() }
                     StatCard {
                         label: "매출",
-                        value: format::won_short(o.current.revenue),
-                        change: crate::logic::compare::change(o.current.revenue as f64, Some(o.previous.revenue as f64)),
-                        sub: format!("주문 {}건", format::count(o.current.orders)),
+                        value: format::won_short(c.revenue),
+                        change: d(c.revenue as f64, p.revenue as f64),
+                        sub: if cmp { format!("이전 {} · 주문 {}건", format::won_short(p.revenue), format::count(c.orders)) } else { format!("주문 {}건", format::count(c.orders)) },
                         style: StatStyle::Plain,
                     }
                 }
@@ -188,13 +208,23 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                 actions: rsx! { Link { class: "link", to: Route::Acquisition { pid: pid() }, "전체 보기 →" } },
                 {load(channels, rsx! { SkeletonBlock { rows: 5 } }, |rows| {
                     let items: Vec<(String, i64)> = rows.iter().map(|r| (labels::channel(&r.channel), r.sessions as i64)).collect();
+                    let compare = prev_channels.is_some();
+                    let bars: Vec<(String, i64, Option<i64>)> = pair_channels(&rows, prev_channels.as_deref())
+                        .iter()
+                        .map(|(r, p)| (labels::channel(&r.channel), r.sessions as i64, p.as_ref().map(|p| p.sessions as i64)))
+                        .collect();
+                    let bars = top_with_rest_prev(&bars, 6);
                     rsx! {
                         if rows.is_empty() {
                             EmptyState { icon: crate::components::icon::IconName::Acquisition, title: "유입 기록이 없어요", desc: "이 기간에 시작된 세션이 없습니다." }
                         } else {
                             ShareBar { parts: top_with_rest(&items, 4) }
                             div { style: "margin-top: 20px",
-                                BarList { items: top_with_rest(&items, 6), show_share: true }
+                                BarList {
+                                    items: bars.iter().map(|b| (b.0.clone(), b.1)).collect::<Vec<_>>(),
+                                    show_share: true,
+                                    prev: compare.then(|| bars.iter().map(|b| b.2).collect::<Vec<_>>()),
+                                }
                             }
                         }
                     }
@@ -207,20 +237,7 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                     if rows.is_empty() {
                         EmptyState { icon: crate::components::icon::IconName::Pages, title: "페이지 조회가 없어요", desc: "이 기간에 기록된 페이지뷰가 없습니다." }
                     } else {
-                        div { class: "table-wrap",
-                            table { class: "table",
-                                thead { tr { th { scope: "col", "페이지" } th { class: "r", scope: "col", "페이지뷰" } th { class: "r", scope: "col", "방문자" } } }
-                                tbody {
-                                    for (i, r) in rows.iter().enumerate() {
-                                        tr { key: "{i}",
-                                            td { class: "path-cell", title: "{format::path(&r.path)}", "{format::path(&r.path)}" }
-                                            td { class: "r", "{format::count(r.pageviews)}" }
-                                            td { class: "r muted", "{format::count(r.visitors)}" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        TopPagesTable { rows: pair_pages(&rows, prev_pages.as_deref(), PREV_PAGES_LIMIT), compare: prev_pages.is_some() }
                     }
                 })}
             }
@@ -228,6 +245,47 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
     }
 }
 
+/// 이전 기간 페이지는 넉넉히 불러 상위 8개의 이전 값을 찾는다
+const PREV_PAGES_LIMIT: u32 = crate::pages::page_report::LIMIT;
+
+/// 개요의 많이 본 페이지 표 (비교를 켜면 페이지뷰의 이전 값·변화)
+#[component]
+pub fn TopPagesTable(rows: Vec<(PageRow, Option<PageRow>)>, compare: bool) -> Element {
+    rsx! {
+        div { class: "table-wrap",
+            table { class: "table stack",
+                thead { tr {
+                    th { scope: "col", "페이지" }
+                    th { class: "r", scope: "col", "페이지뷰" }
+                    if compare {
+                        CmpHead {}
+                    }
+                    th { class: "r", scope: "col", "방문자" }
+                } }
+                tbody {
+                    for (i, (r, p)) in rows.iter().enumerate() {
+                        tr { key: "{i}",
+                            td { class: "path-cell", "data-label": "페이지", title: "{format::path(&r.path)}", "{format::path(&r.path)}" }
+                            td { class: "r main-metric", "data-label": "페이지뷰",
+                                "{format::count(r.pageviews)}"
+                                if compare {
+                                    ChangeTag { change: change(r.pageviews as f64, p.as_ref().map(|p| p.pageviews as f64)), class: "m-only" }
+                                }
+                            }
+                            if compare {
+                                CmpCells {
+                                    prev: p.as_ref().map(|p| format::count(p.pageviews)),
+                                    change: change(r.pageviews as f64, p.as_ref().map(|p| p.pageviews as f64)),
+                                }
+                            }
+                            td { class: "r muted", "data-label": "방문자", "{format::count(r.visitors)}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 /// a / b (소수 1자리), b가 0이면 0
 pub fn per(a: u64, b: u64) -> String {
     if b == 0 {

@@ -133,7 +133,10 @@ pub fn StatCard(
         StatStyle::Hero => ("card primary stat", "stat-value xl"),
         StatStyle::Struck => ("card filled stat", "stat-value strike"),
     };
-    let _ = change;
+    let delta = change.map(|c| {
+        let (text, _) = c.label();
+        (text, format!("delta {}", c.class()))
+    });
     rsx! {
         div { class: "{card}",
             div { class: "stat-top",
@@ -143,9 +146,14 @@ pub fn StatCard(
                 }
             }
             div { class: "{value_class}", "{value}" }
-            if let Some(s) = sub {
+            if sub.is_some() || delta.is_some() {
                 div { class: "stat-sub",
-                    span { "{s}" }
+                    if let Some((text, cls)) = delta {
+                        span { class: "{cls}", aria_label: "이전 기간 대비 {text}", "{text}" }
+                    }
+                    if let Some(s) = sub {
+                        span { "{s}" }
+                    }
                 }
             }
         }
@@ -155,8 +163,48 @@ pub fn StatCard(
 /// 이전 기간 대비 변화 표시 (▲ 12% / ▼ 4% / 신규 / –).
 #[component]
 pub fn ChangeTag(change: Change, #[props(default)] class: String) -> Element {
-    let _ = (change, class);
-    rsx! {}
+    let (text, _) = change.label();
+    rsx! {
+        span { class: "chg {change.class()} {class}", aria_label: "이전 기간 대비 {text}", "{text}" }
+    }
+}
+
+/// 비교 열 머리글: "이전 기간" + "변화" (모바일 카드 행에서는 변화를 주 지표 옆 배지로 보이므로 숨긴다)
+#[component]
+pub fn CmpHead(
+    /// 이전 기간 열 이름
+    #[props(default = "이전 기간".to_string())]
+    prev: String,
+    /// 변화 열 이름
+    #[props(default = "변화".to_string())]
+    change: String,
+    /// 이전 기간 열을 빼고 변화 열만
+    #[props(default)]
+    change_only: bool,
+) -> Element {
+    rsx! {
+        if !change_only {
+            th { class: "r cmp-col", scope: "col", "{prev}" }
+        }
+        th { class: "r cmp-col m-hide", scope: "col", "{change}" }
+    }
+}
+
+/// 비교 열 칸: 이전 기간 값 + 변화. `prev`가 None이면 이전 값을 모른다(–).
+#[component]
+pub fn CmpCells(
+    prev: Option<String>,
+    change: Change,
+    #[props(default = "이전 기간".to_string())] prev_label: String,
+    #[props(default = "변화".to_string())] change_label: String,
+    #[props(default)] change_only: bool,
+) -> Element {
+    rsx! {
+        if !change_only {
+            td { class: "r muted cmp-prev", "data-label": "{prev_label}", {prev.unwrap_or_else(|| "–".into())} }
+        }
+        td { class: "r cmp-chg m-hide", "data-label": "{change_label}", ChangeTag { change } }
+    }
 }
 
 /// 세그먼트 컨트롤. 옵션은 (값, 라벨).
@@ -422,8 +470,33 @@ pub use crate::platform::sleep_ms;
 
 #[component]
 pub fn Toast(message: String, onclose: Option<EventHandler<()>>) -> Element {
-    let _ = onclose;
-    rsx! { div { class: "toast", role: "status", "{message}" } }
+    rsx! {
+        div {
+            class: "toast",
+            role: "status",
+            aria_live: "polite",
+            onclick: move |_| {
+                if let Some(h) = onclose {
+                    h.call(());
+                }
+            },
+            span { class: "toast-text", "{message}" }
+            if onclose.is_some() {
+                button {
+                    class: "toast-close",
+                    r#type: "button",
+                    aria_label: "알림 닫기",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        if let Some(h) = onclose {
+                            h.call(());
+                        }
+                    },
+                    "✕"
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -529,11 +602,14 @@ pub fn SortTh<K: Copy + PartialEq + 'static>(
     k: K,
     sort: Signal<crate::logic::table::Sort<K>>,
     #[props(default = true)] right: bool,
+    /// 덧붙일 클래스
+    #[props(default)]
+    class: String,
 ) -> Element {
     let s = sort();
     let cls = if right { "r sortable" } else { "sortable" };
     rsx! {
-        th { class: "{cls}", aria_sort: s.aria(k), scope: "col",
+        th { class: "{cls} {class}", aria_sort: s.aria(k), scope: "col",
             button {
                 class: "th-btn",
                 onclick: move |_| {
@@ -622,22 +698,32 @@ pub fn ConfirmButton(
 #[component]
 pub fn ToastHost() -> Element {
     let mut ctx = crate::state::use_app();
-    let msg = ctx.toast.read().message.clone();
+    let (msg, current) = {
+        let t = ctx.toast.read();
+        (t.message.clone(), t.generation)
+    };
     use_effect(move || {
-        let (has, generation) = {
+        let (has, generation, ms) = {
             let t = ctx.toast.read();
-            (t.message.is_some(), t.generation)
+            (t.message.is_some(), t.generation, t.duration_ms)
         };
         if has {
             spawn(async move {
-                sleep_ms(3000).await;
+                sleep_ms(if ms == 0 {
+                    crate::logic::view::TOAST_MS
+                } else {
+                    ms
+                })
+                .await;
                 ctx.toast.with_mut(|t| t.expire(generation));
             });
         }
     });
     rsx! {
-        if let Some(m) = msg {
-            Toast { message: m }
+        div { class: "toast-host",
+            if let Some(m) = msg {
+                Toast { message: m, onclose: move |_| ctx.toast.with_mut(|t| t.expire(current)) }
+            }
         }
     }
 }

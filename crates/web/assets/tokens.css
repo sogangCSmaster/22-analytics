@@ -63,4 +63,6 @@
   --chart-4: #2e2e2e;
   --chart-5: #7fa08f;
   --chart-6: #c9cdca;
+  /* 이전 기간 비교 선 (회색 점선): 흰 배경 위에서 또렷한 중간 회색 */
+  --compare-line: #6f7672;
 }

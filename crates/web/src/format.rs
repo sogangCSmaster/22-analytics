@@ -48,15 +48,6 @@ pub fn pct(v: f64, digits: usize) -> String {
     format!("{}%", trim_float(v * 100.0, digits))
 }
 
-/// 증감률: (현재 − 이전) / 이전. 이전이 0이면 정의하지 않는다(None).
-pub fn delta(cur: f64, prev: f64) -> Option<f64> {
-    if prev == 0.0 || !prev.is_finite() || !cur.is_finite() {
-        None
-    } else {
-        Some((cur - prev) / prev)
-    }
-}
-
 /// 증감 표시: `▲ 12.3%`, `▼ 4%`, 변화 없음·정의 안 됨은 `–`. 반환 (문구, 방향: 1/0/-1)
 pub fn delta_label(d: Option<f64>) -> (String, i8) {
     match d {
@@ -169,10 +160,6 @@ mod tests {
 
     #[test]
     fn deltas() {
-        assert_eq!(delta(120.0, 100.0), Some(0.2));
-        assert_eq!(delta(50.0, 100.0), Some(-0.5));
-        assert_eq!(delta(5.0, 0.0), None);
-        assert_eq!(delta(0.0, 0.0), None);
         assert_eq!(delta_label(Some(0.123)), ("▲ 12.3%".into(), 1));
         assert_eq!(delta_label(Some(-0.04)), ("▼ 4%".into(), -1));
         assert_eq!(delta_label(Some(0.0)), ("–".into(), 0));

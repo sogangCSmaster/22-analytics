@@ -5,16 +5,19 @@ use crate::Route;
 use crate::api;
 use crate::components::chart::{BarList, ShareBar};
 use crate::components::ui::{
-    Badge, Button, Card, Drawer, EmptyState, PageHead, SegmentedControl, Size, SkeletonBlock,
-    SkeletonCards, StatCard, StatStyle, Tone, Variant, copy_to_clipboard, load,
+    Badge, Button, Card, ChangeTag, Drawer, EmptyState, PageHead, SegmentedControl, Size,
+    SkeletonBlock, SkeletonCards, StatCard, StatStyle, Tone, Variant, copy_to_clipboard, load,
 };
 use crate::format;
+use crate::logic::compare::{Change, change, pair, pp};
 use crate::logic::view::{is_activation_key, pager, scoped};
 use crate::logic::{dates, labels, query};
-use crate::state::use_app;
+use crate::state::{loaded_prev, use_app};
 use analytics_core::attribution::Model;
 use analytics_core::dto::admin::AttributionSettingsDto;
-use analytics_core::dto::reports::{OrderDetail, OverlapReport, RecentOrdersReport, RevenueReport};
+use analytics_core::dto::reports::{
+    ChannelRevenueRow, OrderDetail, OverlapReport, RecentOrdersReport, RevenueReport,
+};
 use dioxus::prelude::*;
 
 pub const ORDERS_PAGE: u32 = 10;
@@ -84,10 +87,138 @@ fn pick(
     (m, lb, lookbacks)
 }
 
+/// 이전 기간 보고서가 같은 기준(모델·lookback)일 때만 비교한다 (모델을 막 바꿨을 때 이전 모델 값과 섞지 않는다).
+pub fn same_basis(cur: &RevenueReport, prev: Option<RevenueReport>) -> Option<RevenueReport> {
+    prev.filter(|p| p.model == cur.model && p.lookback_days == cur.lookback_days)
+}
+
+/// 현재·이전 매체별 기여를 매체로 맞춘다 (매체 목록은 잘리지 않는다).
+pub fn pair_channel_revenue(
+    cur: &[ChannelRevenueRow],
+    prev: Option<&[ChannelRevenueRow]>,
+) -> Vec<(ChannelRevenueRow, Option<ChannelRevenueRow>)> {
+    match prev {
+        Some(p) => pair(
+            cur,
+            p,
+            |r| r.channel.clone(),
+            |r| ChannelRevenueRow {
+                channel: r.channel.clone(),
+                raw_claimed: 0,
+                attributed: 0,
+                share: 0.0,
+                assists: 0,
+                spend: 0,
+                roas: None,
+            },
+            true,
+            true,
+        ),
+        None => cur.iter().map(|r| (r.clone(), None)).collect(),
+    }
+}
+
+/// ROAS 변화 (%p). 어느 한쪽이라도 광고비가 없으면 비교하지 않는다.
+fn roas_change(cur: Option<f64>, prev: Option<Option<f64>>) -> Change {
+    match (cur, prev.flatten()) {
+        (Some(c), Some(p)) => pp(c, Some(p)),
+        _ => Change::Unknown,
+    }
+}
+
+/// 매체별 매출 기여 표. 비교를 켜면 기여 매출의 이전 값·변화와 ROAS 변화(%p)가 붙는다.
+/// 모바일 카드 행에서는 매체·기여 매출·비중·ROAS만 남긴다.
 #[component]
 pub fn ChannelRevenueTable(report: RevenueReport, prev: Option<RevenueReport>) -> Element {
-    let _ = (report, prev);
-    rsx! {}
+    let r = report;
+    let compare = prev.is_some();
+    let rows = pair_channel_revenue(&r.channels, prev.as_ref().map(|p| p.channels.as_slice()));
+    let attr_change = |c: &ChannelRevenueRow, p: &Option<ChannelRevenueRow>| {
+        change(c.attributed as f64, p.as_ref().map(|p| p.attributed as f64))
+    };
+    let total_change = change(
+        r.deduplicated as f64,
+        prev.as_ref().map(|p| p.deduplicated as f64),
+    );
+    let total_roas_change = roas_change(r.roas, prev.as_ref().map(|p| p.roas));
+    rsx! {
+        div { class: "table-wrap", style: "margin-top: 16px;",
+            table { class: "table stack",
+                thead { tr {
+                    th { scope: "col", "매체" }
+                    th { class: "r m-hide", scope: "col", "매체가 주장한 매출" }
+                    th { class: "r", scope: "col", "기여 매출" }
+                    if compare {
+                        th { class: "r cmp-col m-hide", scope: "col", "이전 기간" }
+                        th { class: "r cmp-col m-hide", scope: "col", "변화" }
+                    }
+                    th { class: "r", scope: "col", "비중" }
+                    th { class: "r m-hide", scope: "col", "어시스트" }
+                    th { class: "r m-hide", scope: "col", "광고비" }
+                    th { class: "r", scope: "col", "ROAS" }
+                    if compare {
+                        th { class: "r cmp-col m-hide", scope: "col", "ROAS 변화" }
+                    }
+                } }
+                tbody {
+                    for (c, p) in rows.iter() {
+                        tr { key: "{c.channel}",
+                            td { "data-label": "매체", div { class: "cell-title", "{labels::channel(&c.channel)}" } }
+                            td { class: "r muted strike-soft m-hide", "data-label": "매체가 주장한 매출", "{format::won(c.raw_claimed)}" }
+                            td { class: "r strong main-metric", "data-label": "기여 매출",
+                                "{format::won(c.attributed)}"
+                                if compare {
+                                    ChangeTag { change: attr_change(c, p), class: "m-only" }
+                                }
+                            }
+                            if compare {
+                                td { class: "r muted cmp-prev m-hide", "data-label": "이전 기간", {p.as_ref().map(|p| format::won(p.attributed)).unwrap_or_else(|| "–".into())} }
+                                td { class: "r cmp-chg m-hide", "data-label": "변화", ChangeTag { change: attr_change(c, p) } }
+                            }
+                            td { class: "r", "data-label": "비중", {format::pct(c.share, 1)} }
+                            td { class: "r m-hide", "data-label": "어시스트", "{format::count(c.assists)}" }
+                            td { class: "r m-hide", "data-label": "광고비", {if c.spend > 0 { format::won(c.spend) } else { "–".into() }} }
+                            td { class: "r main-metric", "data-label": "ROAS",
+                                {format::roas(c.roas)}
+                                if compare {
+                                    ChangeTag { change: roas_change(c.roas, p.as_ref().map(|p| p.roas)), class: "m-only" }
+                                }
+                            }
+                            if compare {
+                                td { class: "r cmp-chg m-hide", "data-label": "ROAS 변화", ChangeTag { change: roas_change(c.roas, p.as_ref().map(|p| p.roas)) } }
+                            }
+                        }
+                    }
+                }
+                tfoot { tr {
+                    td { "data-label": "매체", "합계" }
+                    td { class: "r m-hide", "data-label": "매체가 주장한 매출", "{format::won(r.raw_sum)}" }
+                    td { class: "r main-metric", "data-label": "기여 매출",
+                        "{format::won(r.deduplicated)}"
+                        if compare {
+                            ChangeTag { change: total_change, class: "m-only" }
+                        }
+                    }
+                    if compare {
+                        td { class: "r cmp-prev m-hide", "data-label": "이전 기간", {prev.as_ref().map(|p| format::won(p.deduplicated)).unwrap_or_default()} }
+                        td { class: "r cmp-chg m-hide", "data-label": "변화", ChangeTag { change: total_change } }
+                    }
+                    td { class: "r", "data-label": "비중", "100%" }
+                    td { class: "r m-hide", "" }
+                    td { class: "r m-hide", "data-label": "광고비", {if r.spend_total > 0 { format::won(r.spend_total) } else { "–".into() }} }
+                    td { class: "r main-metric", "data-label": "ROAS",
+                        {format::roas(r.roas)}
+                        if compare {
+                            ChangeTag { change: total_roas_change, class: "m-only" }
+                        }
+                    }
+                    if compare {
+                        td { class: "r cmp-chg m-hide", "data-label": "ROAS 변화", ChangeTag { change: total_roas_change } }
+                    }
+                } }
+            }
+        }
+    }
 }
 
 #[component]
@@ -117,6 +248,24 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
             api::get::<RevenueReport>(&query::revenue(p, r, m, lb)).await
         }
     });
+    // 이전 기간 (비교를 켰을 때만, 같은 모델·lookback)
+    let prev_res = use_resource(move || {
+        let (p, r, cmp, (m, lb, _)) = (
+            pid(),
+            ctx.range(),
+            ctx.compare(),
+            pick(settings, model, lookback),
+        );
+        async move {
+            let Some(lb) = lb.filter(|_| cmp) else {
+                return Ok(None);
+            };
+            api::get::<RevenueReport>(&query::revenue(p, r.previous(), m, lb))
+                .await
+                .map(Some)
+        }
+    });
+    let prev = loaded_prev(&prev_res);
     let overlap = use_resource(move || {
         let (p, r, (_, lb, _)) = (pid(), ctx.range(), pick(settings, model, lookback));
         async move {
@@ -170,24 +319,40 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                 }
             }
         } else {
-            {load(revenue, rsx! { SkeletonCards { n: 3 } }, |r| rsx! {
-                div { class: "grid grid-3",
-                    StatCard {
-                        label: "매체 합산 매출",
-                        value: format::won_short(r.raw_sum),
-                        sub: format!("매체 리포트를 단순 합산 · ROAS {}", format::roas((r.spend_total > 0).then(|| r.raw_sum as f64 / r.spend_total as f64))),
-                        style: StatStyle::Struck,
-                    }
-                    StatCard {
-                        label: "실제 매출",
-                        value: format::won_short(r.deduplicated),
-                        sub: format!("주문 {}건 · ROAS {}", format::count(r.orders), format::roas(r.roas)),
-                        style: StatStyle::Hero,
-                    }
-                    StatCard {
-                        label: "매체 간 중복률",
-                        value: format::pct(r.duplicate_rate, 1),
-                        sub: format!("{} 중복 제거", format::won_short(r.duplicate_amount)),
+            {load(revenue, rsx! { SkeletonCards { n: 3 } }, |r| {
+                let pv = same_basis(&r, prev.clone());
+                let pv = pv.as_ref();
+                rsx! {
+                    div { class: "grid grid-3",
+                        StatCard {
+                            label: "매체 합산 매출",
+                            value: format::won_short(r.raw_sum),
+                            change: pv.map(|p| change(r.raw_sum as f64, Some(p.raw_sum as f64))),
+                            sub: match pv {
+                                Some(p) => format!("이전 {} · 매체 리포트 단순 합산", format::won_short(p.raw_sum)),
+                                None => format!("매체 리포트를 단순 합산 · ROAS {}", format::roas((r.spend_total > 0).then(|| r.raw_sum as f64 / r.spend_total as f64))),
+                            },
+                            style: StatStyle::Struck,
+                        }
+                        StatCard {
+                            label: "실제 매출",
+                            value: format::won_short(r.deduplicated),
+                            change: pv.map(|p| change(r.deduplicated as f64, Some(p.deduplicated as f64))),
+                            sub: match pv {
+                                Some(p) => format!("이전 {} · 주문 {}건", format::won_short(p.deduplicated), format::count(r.orders)),
+                                None => format!("주문 {}건 · ROAS {}", format::count(r.orders), format::roas(r.roas)),
+                            },
+                            style: StatStyle::Hero,
+                        }
+                        StatCard {
+                            label: "매체 간 중복률",
+                            value: format::pct(r.duplicate_rate, 1),
+                            change: pv.map(|p| pp(r.duplicate_rate, Some(p.duplicate_rate))),
+                            sub: match pv {
+                                Some(p) => format!("이전 {} · {} 중복 제거", format::pct(p.duplicate_rate, 1), format::won_short(r.duplicate_amount)),
+                                None => format!("{} 중복 제거", format::won_short(r.duplicate_amount)),
+                            },
+                        }
                     }
                 }
             })}
@@ -212,41 +377,7 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                     let msg = explain(&r);
                     rsx! {
                         ShareBar { parts: r.channels.iter().map(|c| (labels::channel(&c.channel), c.attributed)).collect::<Vec<_>>(), money: true }
-                        div { class: "table-wrap", style: "margin-top: 16px;",
-                            table { class: "table",
-                                thead { tr {
-                                    th { scope: "col", "매체" }
-                                    th { class: "r", scope: "col", "매체가 주장한 매출" }
-                                    th { class: "r", scope: "col", "기여 매출" }
-                                    th { class: "r", scope: "col", "비중" }
-                                    th { class: "r", scope: "col", "어시스트" }
-                                    th { class: "r", scope: "col", "광고비" }
-                                    th { class: "r", scope: "col", "ROAS" }
-                                } }
-                                tbody {
-                                    for c in r.channels.iter() {
-                                        tr { key: "{c.channel}",
-                                            td { div { class: "cell-title", "{labels::channel(&c.channel)}" } }
-                                            td { class: "r muted strike-soft", "{format::won(c.raw_claimed)}" }
-                                            td { class: "r strong", "{format::won(c.attributed)}" }
-                                            td { class: "r", {format::pct(c.share, 1)} }
-                                            td { class: "r", "{format::count(c.assists)}" }
-                                            td { class: "r", {if c.spend > 0 { format::won(c.spend) } else { "–".into() }} }
-                                            td { class: "r", {format::roas(c.roas)} }
-                                        }
-                                    }
-                                }
-                                tfoot { tr {
-                                    td { "합계" }
-                                    td { class: "r", "{format::won(r.raw_sum)}" }
-                                    td { class: "r", "{format::won(r.deduplicated)}" }
-                                    td { class: "r", "100%" }
-                                    td { class: "r", "" }
-                                    td { class: "r", {if r.spend_total > 0 { format::won(r.spend_total) } else { "–".into() }} }
-                                    td { class: "r", {format::roas(r.roas)} }
-                                } }
-                            }
-                        }
+                        ChannelRevenueTable { report: r.clone(), prev: same_basis(&r, prev.clone()) }
                         if r.spend_total == 0 {
                             p { class: "hint", "광고비를 올리면 ROAS가 계산돼요 (설정 → 광고비)." }
                         }
@@ -279,7 +410,7 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                             div { class: "callout", "이 쪽에는 주문이 없어요. 이전 쪽으로 돌아가 보세요." }
                         } else {
                             div { class: "table-wrap",
-                                table { class: "table",
+                                table { class: "table stack",
                                     thead { tr {
                                         th { scope: "col", "주문" }
                                         th { scope: "col", "마지막 클릭" }
@@ -299,11 +430,11 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                                                         open_order(id.clone());
                                                     }
                                                 },
-                                                td {
+                                                td { "data-label": "주문",
                                                     div { class: "cell-title mono", "{r.order_id}" }
                                                     div { class: "cell-sub", "{dates::datetime_kr(&r.ordered_at)}" }
                                                 }
-                                                td {
+                                                td { "data-label": "마지막 클릭",
                                                     {
                                                         let (st, cancelled) = labels::order_status(&r.status);
                                                         rsx! {
@@ -317,7 +448,7 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                                                         }
                                                     }
                                                 }
-                                                td { class: "r", "{format::won(r.effective_amount)}" }
+                                                td { class: "r", "data-label": "금액", "{format::won(r.effective_amount)}" }
                                             }
                                         }
                                     }

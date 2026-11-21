@@ -271,11 +271,161 @@
 }
 
 /* 데모 모드 (--features demo) */
-.demo-badge {
-  margin-left: auto; flex: none; display: inline-flex; align-items: center; height: 26px; padding: 0 10px;
-  border-radius: 13px; background: var(--brand-tint); color: var(--brand); font-size: 12px; font-weight: 700; white-space: nowrap;
-}
 .demo-hint {
   margin: 0; padding: 10px 12px; border-radius: var(--radius-md); background: var(--brand-tint); color: var(--brand);
   font-size: var(--fs-caption); font-weight: 600; text-align: center;
+}
+/* 로그인 화면의 데모 안내: 눈에 띄되 튀지 않게 */
+.demo-hint { background: transparent; border: 1px dashed var(--line); color: var(--text-sub); font-weight: 500; }
+
+/* ===== 이전 기간 비교 ===== */
+.chg {
+  display: inline-flex; align-items: center; justify-content: center; height: 22px; padding: 0 7px; border-radius: 6px;
+  font-size: 12px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--card); color: var(--text-weak);
+}
+.chg.up { background: var(--up-weak); color: var(--up); }
+.chg.down { background: var(--down-weak); color: var(--down); }
+.chg.new { background: var(--primary-weak); color: var(--primary); }
+.m-only { display: none; }
+.table th.cmp-col { color: var(--text-sub); }
+.table td.cmp-prev { color: var(--text-weak); }
+.table .cmp-col, .table .cmp-prev, .table .cmp-chg { background: rgba(0, 75, 41, 0.035); }
+.barlist-chg { min-width: 60px; }
+.callout .chg { margin-left: 2px; vertical-align: 1px; }
+.stat-sub { flex-wrap: wrap; row-gap: 2px; }
+.card.primary .delta.up, .card.primary .delta.down, .card.primary .delta.new { color: #fff; background: rgba(255, 255, 255, 0.16); padding: 0 6px; border-radius: 6px; }
+.delta.new { color: var(--primary); }
+/* 이전 기간 점선은 회색이지만 또렷하게 */
+.swatch.dashed { background: repeating-linear-gradient(90deg, var(--compare-line) 0 5px, transparent 5px 8px); }
+.dot.muted { background: var(--compare-line); box-shadow: 0 0 0 1px var(--compare-line); }
+
+/* ===== 알림 ===== */
+.toast {
+  display: flex; align-items: center; gap: var(--s-3); max-width: calc(100vw - 32px); cursor: pointer;
+  bottom: calc(var(--s-6) + env(safe-area-inset-bottom, 0px)); padding: var(--s-2) var(--s-2) var(--s-2) var(--s-5); min-height: 48px;
+}
+.toast-text { flex: 1; min-width: 0; line-height: 1.4; }
+.toast-close {
+  flex: none; width: 36px; height: 36px; border-radius: 18px; border: 0; background: transparent; color: rgba(255, 255, 255, 0.8);
+  cursor: pointer; font-size: 14px;
+}
+.toast-close:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+
+/* ===== 넘침 방지 (어떤 화면에서도 문서 전체가 가로로 밀리지 않게) ===== */
+.grid > *, .card, .content > * { min-width: 0; }
+.page-head > div, .card-head > .row { min-width: 0; max-width: 100%; }
+.card-head > .row { flex-wrap: nowrap; }
+/* 세그먼트는 줄바꿈하지 않고 넘치면 가로로 스크롤한다 */
+.segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
+.segmented::-webkit-scrollbar { display: none; }
+.segmented button { white-space: nowrap; flex: none; }
+/* 가로 스크롤 표시: 넘친 쪽 가장자리에 그림자 (스크롤하면 따라 움직인다) */
+.table-wrap, .segmented, .tabs {
+  background-image:
+    linear-gradient(to right, var(--scroll-bg, var(--bg)) 30%, rgba(255, 255, 255, 0)),
+    linear-gradient(to left, var(--scroll-bg, var(--bg)) 30%, rgba(255, 255, 255, 0)),
+    radial-gradient(farthest-side at 0 50%, rgba(0, 40, 22, 0.16), rgba(0, 40, 22, 0)),
+    radial-gradient(farthest-side at 100% 50%, rgba(0, 40, 22, 0.16), rgba(0, 40, 22, 0));
+  background-position: left center, right center, left center, right center;
+  background-repeat: no-repeat;
+  background-size: 24px 100%, 24px 100%, 10px 100%, 10px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+.segmented { --scroll-bg: var(--card); background-color: var(--card); }
+.tabs { scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+
+/* ===== 상단 바 ===== */
+.topbar-head { display: flex; align-items: center; gap: var(--s-2); min-width: 0; }
+.topbar.has-range .topbar-title { display: none; }
+.topbar-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compare-short { display: none; }
+
+/* ===== 모바일 (≤760px) ===== */
+@media (max-width: 760px) {
+  .topbar {
+    flex-wrap: wrap; height: auto; min-height: 56px; gap: 2px var(--s-2); justify-content: flex-start;
+    padding: max(4px, env(safe-area-inset-top, 0px)) var(--s-4) 6px;
+  }
+  .topbar-head { flex: 1 1 100%; min-height: 44px; }
+  .topbar.has-range .topbar-title { display: block; }
+  .topbar-title { flex: 1; font-size: 15px; }
+  .menu-btn { width: 44px; height: 44px; margin-left: -10px; }
+  .range-picker { flex: 1 1 100%; flex-wrap: nowrap; gap: var(--s-2); min-width: 0; }
+  .range-picker .segmented { flex: 1 1 auto; min-width: 0; }
+  .range-picker .segmented button { padding: 0 12px; }
+  .compare { flex: none; min-height: 44px; gap: 6px; }
+  .compare-long { display: none; }
+  .compare-short { display: inline; }
+  .range-pop { left: 0; right: 0; }
+  .range-pop .row { flex-wrap: wrap; }
+  .range-pop .input { flex: 1; min-width: 0; }
+
+  /* 손가락으로 누르기 쉬운 크기 (44px) */
+  .segmented button { height: 40px; }
+  .icon-btn { width: 44px; height: 44px; border-radius: 22px; }
+  .nav a { min-height: 44px; }
+  .btn { min-height: 44px; }
+  .tab { min-height: 44px; display: inline-flex; align-items: center; }
+  .chip { min-height: 36px; }
+  .page-head { align-items: flex-start; }
+  .page-head > .row { width: 100%; }
+  .card-head > .row { width: 100%; }
+
+  /* 지표 카드: 긴 숫자(8,237만 원 / 159,061)가 넘치지 않게 */
+  .stat-value { font-size: clamp(22px, 7vw, 28px); }
+  .stat-value.xl { font-size: clamp(26px, 9vw, 34px); }
+  .grid-4 .stat-value { font-size: clamp(17px, 5.4vw, 22px); }
+  .grid-4 .stat-sub { font-size: 12px; }
+
+  /* 드로어: 전체 너비 + 안전 영역 */
+  .drawer { width: 100vw; }
+  .drawer-head { padding: max(var(--s-4), env(safe-area-inset-top, 0px)) var(--s-4) var(--s-4); }
+  .drawer-body { padding: var(--s-4) var(--s-4) calc(var(--s-5) + env(safe-area-inset-bottom, 0px)); }
+
+  /* 막대 목록: 이름은 두 줄까지, 막대는 아래 줄 전체 너비 */
+  .barlist-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label value" "track track"; row-gap: 6px; }
+  .barlist-label { grid-area: label; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; }
+  .barlist-track { grid-area: track; }
+  .barlist-value { grid-area: value; align-self: start; }
+
+  /* 카드 행으로 바꾸지 않는 표(설정·관리·주문): 카드 안에서 가로 스크롤, 첫 열 고정 */
+  .table:not(.stack) th:first-child, .table:not(.stack) td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg); }
+}
+
+/* ===== 좁은 화면 표 → 카드 행 (≤640px) ===== */
+@media (max-width: 640px) {
+  .table.stack, .table.stack tbody, .table.stack tfoot, .table.stack thead { display: block; width: 100%; }
+  /* 머리글은 정렬 버튼만 칩으로 남긴다 */
+  .table.stack thead tr { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 6px; padding: 0 var(--s-4) var(--s-3); border-bottom: 1px solid var(--line); scrollbar-width: none; }
+  .table.stack thead tr::-webkit-scrollbar { display: none; }
+  .table.stack thead tr:not(:has(.sortable:not(.m-hide))) { display: none; }
+  .table.stack thead th { display: none; padding: 0; border: 0; }
+  .table.stack thead th.sortable:not(.m-hide) { display: block; flex: none; }
+  .table.stack thead .th-btn { height: 32px; padding: 0 12px; border-radius: 16px; background: var(--card); font-size: 12px; white-space: nowrap; }
+  .table.stack thead th[aria-sort="ascending"] .th-btn, .table.stack thead th[aria-sort="descending"] .th-btn { background: var(--primary-weak); color: var(--primary); font-weight: 700; }
+  .table.stack tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--line); }
+  .table.stack tbody tr:last-child { border-bottom: 0; }
+  .table.stack td {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 0; border: 0; min-width: 0;
+    white-space: normal; text-align: left; overflow-wrap: anywhere; background: transparent;
+  }
+  .table.stack td::before { content: attr(data-label); font-size: 11px; color: var(--text-weak); font-weight: 500; }
+  .table.stack td:first-child { grid-column: 1 / -1; }
+  .table.stack td:first-child::before { display: none; }
+  .table.stack td:empty { display: none; }
+  .table.stack td.main-metric { flex-direction: row; flex-wrap: wrap; align-items: center; column-gap: 6px; }
+  .table.stack td.main-metric::before { flex-basis: 100%; }
+  .table.stack .m-hide { display: none; }
+  .table.stack .m-only { display: inline-flex; }
+  .table.stack .path-cell { max-width: none; word-break: break-all; }
+  .table.stack tbody tr:hover td { background: transparent; }
+  .table.stack tbody tr.clickable:active { background: var(--bg-page); }
+  .table.stack tfoot tr { background: var(--bg-page); border-bottom: 0; }
+  .table.stack tfoot td { border-top: 0; }
+}
+
+@media (max-width: 400px) {
+  .topbar-org { display: none; }
+  .range-picker .segmented button { padding: 0 10px; }
 }

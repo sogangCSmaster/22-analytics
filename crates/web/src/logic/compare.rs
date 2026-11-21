@@ -20,30 +20,71 @@ pub enum Change {
 
 /// 값의 증감률. `prev`가 None이면 이전 값을 모른다.
 pub fn change(cur: f64, prev: Option<f64>) -> Change {
-    let _ = (cur, prev);
-    Change::Unknown
+    match prev {
+        Some(p) if cur.is_finite() && p.is_finite() => {
+            if p == 0.0 {
+                if cur > 0.0 {
+                    Change::New
+                } else {
+                    Change::Unknown
+                }
+            } else {
+                Change::Pct((cur - p) / p)
+            }
+        }
+        _ => Change::Unknown,
+    }
 }
 
 /// 비율(전환율·중복률·ROAS)의 퍼센트포인트 변화.
 pub fn pp(cur: f64, prev: Option<f64>) -> Change {
-    let _ = (cur, prev);
-    Change::Unknown
+    match prev {
+        Some(p) if cur.is_finite() && p.is_finite() => Change::Pp(cur - p),
+        _ => Change::Unknown,
+    }
 }
 
 impl Change {
     /// 화면 문구와 방향 (1 증가 / 0 변화 없음 / -1 감소)
     pub fn label(self) -> (String, i8) {
-        ("".into(), 0)
+        match self {
+            Change::Pct(v) => crate::format::delta_label(Some(v)),
+            Change::Pp(v) => {
+                let p = v * 100.0;
+                if !p.is_finite() || p.abs() < 0.05 {
+                    return ("–".into(), 0);
+                }
+                let s = crate::format::trim_float(p.abs(), 1);
+                if p > 0.0 {
+                    (format!("▲ {s}%p"), 1)
+                } else {
+                    (format!("▼ {s}%p"), -1)
+                }
+            }
+            Change::New => ("신규".into(), 1),
+            Change::Unknown => ("–".into(), 0),
+        }
     }
 
     /// CSS 클래스 (up / down / flat / new)
     pub fn class(self) -> &'static str {
-        ""
+        if self == Change::New {
+            return "new";
+        }
+        match self.label().1 {
+            1 => "up",
+            -1 => "down",
+            _ => "flat",
+        }
     }
 
     /// 정렬 기준: 신규가 가장 크고, 비교할 수 없는 값이 가장 작다.
     fn rank(self) -> f64 {
-        0.0
+        match self {
+            Change::Pct(v) | Change::Pp(v) if v.is_finite() => v,
+            Change::New => f64::INFINITY,
+            _ => f64::NEG_INFINITY,
+        }
     }
 }
 
@@ -70,9 +111,33 @@ pub fn pair<T: Clone>(
     cur_complete: bool,
     prev_complete: bool,
 ) -> Vec<(T, Option<T>)> {
-    let _ = (prev, &key, &zero, cur_complete, prev_complete);
-    let _: HashMap<String, usize> = HashMap::new();
-    cur.iter().map(|c| (c.clone(), None)).collect()
+    let mut prev_at: HashMap<String, usize> = HashMap::new();
+    for (i, p) in prev.iter().enumerate() {
+        prev_at.entry(key(p)).or_insert(i);
+    }
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(cur.len());
+    for c in cur {
+        let k = key(c);
+        if !seen.insert(k.clone()) {
+            continue;
+        }
+        let p = match prev_at.get(&k) {
+            Some(&i) => Some(prev[i].clone()),
+            None if prev_complete => Some(zero(c)),
+            None => None,
+        };
+        out.push((c.clone(), p));
+    }
+    if cur_complete {
+        for p in prev {
+            let k = key(p);
+            if seen.insert(k) {
+                out.push((zero(p), Some(p.clone())));
+            }
+        }
+    }
+    out
 }
 
 /// 상위 n개 + 나머지 "기타" (이전 값도 같이 합친다. 나머지 중 하나라도 모르면 기타의 이전 값도 모름)
@@ -80,8 +145,16 @@ pub fn top_with_rest_prev(
     rows: &[(String, i64, Option<i64>)],
     n: usize,
 ) -> Vec<(String, i64, Option<i64>)> {
-    let _ = n;
-    rows.to_vec()
+    let mut v = rows.to_vec();
+    v.sort_by_key(|b| std::cmp::Reverse(b.1));
+    if v.len() <= n + 1 {
+        return v;
+    }
+    let rest: i64 = v[n..].iter().map(|r| r.1).sum();
+    let rest_prev: Option<i64> = v[n..].iter().map(|r| r.2).sum();
+    v.truncate(n);
+    v.push(("기타".into(), rest, rest_prev));
+    v
 }
 
 #[cfg(test)]

@@ -102,7 +102,7 @@ impl ToastState {
 
     /// `ms` 동안 떠 있는 알림.
     pub fn show_for(&mut self, msg: String, ms: u32) -> u64 {
-        let _ = ms;
+        self.duration_ms = ms;
         self.generation = self.generation.wrapping_add(1);
         self.message = Some(msg);
         self.generation
@@ -125,8 +125,7 @@ pub const DEMO_TOAST_MS: u32 = 4_000;
 /// 데모 안내 알림을 띄울지: 데모 빌드에서, 이 브라우저 세션에 처음 들어왔을 때 한 번만.
 /// `shown`은 sessionStorage에 남긴 기록.
 pub fn should_show_demo_toast(is_demo: bool, shown: Option<&str>) -> bool {
-    let _ = (is_demo, shown);
-    false
+    is_demo && shown.is_none()
 }
 
 /// 버튼처럼 동작하는 행(tr)에서 실행 키인지 (Enter, Space)

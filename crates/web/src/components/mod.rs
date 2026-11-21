@@ -220,10 +220,10 @@ mod render_tests {
         RevenueReport,
     };
 
-    /// 비교 표시 흔적 (증감 기호, 이전 기간 열, 변화 열)
+    /// 비교 표시 흔적 (증감 문구 "▲ 12%", 이전 기간 열, 변화 열). 정렬 화살표(▼)만 있는 것은 아니다.
     fn has_compare_markup(html: &str) -> bool {
-        html.contains("▲")
-            || html.contains("▼")
+        html.contains("▲ ")
+            || html.contains("▼ ")
             || html.contains("신규")
             || html.contains("이전 기간")
             || html.contains("class=\"chg")
