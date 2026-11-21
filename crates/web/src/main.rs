@@ -119,7 +119,7 @@ fn main() {
 fn App() -> Element {
     state::AppCtx::provide();
     rsx! {
-        document::Title { "22Brix Analytics" }
+        document::Title { "BinaryCube Analytics" }
         document::Link { rel: "stylesheet", href: PRETENDARD }
         document::Link { rel: "icon", r#type: "image/png", href: components::brand::FAVICON }
         document::Stylesheet { href: TOKENS_CSS }

@@ -220,15 +220,13 @@
 .c4 { background: var(--chart-5); }
 .c5 { background: var(--chart-6); }
 
-/* ===== 22Brix 브랜드 ===== */
+/* ===== 바이너리큐브 브랜드 ===== */
 .brand {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--s-2);
-  padding: 14px 16px; border-radius: var(--radius-lg);
-  background: var(--brand-gradient); color: #fff; box-shadow: 0 6px 18px rgba(75, 31, 143, 0.22);
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 6px 8px 14px; border-bottom: 1px solid var(--line); border-radius: 0;
 }
-/* 워드마크는 원본 비율(180×50) 그대로 크기를 고정: flex 안에서 줄어들거나 늘어나지 않게 */
-.brand-wordmark { width: 72px; height: 20px; display: block; flex: 0 0 auto; align-self: center; object-fit: contain; max-width: none; }
-.brand-product { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255, 255, 255, 0.86); }
+.brand-wordmark { width: 163px; height: 15px; display: block; flex: 0 0 auto; object-fit: contain; max-width: none; }
+.brand-product { font-size: 11px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--brand); }
 .brand-symbol { display: block; object-fit: contain; }
 
 /* 메뉴 아이콘: 선 아이콘이 글자색을 따른다 */
@@ -239,7 +237,7 @@
 .icon-btn .icon { margin: auto; }
 
 /* 핵심 지표(실제 매출) 카드: 브랜드 그라데이션 */
-.card.primary { background: var(--brand-gradient); box-shadow: 0 10px 28px rgba(75, 31, 143, 0.25); }
+.card.primary { background: var(--brand-gradient); box-shadow: 0 10px 28px rgba(0, 56, 32, 0.22); }
 
 /* 빈 화면 아이콘 */
 .empty-icon { color: var(--primary); background: var(--primary-weak); font-size: 0; }
@@ -258,7 +256,7 @@
   content: ""; position: absolute; right: -120px; bottom: -120px; width: 420px; height: 420px; border-radius: 50%;
   background: radial-gradient(circle, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 70%);
 }
-.login-hero .login-wordmark { width: 115px; height: 32px; align-self: flex-start; }
+.login-hero .login-wordmark { width: 261px; height: 24px; align-self: flex-start; }
 .login-hero h2 { font-size: 40px; line-height: 1.2; font-weight: 800; letter-spacing: -0.03em; margin: 0 0 var(--s-4); max-width: 520px; }
 .login-hero p { font-size: var(--fs-lead); line-height: 1.6; color: rgba(255, 255, 255, 0.86); margin: 0; max-width: 460px; }
 .login-hero .login-tag { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255, 255, 255, 0.7); }

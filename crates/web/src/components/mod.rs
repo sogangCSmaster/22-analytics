@@ -79,13 +79,16 @@ mod render_tests {
         }
     }
 
-    /// 22Brix 로고는 대체 텍스트가 있는 이미지로 그린다.
+    /// 바이너리큐브 로고는 대체 텍스트가 있는 이미지로 그리고, 이전 브랜드 흔적이 없어야 한다.
     #[test]
     fn brand_logo_has_alt_text() {
-        use super::brand::{BrandLogo, BrandSymbol};
-        let html = dioxus_ssr::render_element(rsx! { BrandLogo {} BrandSymbol { size: 32 } });
-        assert!(html.contains("alt=\"22Brix\""), "{html}");
+        use super::brand::{BrandLogo, BrandSymbol, LoginWordmark};
+        let html = dioxus_ssr::render_element(
+            rsx! { BrandLogo {} BrandSymbol { size: 32 } LoginWordmark {} },
+        );
+        assert!(html.contains("alt=\"BinaryCube\""), "{html}");
         assert!(html.contains("Analytics"), "{html}");
+        assert!(!html.to_lowercase().contains("22brix"), "{html}");
     }
 
     /// 프로젝트를 바꾸면(경로의 pid만 바뀜) ProjectScope 아래 화면은 새로 만들어져야 한다.
@@ -186,7 +189,7 @@ mod render_tests {
         );
     }
 
-    /// 워드마크는 원본 비율(180×50 = 3.6:1)대로 너비·높이를 함께 고정해야 찌그러지지 않는다.
+    /// 워드마크는 원본 비율(1815×167 ≈ 10.87:1)대로 너비·높이를 함께 고정해야 찌그러지지 않는다.
     #[test]
     fn wordmark_keeps_original_aspect_ratio() {
         use super::brand::{BrandLogo, LoginWordmark};
@@ -203,7 +206,7 @@ mod render_tests {
                 html[start..].split('"').next().unwrap().parse().unwrap()
             };
             let ratio = attr("width") / attr("height");
-            assert!((ratio - 3.6).abs() < 0.05, "비율 {ratio}: {html}");
+            assert!((ratio - 1815.0 / 167.0).abs() < 0.1, "비율 {ratio}: {html}");
         }
     }
 }

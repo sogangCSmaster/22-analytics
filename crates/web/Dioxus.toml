@@ -5,7 +5,7 @@ out_dir = "dist"
 asset_dir = "assets"
 
 [web.app]
-title = "22 Analytics"
+title = "BinaryCube Analytics"
 
 [web.watcher]
 reload_html = true
