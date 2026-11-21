@@ -1,0 +1,68 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/ch",
+    "crates/pg",
+    "crates/ingest",
+    "crates/api",
+    "crates/jobs",
+    "crates/web",
+    "edge/worker",
+]
+# web(Dioxus)와 edge(Cloudflare Worker)는 wasm32 타깃으로 따로 빌드한다.
+default-members = [
+    "crates/core",
+    "crates/ch",
+    "crates/pg",
+    "crates/ingest",
+    "crates/api",
+    "crates/jobs",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+rust-version = "1.85"
+
+[workspace.dependencies]
+analytics-core = { path = "crates/core" }
+analytics-ch = { path = "crates/ch" }
+analytics-pg = { path = "crates/pg" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+url = "2"
+woothee = "0.13"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.9"
+
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "fs", "io-util"] }
+axum = "0.8"
+tower-http = { version = "0.7", features = ["cors", "trace", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+clickhouse = { version = "0.15", features = ["uuid", "time", "inserter"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-none", "postgres", "uuid", "time", "json", "migrate", "macros"] }
+argon2 = "0.6"
+clap = { version = "4", features = ["derive", "env"] }
+zstd = "0.14"
+bytes = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+panic = "abort"

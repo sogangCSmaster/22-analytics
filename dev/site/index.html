@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>22-analytics 로컬 테스트 사이트</title>
+  <!-- 설치 스니펫 (로컬: ingest 엣지 에뮬레이션) -->
+  <script>window.at=window.at||function(){(at.q=at.q||[]).push(arguments)};</script>
+  <script async src="/t.js" data-key="pk_devlocal0000000000000000"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #191f28; }
+    button { margin: 4px; padding: 10px 14px; border-radius: 10px; border: 1px solid #e5e8eb; background: #f2f4f6; cursor: pointer; }
+    code { background: #f2f4f6; padding: 2px 6px; border-radius: 6px; }
+    .spacer { height: 1600px; }
+  </style>
+</head>
+<body>
+  <h1>로컬 테스트 사이트</h1>
+  <p>현재 경로: <code id="path"></code></p>
+  <p>
+    <a href="/dev/?utm_source=Naver&utm_medium=cpc&utm_campaign=winter&n_keyword=패딩">네이버 검색광고로 유입</a> ·
+    <a href="/dev/?utm_source=facebook&utm_medium=paid&fbclid=IwAR123">메타 광고로 유입</a> ·
+    <a href="https://example.com/">외부 링크</a> ·
+    <a href="/dev/files/manual.pdf">PDF 다운로드</a>
+  </p>
+  <div>
+    <button id="spa">SPA 이동 (/dev/product/1)</button>
+    <button id="signup">커스텀 이벤트: signup_complete</button>
+    <button id="cart">장바구니 담기</button>
+    <button id="buy">구매 완료 (ORD-9901)</button>
+    <button id="login">로그인 (identify)</button>
+  </div>
+  <div class="spacer"></div>
+  <script>
+    const show = () => (document.getElementById("path").textContent = location.pathname + location.search);
+    show();
+    const item = { id: "SKU1", name: "겨울 패딩", price: 100000, qty: 1 };
+    document.getElementById("spa").onclick = () => { history.pushState({}, "", "/dev/product/1"); document.title = "상품 상세"; show(); };
+    document.getElementById("signup").onclick = () => at("event", "signup_complete", { plan: "pro", method: "kakao" });
+    document.getElementById("cart").onclick = () => at("ecommerce", "add_to_cart", { value: 100000, currency: "KRW", items: [item] });
+    document.getElementById("buy").onclick = () => at("ecommerce", "purchase", { order_id: "ORD-9901", value: 100000, currency: "KRW", items: [item] });
+    // 실제로는 sha256(회원ID). 테스트용 고정값.
+    document.getElementById("login").onclick = () => at("identify", "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92");
+  </script>
+</body>
+</html>

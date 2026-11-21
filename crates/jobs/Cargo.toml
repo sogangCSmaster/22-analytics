@@ -1,0 +1,21 @@
+[package]
+name = "analytics-jobs"
+description = "운영 CLI: 마이그레이션, 개발 시드, (Phase 2) 기여 연산·보존 검증"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "analytics-jobs"
+path = "src/main.rs"
+
+[dependencies]
+analytics-core.workspace = true
+analytics-ch.workspace = true
+analytics-pg.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

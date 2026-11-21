@@ -1,0 +1,44 @@
+//! PostgreSQL 메타데이터 계층.
+
+pub mod projects;
+pub mod seed;
+
+use anyhow::Context;
+pub use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+
+pub async fn connect(database_url: &str) -> anyhow::Result<PgPool> {
+    PgPoolOptions::new()
+        .max_connections(10)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(database_url)
+        .await
+        .context("Postgres 연결 실패")
+}
+
+pub async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::migrate!("../../migrations/postgres")
+        .run(pool)
+        .await
+        .context("Postgres 마이그레이션 실패")
+}
+
+/// 공개 키 생성: `pk_` + 영숫자 24자.
+pub fn new_public_key() -> String {
+    format!("pk_{}", random_alnum(24))
+}
+
+/// 회원 해시 재해싱용 salt (32바이트 hex).
+pub fn new_salt_hex() -> String {
+    let bytes: [u8; 32] = rand::random();
+    hex::encode(bytes)
+}
+
+fn random_alnum(n: usize) -> String {
+    use rand::Rng;
+    const CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    let mut rng = rand::rng();
+    (0..n)
+        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
+        .collect()
+}

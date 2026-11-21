@@ -343,7 +343,8 @@ CREATE TABLE events
     os              LowCardinality(String),
     screen_w        UInt16,
     -- 커스텀 / 전자상거래
-    props           Map(LowCardinality(String), String),
+    `props.key`     Array(LowCardinality(String)),   -- 커스텀 속성 (Nested)
+    `props.value`   Array(String),
     ec_order_id     String,
     ec_value        Int64,                        -- KRW 정수 (통화 최소단위)
     ec_currency     LowCardinality(String),
@@ -388,6 +389,8 @@ FROM events
 WHERE event_name = 'page_view'
   AND (click_id != '' OR utm_source != '' OR props['_ext_ref'] = '1');
 ```
+
+> 실제 스키마는 `migrations/clickhouse/0001_init.sql`이 기준입니다. 이벤트의 `channel`과 `utm_*`는 **세션 범위**입니다: 트래커가 세션 랜딩 URL·referrer(`l`)를 함께 보내고, 세션 안의 모든 이벤트가 랜딩 기준 채널을 갖습니다(GA의 세션 소스와 같음). 터치포인트 MV는 `is_session_start = 1 AND channel NOT IN ('direct', '(internal)')` 조건을 씁니다.
 
 > 터치포인트는 "세션을 시작시킨 유입"만 기록합니다. Direct 유입은 터치포인트로 만들지 않습니다. GA의 last non-direct와 같은 방식입니다.
 
@@ -705,7 +708,8 @@ GROUP BY model, lookback_days;
 ├─ Cargo.toml                 # workspace
 ├─ crates/
 │  ├─ core/                   # 공유 타입, 이벤트 스키마, 채널 정규화, 기여 모델 (순수 로직)
-│  ├─ ch/                     # ClickHouse 클라이언트 래퍼, 타입 안전 쿼리 빌더 (project_id 강제)
+│  ├─ ch/                     # ClickHouse 클라이언트 래퍼, 마이그레이션, 행 타입 (ProjectScope로 project_id 강제)
+│  ├─ pg/                     # Postgres 메타데이터 접근, 마이그레이션, 개발 시드
 │  ├─ ingest/                 # Axum: /internal/collect, /internal/orders → CH + S3 세그먼트
 │  ├─ api/                    # Axum: 대시보드 API, 관리 API, 리포팅 API
 │  ├─ jobs/                   # 기여 연산, 보존 검증, 백업 트리거, KV 동기화
@@ -802,7 +806,7 @@ GROUP BY model, lookback_days;
 
 | # | 항목 | 결정 |
 |---|---|---|
-| D1 | 계정·운영 주체 | **AWS와 Cloudflare 모두 대행사 명의 계정**에 구축합니다. 개발 초기부터 대행사 계정에 IAM 역할을 받아 Terraform으로 구성하고, 개인 계정에 만들었다가 이관하는 과정은 두지 않습니다. 납품물에 `RUNBOOK.md`(배포, 백업 복구, 장애 대응, 키 교체), Terraform 상태(S3 backend + DynamoDB lock, 대행사 계정)와 운영자 계정 목록을 포함합니다. 납품 후 유지보수는 별도 계약 범위로 둡니다. |
+| D1 | 계정·운영 주체 | **AWS와 Cloudflare 모두 대행사 명의 계정**에 구축합니다. **개발은 로컬에서 먼저 완료**하고(§16), 개발이 끝난 뒤 대행사 계정과 도메인을 받아 Terraform으로 한 번에 구성합니다. 납품물에 `RUNBOOK.md`(배포, 백업 복구, 장애 대응, 키 교체), Terraform 상태(S3 backend + DynamoDB lock, 대행사 계정)와 운영자 계정 목록을 포함합니다. 납품 후 유지보수는 별도 계약 범위로 둡니다. |
 | D2 | 도메인 | **대행사 소유 도메인의 서브도메인**을 씁니다. 대행사 도메인의 DNS는 Cloudflare로 옮깁니다. <br>· `collect.<agency-domain>`: 공용 수집과 `t.js` <br>· `analytics.<agency-domain>`: 대시보드(Pages) <br>· `api.analytics.<agency-domain>`: 대시보드 API(Tunnel) <br>· 광고주별 `track.<광고주 도메인>`: 커스텀 호스트명(권장, 광고주가 CNAME으로 `collect.<agency-domain>`을 가리킴) |
 | D3 | `net_amount` 기본 정의 | **상품 판매가 합계 − 쿠폰·즉시할인 − 포인트·적립금 사용액, 배송비 제외, 부가세 포함**으로 정합니다. 매체 픽셀과 비교할 수 있도록 `gross_amount`(할인 전 결제 총액)도 함께 받아 저장합니다. 광고주 재무팀 기준이 다르면 프로젝트 설정의 메모와 연동 가이드로 개별 합의합니다(매뉴얼 2.A). |
 | D4 | 기여 대상 유입 | **자연검색과 추천(referral)을 기여 대상에 포함**합니다(`include_organic=true`, `include_referral=true`). Direct는 제외합니다(last non-direct). 이 유입을 빼면 Last-Click이 광고 매체를 과대평가하기 때문입니다. 리포트에는 "광고 매체만 보기" 필터를 제공합니다. |
@@ -814,3 +818,24 @@ GROUP BY model, lookback_days;
 2. **AWS·Cloudflare 계정 접근 권한**: 개발용 IAM 역할(최소 권한)과 Cloudflare API 토큰(Workers, KV, Queues, Pages, Tunnel, Custom Hostnames 범위)
 3. **개인정보 법무 검토**: 광고주 개인정보처리방침의 처리위탁(대행사) 항목과 Cloudflare 경유 고지 문안
 4. **파일럿 광고주 1곳**: Phase 1 검증(7일간 유실률 측정)에 쓸 실제 사이트
+
+## 16. 로컬 개발
+
+배포 없이 로컬에서 전체 흐름을 돌릴 수 있습니다. Cloudflare Worker 역할은 ingest의 **엣지 에뮬레이션 모드**(`EDGE_EMULATION=true`)가 대신합니다. 검증·보강 로직은 Worker와 같은 `analytics-core::collect`를 씁니다.
+
+```bash
+make up        # ClickHouse + Postgres (docker compose)
+make migrate   # 스키마 적용 (두 번 실행해도 안전)
+make seed      # 개발용 광고주·프로젝트 (pk_devlocal0000000000000000)
+make ingest    # t.js 빌드 + 수집 서버 → http://localhost:8081/dev/ 테스트 페이지
+make web       # 대시보드 → dx serve
+make test      # 전체 테스트
+```
+
+| 운영 | 로컬 |
+|---|---|
+| Cloudflare Worker `/t.js`, `/v1/config`, `/v1/collect` | ingest 같은 경로 (에뮬레이션) |
+| Worker → Tunnel → ingest `/internal/collect` (HMAC) | 같은 프로세스 안에서 바로 파이프라인으로 |
+| KV 프로젝트 설정 | Postgres 조회 + 60초 메모리 캐시 |
+| S3 원본 아카이브 | `ARCHIVE_DIR` 로컬 디렉터리 (`.ndjson.zst`) |
+| 거부 시 204 (사유 숨김) | 204 + `x-at-status` 헤더에 사유 (디버깅용) |

@@ -1,0 +1,17 @@
+{
+  "name": "@22analytics/tracker",
+  "private": true,
+  "version": "0.1.0",
+  "description": "22-analytics 브라우저 트래커 (t.js)",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/t.ts --bundle --minify --format=iife --target=es2018 --outfile=dist/t.js --legal-comments=none",
+    "typecheck": "tsc --noEmit",
+    "size": "node scripts/size.mjs",
+    "check": "npm run typecheck && npm run build && npm run size"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

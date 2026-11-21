@@ -1,0 +1,18 @@
+[package]
+name = "analytics-core"
+description = "공유 도메인 타입, 수집 검증·보강, 채널 정규화, 기여 모델 (순수 로직, wasm 호환)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid = { version = "1", features = ["serde"] }
+url.workspace = true
+woothee.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hex.workspace = true
+hmac.workspace = true

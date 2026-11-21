@@ -1,0 +1,9 @@
+/target
+/dist
+node_modules/
+tracker/dist/
+.env
+.env.local
+/var/
+.wrangler/
+crates/web/dist/

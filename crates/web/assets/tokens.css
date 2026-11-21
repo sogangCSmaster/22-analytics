@@ -1,0 +1,53 @@
+/*
+ * 디자인 토큰 (docs/ARCHITECTURE.md §12.1)
+ * PG 관리자 페이지 같은 깔끔한 B2B 어드민 톤. 강조색은 primary 하나만 쓴다.
+ */
+:root {
+  --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --primary: #3182f6;
+  --primary-strong: #1b64da;
+  --primary-weak: #e8f3ff;
+
+  --text: #191f28;
+  --text-sub: #4e5968;
+  --text-weak: #8b95a1;
+  --text-disabled: #b0b8c1;
+
+  --bg: #ffffff;
+  --bg-page: #f9fafb;
+  --card: #f2f4f6;
+  --line: #e5e8eb;
+  --hover: #f2f4f6;
+
+  --up: #03b26c;
+  --up-weak: #e5f8ef;
+  --down: #f04452;
+  --down-weak: #ffeeee;
+  --warn: #fe9800;
+  --warn-weak: #fff3e0;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px;
+
+  --fs-caption: 13px;
+  --fs-body: 15px;
+  --fs-lead: 17px;
+  --fs-h3: 20px;
+  --fs-h2: 26px;
+  --fs-h1: 32px;
+  --fs-display: 40px;
+
+  --sidebar-w: 248px;
+  --shadow-pop: 0 8px 24px rgba(0, 23, 51, 0.12);
+  --chart-1: #3182f6;
+  --chart-2: #8ec5ff;
+  --chart-3: #03b26c;
+  --chart-4: #fe9800;
+  --chart-5: #b0b8c1;
+}
