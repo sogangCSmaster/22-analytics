@@ -163,6 +163,7 @@ dependencies = [
  "analytics-ch",
  "analytics-pg",
  "anyhow",
+ "serde_json",
  "sqlx",
  "tokio",
  "uuid",

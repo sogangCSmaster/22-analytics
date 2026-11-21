@@ -2,26 +2,11 @@
 
 use analytics_core::channel::RuleMatch;
 use analytics_pg::attribution_settings::{self as s, AttributionSettings};
-use analytics_testkit::TestDb;
+use analytics_testkit::{ProjectBuilder, TestDb};
 use sqlx::PgPool;
 
 async fn project(pool: &PgPool, status: &str) -> u32 {
-    let org: i64 =
-        sqlx::query_scalar("INSERT INTO organizations (name) VALUES ('광고주') RETURNING id")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    let id: i32 = sqlx::query_scalar(
-        "INSERT INTO projects (org_id, name, public_key, salt, status) \
-         VALUES ($1, 'p', $2, 'salt', $3) RETURNING id",
-    )
-    .bind(org)
-    .bind(analytics_pg::new_public_key())
-    .bind(status)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    id as u32
+    ProjectBuilder::new().status(status).insert(pool).await
 }
 
 #[tokio::test(flavor = "multi_thread")]

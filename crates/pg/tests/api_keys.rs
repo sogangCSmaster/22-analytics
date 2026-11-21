@@ -1,25 +1,16 @@
 //! `api_keys` 통합 테스트 (격리 DB).
 
 use analytics_pg::api_keys::{self, SCOPE_ORDERS_WRITE};
-use analytics_testkit::TestDb;
+use analytics_testkit::{ProjectBuilder, TestDb};
 use sqlx::PgPool;
 
 async fn project(pool: &PgPool, name: &str) -> i32 {
-    let org: i64 = sqlx::query_scalar("INSERT INTO organizations (name) VALUES ($1) RETURNING id")
-        .bind(name)
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    sqlx::query_scalar(
-        "INSERT INTO projects (org_id, name, public_key, salt) VALUES ($1, $2, $3, $4) RETURNING id",
-    )
-    .bind(org)
-    .bind(name)
-    .bind(analytics_pg::new_public_key())
-    .bind(analytics_pg::new_salt_hex())
-    .fetch_one(pool)
-    .await
-    .unwrap()
+    let id = ProjectBuilder::new()
+        .org_name(name)
+        .name(name)
+        .insert(pool)
+        .await;
+    id as i32
 }
 
 #[tokio::test(flavor = "multi_thread")]

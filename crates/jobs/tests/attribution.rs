@@ -6,7 +6,7 @@ use analytics_ch::attribution::fixtures::*;
 use analytics_core::attribution::DAY_MS;
 use analytics_jobs::attribution::{self as job, Mode, worker};
 use analytics_pg::attribution_settings as settings;
-use analytics_testkit::TestDb;
+use analytics_testkit::{ProjectBuilder, TestDb};
 use clickhouse::Row;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -35,22 +35,7 @@ async fn project(pool: &PgPool) -> u32 {
 }
 
 async fn project_with_status(pool: &PgPool, status: &str) -> u32 {
-    let org: i64 =
-        sqlx::query_scalar("INSERT INTO organizations (name) VALUES ('광고주') RETURNING id")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    let id: i32 = sqlx::query_scalar(
-        "INSERT INTO projects (org_id, name, public_key, salt, status) \
-         VALUES ($1, 'p', $2, 'salt', $3) RETURNING id",
-    )
-    .bind(org)
-    .bind(analytics_pg::new_public_key())
-    .bind(status)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    id as u32
+    ProjectBuilder::new().status(status).insert(pool).await
 }
 
 async fn finals(db: &TestDb, p: u32) -> Vec<Final> {

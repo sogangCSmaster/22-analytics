@@ -7,7 +7,7 @@ use analytics_ch::orders::{self as ch_orders, OrderRow};
 use analytics_core::collect::rehash_member;
 use analytics_core::edge_auth;
 use analytics_core::orders::{MAX_AMOUNT, MAX_BATCH_ORDERS, OrderStatus};
-use analytics_testkit::TestDb;
+use analytics_testkit::{MEMBER_HASH, ProjectBuilder, TestDb, VID};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -18,8 +18,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use tower::ServiceExt;
 
 const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef-edge";
-const MEMBER: &str = "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92";
-const VID: &str = "5c8a0d27-0861-4c76-b062-bc938f8c6833";
+const MEMBER: &str = MEMBER_HASH;
 
 struct H {
     db: TestDb,
@@ -31,23 +30,13 @@ struct H {
 }
 
 async fn make_project(db: &TestDb, settings: Value) -> (i32, String) {
-    let org: i64 =
-        sqlx::query_scalar("INSERT INTO organizations (name) VALUES ('광고주') RETURNING id")
-            .fetch_one(&db.pg)
-            .await
-            .unwrap();
     let salt = analytics_pg::new_salt_hex();
-    let id: i32 = sqlx::query_scalar(
-        "INSERT INTO projects (org_id, name, public_key, salt, settings) VALUES ($1, 'p', $2, $3, $4) RETURNING id",
-    )
-    .bind(org)
-    .bind(analytics_pg::new_public_key())
-    .bind(&salt)
-    .bind(settings)
-    .fetch_one(&db.pg)
-    .await
-    .unwrap();
-    (id, salt)
+    let id = ProjectBuilder::new()
+        .settings(settings)
+        .salt(&salt)
+        .insert(&db.pg)
+        .await;
+    (id as i32, salt)
 }
 
 fn app_for(svc: Arc<OrderService>) -> Router {
