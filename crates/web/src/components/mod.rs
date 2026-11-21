@@ -196,7 +196,10 @@ mod render_tests {
         ] {
             let attr = |name: &str| -> f64 {
                 let key = format!("{name}=\"");
-                let start = html.find(&key).unwrap_or_else(|| panic!("{name} 속성 없음: {html}")) + key.len();
+                let start = html
+                    .find(&key)
+                    .unwrap_or_else(|| panic!("{name} 속성 없음: {html}"))
+                    + key.len();
                 html[start..].split('"').next().unwrap().parse().unwrap()
             };
             let ratio = attr("width") / attr("height");

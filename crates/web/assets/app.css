@@ -226,7 +226,8 @@
   padding: 14px 16px; border-radius: var(--radius-lg);
   background: var(--brand-gradient); color: #fff; box-shadow: 0 6px 18px rgba(75, 31, 143, 0.22);
 }
-.brand-wordmark { height: 20px; width: auto; display: block; align-self: center; }
+/* 워드마크는 원본 비율(180×50) 그대로 크기를 고정: flex 안에서 줄어들거나 늘어나지 않게 */
+.brand-wordmark { width: 72px; height: 20px; display: block; flex: 0 0 auto; align-self: center; object-fit: contain; max-width: none; }
 .brand-product { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255, 255, 255, 0.86); }
 .brand-symbol { display: block; object-fit: contain; }
 
@@ -257,7 +258,7 @@
   content: ""; position: absolute; right: -120px; bottom: -120px; width: 420px; height: 420px; border-radius: 50%;
   background: radial-gradient(circle, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 70%);
 }
-.login-hero .brand-wordmark { height: 30px; width: auto; align-self: flex-start; }
+.login-hero .login-wordmark { width: 115px; height: 32px; align-self: flex-start; }
 .login-hero h2 { font-size: 40px; line-height: 1.2; font-weight: 800; letter-spacing: -0.03em; margin: 0 0 var(--s-4); max-width: 520px; }
 .login-hero p { font-size: var(--fs-lead); line-height: 1.6; color: rgba(255, 255, 255, 0.86); margin: 0; max-width: 460px; }
 .login-hero .login-tag { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255, 255, 255, 0.7); }

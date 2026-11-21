@@ -18,6 +18,14 @@ pub fn BrandLogo() -> Element {
     }
 }
 
+/// 로그인 화면 브랜드 패널의 워드마크. 공식 사이트와 같은 크기(115×32, 원본 비율 3.6:1).
+#[component]
+pub fn LoginWordmark() -> Element {
+    rsx! {
+        img { class: "brand-wordmark login-wordmark", src: LOGO_WHITE, alt: "22Brix", width: "115", height: "32" }
+    }
+}
+
 /// 그라데이션 B 심볼 (로딩·빈 화면 등 작은 자리).
 #[component]
 pub fn BrandSymbol(#[props(default = 32)] size: u32) -> Element {

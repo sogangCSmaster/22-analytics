@@ -88,7 +88,7 @@ pub fn Login(next: String) -> Element {
     rsx! {
         div { class: "login-page",
             section { class: "login-hero",
-                img { class: "brand-wordmark", src: crate::components::brand::LOGO_WHITE, alt: "22Brix" }
+                crate::components::brand::LoginWordmark {}
                 div {
                     h2 { "광고 성과를" br {} "실제 매출로 봅니다" }
                     p { "매체마다 따로 잡히던 매출을 주문번호 기준으로 한 번만 세고, 기여 모델별로 나눠 보여줍니다." }
