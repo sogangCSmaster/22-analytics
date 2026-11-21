@@ -48,6 +48,7 @@ dependencies = [
 name = "analytics-ch"
 version = "0.1.0"
 dependencies = [
+ "analytics-ch",
  "analytics-core",
  "analytics-testkit",
  "anyhow",

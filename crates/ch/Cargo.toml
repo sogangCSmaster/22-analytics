@@ -17,6 +17,12 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+[features]
+# 테스트용 행 직접 삽입 도우미 (`attribution::fixtures`). 운영 빌드에는 들어가지 않는다.
+fixtures = []
+
 [dev-dependencies]
+# 통합 테스트에서 fixtures 사용
+analytics-ch = { path = ".", features = ["fixtures"] }
 tokio.workspace = true
 analytics-testkit.workspace = true

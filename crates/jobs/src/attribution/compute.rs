@@ -1,6 +1,6 @@
 //! 주문 1건의 기여 결과 계산과 기존 결과와의 비교 (I/O 없음).
 
-use analytics_ch::attribution::{AttributedRow, ExistingRow, OrderForAttribution, TouchRow};
+use analytics_ch::attribution::{AttributedRow, OrderForAttribution, TouchRow};
 use analytics_core::attribution::{
     DAY_MS, HOUR_MS, Model, Params, Touch, attribute, within_lookback,
 };
@@ -138,7 +138,7 @@ type Content = (String, String, Option<i64>, i64, u8);
 /// - `computed_at = max(now_ms, 기존 최대 computed_at + 1)`: ReplacingMergeTree가 반드시 새 행을 고른다.
 pub fn plan_writes(
     desired: Vec<AttributedRow>,
-    existing: &[ExistingRow],
+    existing: &[AttributedRow],
     now_ms: i64,
 ) -> Vec<AttributedRow> {
     let alive: HashMap<Key, Content> = existing
@@ -211,19 +211,9 @@ pub fn plan_writes(
                 ))
             })
             .map(|e| AttributedRow {
-                project_id: e.project_id,
-                model: e.model.clone(),
-                lookback_days: e.lookback_days,
-                order_id: e.order_id.clone(),
-                touch_index: e.touch_index,
-                channel: e.channel.clone(),
-                utm_campaign: e.utm_campaign.clone(),
-                touch_ts: e.touch_ts,
-                ordered_at: e.ordered_at,
-                amount: e.amount,
-                is_assist: e.is_assist,
                 computed_at,
                 is_deleted: 1,
+                ..e.clone()
             }),
     );
     out
@@ -287,22 +277,11 @@ mod tests {
             .collect()
     }
 
-    fn existing_from(rows: &[AttributedRow], computed_at: i64) -> Vec<ExistingRow> {
+    fn existing_from(rows: &[AttributedRow], computed_at: i64) -> Vec<AttributedRow> {
         rows.iter()
-            .map(|r| ExistingRow {
-                project_id: r.project_id,
-                order_id: r.order_id.clone(),
-                model: r.model.clone(),
-                lookback_days: r.lookback_days,
-                touch_index: r.touch_index,
-                ordered_at: r.ordered_at,
-                channel: r.channel.clone(),
-                utm_campaign: r.utm_campaign.clone(),
-                touch_ts: r.touch_ts,
-                amount: r.amount,
-                is_assist: r.is_assist,
-                is_deleted: r.is_deleted,
+            .map(|r| AttributedRow {
                 computed_at,
+                ..r.clone()
             })
             .collect()
     }

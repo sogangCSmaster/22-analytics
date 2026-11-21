@@ -8,7 +8,7 @@ pub mod compute;
 pub mod worker;
 
 use analytics_ch::attribution::{
-    self as ch_attr, BrokenOrder, ExistingRow, OrderForAttribution, TouchRow,
+    self as ch_attr, AttributedRow, BrokenOrder, OrderForAttribution, TouchRow,
 };
 use analytics_ch::{Client, ProjectScope};
 use analytics_core::attribution::DAY_MS;
@@ -201,7 +201,7 @@ async fn process_batch(
 
     // 3. 기존 결과
     let ids: Vec<String> = orders.iter().map(|o| o.order_id.clone()).collect();
-    let mut existing: HashMap<String, Vec<ExistingRow>> = HashMap::new();
+    let mut existing: HashMap<String, Vec<AttributedRow>> = HashMap::new();
     for r in ch_attr::latest_rows(ch, scope, &ids).await? {
         existing.entry(r.order_id.clone()).or_default().push(r);
     }
