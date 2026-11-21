@@ -313,6 +313,31 @@ pub struct AttributionSettingsDto {
 }
 
 // ---------------------------------------------------------------------------
+// S2S 비밀 키
+// ---------------------------------------------------------------------------
+
+/// `GET /v1/projects/{id}/api-keys` 항목. 평문 키와 해시는 넣지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiKeyDto {
+    pub id: i64,
+    /// 표시용 `sk_live_XXXXXXXX`
+    pub prefix: String,
+    pub scopes: Vec<String>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    /// 폐기 시각. `None`이면 사용 중
+    pub revoked_at: Option<String>,
+}
+
+/// `POST /v1/projects/{id}/api-keys` 응답. `secret`은 이 응답에서 한 번만 보여 준다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreatedApiKeyResponse {
+    pub key: ApiKeyDto,
+    /// 평문 비밀 키 `sk_live_...` (다시 조회할 수 없다)
+    pub secret: String,
+}
+
+// ---------------------------------------------------------------------------
 // 스니펫
 // ---------------------------------------------------------------------------
 

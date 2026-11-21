@@ -43,6 +43,8 @@ enum Cmd {
         #[arg(long)]
         project: Option<u32>,
     },
+    /// 만료된 대시보드 로그인 세션 삭제 (cron 등으로 주기 실행)
+    CleanupSessions,
     /// 상주 워커: 증분(ATTRIBUTION_INTERVAL_SECS, 기본 300초), 전체(매일 04:00 KST), 보존 검증(매시간)
     Worker,
     /// 슈퍼 관리자(대행사 관리자) 계정 부트스트랩.
@@ -58,6 +60,11 @@ enum Cmd {
         #[arg(long)]
         reset_password: bool,
     },
+}
+
+/// `cleanup-sessions` 본체. 지운 세션 수.
+async fn cleanup_sessions(pool: &analytics_pg::PgPool) -> anyhow::Result<u64> {
+    analytics_pg::sessions::delete_expired(pool).await
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -196,6 +203,11 @@ async fn main() -> anyhow::Result<()> {
                     println!("기존 계정을 슈퍼 관리자로 승격 (비밀번호 유지): id={id}")
                 }
             }
+        }
+        Cmd::CleanupSessions => {
+            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let n = cleanup_sessions(&pool).await?;
+            println!("만료 세션 {n}건 삭제");
         }
         Cmd::Worker => {
             let pool = analytics_pg::connect(&cli.database_url).await?;

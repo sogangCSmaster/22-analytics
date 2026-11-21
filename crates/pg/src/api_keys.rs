@@ -141,6 +141,16 @@ pub async fn list(pool: &PgPool, project_id: i32) -> anyhow::Result<Vec<ApiKey>>
     Ok(rows.into_iter().map(to_key).collect())
 }
 
+/// 폐기되지 않은 키 수.
+pub async fn count_active(pool: &PgPool, project_id: i32) -> anyhow::Result<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*) FROM api_keys WHERE project_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(project_id)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// 키를 폐기한다. 다른 프로젝트의 키이거나 이미 폐기됐으면 false.
 pub async fn revoke(pool: &PgPool, project_id: i32, key_id: i64) -> anyhow::Result<bool> {
     let n = sqlx::query(

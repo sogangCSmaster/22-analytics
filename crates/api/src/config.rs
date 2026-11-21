@@ -4,7 +4,7 @@ use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
-    /// `API_BIND`
+    /// `API_BIND` (기본 `0.0.0.0:8082`. 대시보드 개발 서버가 8080을 쓴다)
     pub bind: String,
     /// `DATABASE_URL`
     pub database_url: String,
@@ -40,7 +40,7 @@ pub const DEFAULT_DASHBOARD_ORIGINS: &str = "http://localhost:8080,http://127.0.
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
-            bind: "0.0.0.0:8080".into(),
+            bind: "0.0.0.0:8082".into(),
             database_url: "postgres://analytics:analytics@localhost:5432/analytics".into(),
             dashboard_origins: parse_origins(DEFAULT_DASHBOARD_ORIGINS),
             cookie_secure: false,

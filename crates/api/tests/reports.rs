@@ -36,6 +36,7 @@ fn now() -> OffsetDateTime {
 }
 
 /// 이벤트 하나. `start`면 세션 시작.
+#[allow(clippy::too_many_arguments)]
 fn ev(
     project: u32,
     name: &str,
@@ -192,6 +193,7 @@ async fn traffic(app: &TestApp, p: u32, q: u32) {
         .unwrap();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn attr_row(
     p: u32,
     model: &str,
@@ -783,7 +785,7 @@ async fn boundary_values_are_accepted() {
         ),
         url(p, "overlap?limit=1000&lookback=30"),
         url(p, "orders?limit=1000&offset=100000"),
-        url(p, &format!("revenue?model=time_decay&lookback=30")),
+        url(p, "revenue?model=time_decay&lookback=30"),
         url(p, "revenue?model=first_click"),
     ] {
         let r = get(app, c, &path).await;
