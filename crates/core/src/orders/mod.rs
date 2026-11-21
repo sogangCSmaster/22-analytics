@@ -12,6 +12,7 @@ pub mod api;
 
 use crate::collect::rehash_member;
 use crate::event::Event;
+use crate::ids::is_sha256_hex;
 use api::valid_idempotency_key;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -558,10 +559,6 @@ fn amount(v: Option<i64>, field: &'static str) -> Result<Option<i64>, OrderError
 pub fn valid_order_id(s: &str) -> bool {
     let n = s.chars().count();
     (1..=MAX_ORDER_ID_CHARS).contains(&n) && !s.chars().any(char::is_control)
-}
-
-fn is_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn parse_rfc3339_ms(s: &str) -> Option<i64> {

@@ -7,6 +7,7 @@ pub mod cookie;
 
 use crate::channel::{self, ChannelInput, ChannelRule};
 use crate::event::{self, Ecommerce, Event, Item, WireBatch, WireEvent, WireLanding, names};
+use crate::ids::is_sha256_hex;
 use crate::settings::TrackingSettings;
 use crate::urlx::{self, Campaign, clip, clip_owned};
 use serde::{Deserialize, Serialize};
@@ -385,10 +386,6 @@ fn host_of(s: &str) -> Option<String> {
 
 fn parse_uuid(s: &str) -> Option<Uuid> {
     Uuid::parse_str(s).ok().filter(|u| !u.is_nil())
-}
-
-fn is_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// 프로젝트 salt로 회원 해시를 다시 해싱한다. 프로젝트끼리 같은 회원을 연결할 수 없게 하기 위해서다.

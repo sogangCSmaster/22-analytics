@@ -94,6 +94,39 @@ pub fn verify(secret: &[u8], req: &SignedRequest<'_>, signature_hex: &str, now_m
     req.mac(secret).verify_slice(&sig).is_ok()
 }
 
+/// 서명에 들어가는 전달 헤더 값 (없으면 `""`). `/internal/collect`는 모두 비어 있다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Forwarded<'a> {
+    pub path: &'a str,
+    pub authorization: &'a str,
+    pub idempotency_key: &'a str,
+}
+
+/// 원점에서 받은 헤더 값 그대로 검증한다: 타임스탬프·서명 헤더가 없거나 숫자가 아니면 거부.
+pub fn verify_headers(
+    secret: &[u8],
+    internal_path: &str,
+    ts_header: Option<&str>,
+    sig_header: Option<&str>,
+    body: &[u8],
+    forwarded: Forwarded<'_>,
+    now_ms: i64,
+) -> bool {
+    let ts = ts_header.and_then(|v| v.parse::<i64>().ok());
+    let (Some(timestamp_ms), Some(sig)) = (ts, sig_header) else {
+        return false;
+    };
+    let req = SignedRequest {
+        internal_path,
+        timestamp_ms,
+        body,
+        forwarded_path: forwarded.path,
+        forwarded_authorization: forwarded.authorization,
+        idempotency_key: forwarded.idempotency_key,
+    };
+    verify(secret, &req, sig, now_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +158,41 @@ mod tests {
         ));
         assert!(!verify(b"secret", &r, &sig, 1000 + 6 * 60 * 1000));
         assert!(!verify(b"secret", &r, "zz", 1000));
+    }
+
+    #[test]
+    fn verify_headers_parses_and_checks() {
+        let body = br#"{"x":1}"#;
+        let o = orders_req(body);
+        let sig = sign(b"secret", &o);
+        let ts = NOW.to_string();
+        let fwd = Forwarded {
+            path: o.forwarded_path,
+            authorization: o.forwarded_authorization,
+            idempotency_key: o.idempotency_key,
+        };
+        let v = |ts: Option<&str>, sig: Option<&str>, fwd| {
+            verify_headers(b"secret", ORDERS_PATH, ts, sig, body, fwd, NOW)
+        };
+        assert!(v(Some(&ts), Some(&sig), fwd));
+        assert!(!v(None, Some(&sig), fwd));
+        assert!(!v(Some(&ts), None, fwd));
+        assert!(!v(Some("12x"), Some(&sig), fwd));
+        assert!(
+            !v(Some(&ts), Some(&sig), Forwarded::default()),
+            "전달 헤더도 서명 대상"
+        );
+        // collect: 전달 헤더 없음
+        let c = sign(b"secret", &SignedRequest::collect(NOW, body));
+        assert!(verify_headers(
+            b"secret",
+            COLLECT_PATH,
+            Some(&ts),
+            Some(&c),
+            body,
+            Forwarded::default(),
+            NOW
+        ));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use analytics_ch::ProjectScope;
 use analytics_ch::attribution::{self as a, AttributedRow, fixtures::*};
+use analytics_core::orders::OrderStatus;
 use analytics_testkit::TestDb;
 use uuid::Uuid;
 
@@ -48,7 +49,7 @@ async fn changed_orders_reads_latest_version_above_watermark() {
     .unwrap();
     // A의 새 버전 (부분 환불)
     let mut a2 = OrderFixture::confirmed(P, "A", Some(v), 1_000, 10, 300);
-    a2.status = "PARTIALLY_REFUNDED".into();
+    a2.status = OrderStatus::PartiallyRefunded.as_str().into();
     a2.refunded_amount = 400;
     a2.effective_amount = 600;
     insert_orders(&db.ch, &[a2]).await.unwrap();
@@ -60,7 +61,7 @@ async fn changed_orders_reads_latest_version_above_watermark() {
         .collect();
     assert_eq!(ids, vec![("B", 200, 2_000), ("A", 300, 600)]);
     assert_eq!(got[1].visitor_id, Some(v));
-    assert_eq!(got[1].status, "PARTIALLY_REFUNDED");
+    assert_eq!(got[1].status, OrderStatus::PartiallyRefunded);
     assert_eq!(got[1].ordered_at_ms, 10);
     assert_eq!(got[0].visitor_id, None);
 

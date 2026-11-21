@@ -8,6 +8,7 @@
 //! 시각은 모두 UTC epoch 밀리초(`i64`)로 주고받는다. `DateTime64(3)`의 RowBinary 표현과 같다.
 
 use crate::ProjectScope;
+use analytics_core::orders::OrderStatus;
 use clickhouse::{Client, Row};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -19,13 +20,31 @@ pub const IN_CHUNK: usize = 1_000;
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize, Deserialize)]
 pub struct OrderForAttribution {
     pub order_id: String,
-    pub status: String,
+    /// 읽을 때 [`OrderStatus`]로 파싱한다 (모르는 값이면 행 읽기 오류).
+    #[serde(with = "status_str")]
+    pub status: OrderStatus,
     #[serde(with = "clickhouse::serde::uuid::option")]
     pub visitor_id: Option<Uuid>,
     pub member_hash: String,
     pub effective_amount: i64,
     pub ordered_at_ms: i64,
     pub version: u64,
+}
+
+/// `orders.status` 문자열 ↔ [`OrderStatus`].
+mod status_str {
+    use analytics_core::orders::OrderStatus;
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    pub fn serialize<S: Serializer>(s: &OrderStatus, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(s.as_str())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<OrderStatus, D::Error> {
+        let s = String::deserialize(d)?;
+        OrderStatus::parse(&s)
+            .ok_or_else(|| D::Error::custom(format!("알 수 없는 주문 상태 {s:?}")))
+    }
 }
 
 /// identity_links 한 줄.
@@ -349,7 +368,9 @@ pub mod fixtures {
                 project_id,
                 order_id: order_id.into(),
                 source: "s2s".into(),
-                status: "CONFIRMED".into(),
+                status: analytics_core::orders::OrderStatus::Confirmed
+                    .as_str()
+                    .into(),
                 visitor_id,
                 member_hash: String::new(),
                 currency: "KRW".into(),

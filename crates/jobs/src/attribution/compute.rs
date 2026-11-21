@@ -8,12 +8,10 @@ use analytics_core::channel::{
     ChannelInput, ChannelRule, ORGANIC_SEARCH, ORGANIC_SOCIAL, REFERRAL, classify,
     is_touchpoint_channel,
 };
+use analytics_core::orders::OrderStatus;
 use analytics_pg::attribution_settings::AttributionSettings;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
-
-/// 취소 상태 (WP1 orders 계약).
-pub const STATUS_CANCELLED: &str = "CANCELLED";
 
 /// 기여 대상 채널인지 (direct·내부 이동은 항상 제외, 자연 유입·추천은 설정에 따름).
 pub fn is_eligible(channel: &str, settings: &AttributionSettings) -> bool {
@@ -70,7 +68,7 @@ pub fn select_touches(
 
 /// 주문이 기여 대상인지 (취소·0원 이하는 기존 결과를 삭제 표시만 한다).
 pub fn is_live(order: &OrderForAttribution) -> bool {
-    order.status != STATUS_CANCELLED && order.effective_amount > 0
+    order.status != OrderStatus::Cancelled && order.effective_amount > 0
 }
 
 /// 원하는 결과 행 (lookback × 모델). `computed_at`은 0으로 두고 [`plan_writes`]가 채운다.
@@ -232,7 +230,7 @@ mod tests {
     fn order(amount: i64) -> OrderForAttribution {
         OrderForAttribution {
             order_id: "ORD-9901".into(),
-            status: "CONFIRMED".into(),
+            status: OrderStatus::Confirmed,
             visitor_id: Some(Uuid::nil()),
             member_hash: String::new(),
             effective_amount: amount,
@@ -456,7 +454,7 @@ mod tests {
         let s = AttributionSettings::default();
         let mut o = order(100_000);
         assert!(is_live(&o));
-        o.status = "CANCELLED".into();
+        o.status = OrderStatus::Cancelled;
         assert!(!is_live(&o));
         assert!(desired_rows(P, &o, &manual_touches(), &s).is_empty());
         let zero = order(0);
@@ -464,7 +462,7 @@ mod tests {
         assert!(desired_rows(P, &zero, &manual_touches(), &s).is_empty());
         assert!(!is_live(&order(-5)));
         let mut partial = order(30_000);
-        partial.status = "PARTIALLY_REFUNDED".into();
+        partial.status = OrderStatus::PartiallyRefunded;
         assert!(is_live(&partial));
     }
 

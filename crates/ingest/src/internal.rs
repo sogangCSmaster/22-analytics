@@ -49,18 +49,14 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
 
 /// `/internal/collect` 서명 검증 (v1, 내부 경로 고정, 전달 헤더 없음).
 fn verify_collect(secret: &[u8], headers: &HeaderMap, body: &[u8], now_ms: i64) -> bool {
-    let ts = headers
-        .get(HEADER_TIMESTAMP)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<i64>().ok());
-    let sig = headers.get(HEADER_SIGNATURE).and_then(|v| v.to_str().ok());
-    let (Some(ts), Some(sig)) = (ts, sig) else {
-        return false;
-    };
-    edge_auth::verify(
+    let h = |name| headers.get(name).and_then(|v| v.to_str().ok());
+    edge_auth::verify_headers(
         secret,
-        &edge_auth::SignedRequest::collect(ts, body),
-        sig,
+        edge_auth::COLLECT_PATH,
+        h(HEADER_TIMESTAMP),
+        h(HEADER_SIGNATURE),
+        body,
+        edge_auth::Forwarded::default(),
         now_ms,
     )
 }

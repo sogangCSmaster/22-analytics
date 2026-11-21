@@ -81,20 +81,20 @@ async fn emulated_batch(State(st): State<OrdersHttp>, headers: HeaderMap, body: 
 }
 
 async fn internal(State(st): State<OrdersHttp>, headers: HeaderMap, body: Bytes) -> Response {
-    let ts = header(&headers, HEADER_TIMESTAMP).and_then(|v| v.parse::<i64>().ok());
-    let sig = header(&headers, HEADER_SIGNATURE);
-    let (Some(ts), Some(sig)) = (ts, sig) else {
-        return api_error(ApiError::InvalidSignature);
-    };
-    let signed = edge_auth::SignedRequest {
-        internal_path: edge_auth::ORDERS_PATH,
-        timestamp_ms: ts,
-        body: &body,
-        forwarded_path: header(&headers, HEADER_FORWARDED_PATH).unwrap_or(""),
-        forwarded_authorization: header(&headers, HEADER_FORWARDED_AUTHORIZATION).unwrap_or(""),
+    let forwarded = edge_auth::Forwarded {
+        path: header(&headers, HEADER_FORWARDED_PATH).unwrap_or(""),
+        authorization: header(&headers, HEADER_FORWARDED_AUTHORIZATION).unwrap_or(""),
         idempotency_key: header(&headers, HEADER_IDEMPOTENCY_KEY).unwrap_or(""),
     };
-    if !edge_auth::verify(&st.edge_secret, &signed, sig, now_ms()) {
+    if !edge_auth::verify_headers(
+        &st.edge_secret,
+        edge_auth::ORDERS_PATH,
+        header(&headers, HEADER_TIMESTAMP),
+        header(&headers, HEADER_SIGNATURE),
+        &body,
+        forwarded,
+        now_ms(),
+    ) {
         return api_error(ApiError::InvalidSignature);
     }
     let Some(kind) = header(&headers, HEADER_FORWARDED_PATH).and_then(Kind::from_path) else {
