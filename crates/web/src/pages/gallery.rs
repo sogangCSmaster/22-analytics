@@ -67,7 +67,7 @@ pub fn Gallery() -> Element {
                     Skeleton { width: "70%" }
                 }
                 EmptyState {
-                    icon: "📭",
+                    icon: crate::components::icon::IconName::Inbox,
                     title: "아직 받은 데이터가 없어요",
                     desc: "스크립트를 설치하면 몇 초 안에 여기에 나타나요.",
                     action: rsx! { Button { variant: Variant::Secondary, "설치 방법 보기" } },

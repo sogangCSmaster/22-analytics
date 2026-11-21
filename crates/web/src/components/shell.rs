@@ -2,6 +2,8 @@
 
 use crate::Route;
 use crate::api::{self, Method};
+use crate::components::brand::{BrandLogo, BrandSymbol};
+use crate::components::icon::{Icon, IconName};
 use crate::components::ui::{Button, Size, Skeleton, Toggle, Variant};
 use crate::logic::dates::{Preset, custom_range};
 use crate::logic::{errors::ApiError, prefs, table::contains_ci};
@@ -40,7 +42,7 @@ pub fn AuthGate() -> Element {
         _ => rsx! {
             div { class: "center-page", aria_busy: "true",
                 div { class: "boot",
-                    div { class: "brand-mark", "22" }
+                    BrandSymbol { size: 48 }
                     Skeleton { width: "160px", height: "12px" }
                 }
             }
@@ -84,30 +86,27 @@ pub fn Shell() -> Element {
                 div { class: "nav-backdrop", onclick: move |_| nav_open.set(false) }
             }
             aside { class: if nav_open() { "sidebar open" } else { "sidebar" }, aria_label: "메뉴",
-                div { class: "brand",
-                    div { class: "brand-mark", "22" }
-                    "Analytics"
-                }
+                BrandLogo {}
                 ProjectSwitcher { current: nav_pid }
                 nav { class: "nav", onclick: move |_| nav_open.set(false),
                     if let Some(p) = nav_pid {
                         div { class: "nav-section", "리포트" }
-                        NavLink { to: Route::Overview { pid: p }, label: "개요", icon: "◎" }
-                        NavLink { to: Route::Realtime { pid: p }, label: "실시간", icon: "●" }
-                        NavLink { to: Route::Acquisition { pid: p }, label: "유입", icon: "↗" }
-                        NavLink { to: Route::Pages { pid: p }, label: "페이지", icon: "▤" }
-                        NavLink { to: Route::Events { pid: p }, label: "이벤트", icon: "⚡" }
-                        NavLink { to: Route::Funnel { pid: p }, label: "전자상거래", icon: "▽" }
-                        NavLink { to: Route::Revenue { pid: p }, label: "실제 매출", icon: "₩" }
+                        NavLink { to: Route::Overview { pid: p }, label: "개요", icon: IconName::Overview }
+                        NavLink { to: Route::Realtime { pid: p }, label: "실시간", icon: IconName::Realtime }
+                        NavLink { to: Route::Acquisition { pid: p }, label: "유입", icon: IconName::Acquisition }
+                        NavLink { to: Route::Pages { pid: p }, label: "페이지", icon: IconName::Pages }
+                        NavLink { to: Route::Events { pid: p }, label: "이벤트", icon: IconName::Events }
+                        NavLink { to: Route::Funnel { pid: p }, label: "전자상거래", icon: IconName::Funnel }
+                        NavLink { to: Route::Revenue { pid: p }, label: "실제 매출", icon: IconName::Revenue }
                         div { class: "nav-section", "설정" }
-                        NavLink { to: Route::Settings { pid: p, tab: String::new() }, label: "설치·수집 설정", icon: "⚙" }
+                        NavLink { to: Route::Settings { pid: p, tab: String::new() }, label: "설치·수집 설정", icon: IconName::Settings }
                     }
                     if show_admin {
                         div { class: "nav-section", "관리" }
-                        NavLink { to: Route::Admin {}, label: "광고주·사용자", icon: "◇" }
+                        NavLink { to: Route::Admin {}, label: "광고주·사용자", icon: IconName::Admin }
                     }
                     div { class: "nav-section", "개발" }
-                    NavLink { to: Route::Gallery {}, label: "컴포넌트", icon: "□" }
+                    NavLink { to: Route::Gallery {}, label: "컴포넌트", icon: IconName::Components }
                 }
                 UserBlock {}
             }
@@ -117,7 +116,7 @@ pub fn Shell() -> Element {
                         class: "icon-btn menu-btn",
                         aria_label: "메뉴 열기",
                         onclick: move |_| nav_open.toggle(),
-                        "☰"
+                        Icon { name: IconName::Menu }
                     }
                     if uses_range {
                         RangePicker {}
@@ -133,7 +132,7 @@ pub fn Shell() -> Element {
                 main { id: "main", class: "content",
                     if forbidden {
                         crate::components::ui::EmptyState {
-                            icon: "🔒",
+                            icon: crate::components::icon::IconName::Lock,
                             title: "프로젝트를 열 수 없어요",
                             desc: "없는 프로젝트이거나 접근 권한이 없습니다. 담당 관리자에게 문의하세요.",
                             action: rsx! {
@@ -150,10 +149,10 @@ pub fn Shell() -> Element {
 }
 
 #[component]
-fn NavLink(to: Route, label: String, icon: String) -> Element {
+fn NavLink(to: Route, label: String, icon: IconName) -> Element {
     rsx! {
         Link { to, active_class: "active",
-            span { class: "nav-icon", aria_hidden: "true", "{icon}" }
+            span { class: "nav-icon", Icon { name: icon } }
             "{label}"
         }
     }
@@ -276,7 +275,7 @@ fn UserBlock() -> Element {
                         navigator().replace(Route::Login { next: String::new() });
                     });
                 },
-                "⎋"
+                Icon { name: IconName::Logout, size: 18 }
             }
         }
     }

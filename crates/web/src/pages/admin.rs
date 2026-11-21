@@ -100,7 +100,7 @@ fn OrgsTab(sup: bool) -> Element {
                 let rows: Vec<OrgDto> = list.into_iter().filter(|o| contains_ci(&o.name, &q()) || contains_ci(&o.memo, &q())).collect();
                 rsx! {
                     if rows.is_empty() {
-                        EmptyState { icon: "◇", title: "광고주가 없어요", desc: if sup { "위에서 첫 광고주를 만들어 보세요." } else { "관리자로 있는 광고주가 없습니다." } }
+                        EmptyState { icon: crate::components::icon::IconName::Admin, title: "광고주가 없어요", desc: if sup { "위에서 첫 광고주를 만들어 보세요." } else { "관리자로 있는 광고주가 없습니다." } }
                     } else {
                         div { class: "table-wrap",
                             table { class: "table",
@@ -399,7 +399,7 @@ fn UsersTab() -> Element {
                 }
                 {load(users, rsx! { SkeletonBlock { rows: 6 } }, |p| rsx! {
                     if p.items.is_empty() {
-                        EmptyState { icon: "👤", title: "사용자가 없어요", desc: "검색어를 바꿔 보세요." }
+                        EmptyState { icon: crate::components::icon::IconName::Admin, title: "사용자가 없어요", desc: "검색어를 바꿔 보세요." }
                     } else {
                         div { class: "muted", style: "margin-bottom: 8px", "{p.total}명" }
                         ul { class: "list",

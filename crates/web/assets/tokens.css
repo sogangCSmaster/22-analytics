@@ -1,32 +1,43 @@
 /*
  * 디자인 토큰 (docs/ARCHITECTURE.md §12.1)
- * PG 관리자 페이지 같은 깔끔한 B2B 어드민 톤. 강조색은 primary 하나만 쓴다.
+ * PG 관리자 페이지 같은 깔끔한 B2B 어드민 톤 + 22Brix 브랜드 컬러.
+ * 강조색은 primary(블루) 하나, 브랜드 그라데이션은 로고 타일·로그인·핵심 지표 카드에만 쓴다.
  */
 :root {
   --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  --primary: #3182f6;
-  --primary-strong: #1b64da;
-  --primary-weak: #e8f3ff;
+  /* 22Brix 브랜드 (22brix.co.kr 사이트 토큰 기준)
+     primary   hsl(217 91% 60%)  블루 — 버튼·선택·차트 1번
+     accent    hsl(272 66% 32%)  퍼플 — 브랜드 포인트
+     navy      hsl(230 71% 20%)  딥 네이비 — 본문·제목
+     red       hsl(5 82% 53%)    레드 — 감소·오류
+     green     hsl(160 84% 39%)  그린 — 증가·정상 */
+  --primary: #3b82f6;
+  --primary-strong: #2563eb;
+  --primary-weak: #ebf2fe;
+  --accent: #551c87;
+  --accent-weak: #f3ecfa;
+  --navy: #0f1b57;
+  --brand-gradient: linear-gradient(135deg, #1f2a8a 0%, #4b1f8f 38%, #a52a5c 68%, #e2452b 88%, #ef6a1e 100%);
 
-  --text: #191f28;
-  --text-sub: #4e5968;
-  --text-weak: #8b95a1;
-  --text-disabled: #b0b8c1;
+  --text: #0f1b57;
+  --text-sub: #4b5476;
+  --text-weak: #858ca6;
+  --text-disabled: #b4b9ca;
 
   --bg: #ffffff;
-  --bg-page: #f9fafb;
-  --card: #f2f4f6;
-  --line: #e5e8eb;
-  --hover: #f2f4f6;
+  --bg-page: #f5f6f9;
+  --card: #eef0f4;
+  --line: #e1e4eb;
+  --hover: #f1f3f7;
 
-  --up: #03b26c;
-  --up-weak: #e5f8ef;
-  --down: #f04452;
-  --down-weak: #ffeeee;
-  --warn: #fe9800;
-  --warn-weak: #fff3e0;
+  --up: #10b77f;
+  --up-weak: #e4f7f0;
+  --down: #e93525;
+  --down-weak: #fdecea;
+  --warn: #ef6a1e;
+  --warn-weak: #fef0e7;
 
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -44,11 +55,11 @@
   --fs-display: 40px;
 
   --sidebar-w: 248px;
-  --shadow-pop: 0 8px 24px rgba(0, 23, 51, 0.12);
-  --chart-1: #3182f6;
-  --chart-2: #90c2ff;
-  --chart-3: #1b64da;
-  --chart-4: #c9e2ff;
-  --chart-5: #b0b8c1;
-  --chart-6: #d1d6db;
+  --shadow-pop: 0 8px 24px rgba(15, 27, 87, 0.12);
+  --chart-1: #3b82f6;
+  --chart-2: #7827be;
+  --chart-3: #e93525;
+  --chart-4: #172a87;
+  --chart-5: #10b77f;
+  --chart-6: #b4b9ca;
 }

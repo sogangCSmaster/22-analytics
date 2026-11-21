@@ -56,7 +56,7 @@ mod render_tests {
             ShareBar { parts: vec![("a".to_string(), 0)] }
             FunnelChart { steps: vec![] }
             StatCard { label: EVIL, value: "1,844경", delta: -0.5, spark: vec![] }
-            EmptyState { icon: "?", title: EVIL, desc: "" }
+            EmptyState { icon: crate::components::icon::IconName::Search, title: EVIL, desc: "" }
         });
         assert_escaped(&html);
         assert!(html.contains("▼ 50%"));
@@ -72,7 +72,10 @@ mod render_tests {
             assert!(html.starts_with("<svg"), "{name:?}: {html}");
             assert!(html.contains("aria-hidden=\"true\""), "{name:?}: {html}");
             assert!(html.contains("stroke=\"currentColor\""), "{name:?}: {html}");
-            assert!(!html.chars().any(|c| (c as u32) > 0x2000), "{name:?}: 기호·이모지 금지: {html}");
+            assert!(
+                !html.chars().any(|c| (c as u32) > 0x2000),
+                "{name:?}: 기호·이모지 금지: {html}"
+            );
         }
     }
 

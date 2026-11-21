@@ -52,7 +52,7 @@ pub fn Events(pid: ReadSignal<i32>) -> Element {
         Card {
             {load(res, rsx! { SkeletonBlock { rows: 8 } }, |mut rows| {
                 if rows.is_empty() {
-                    return rsx! { EmptyState { icon: "⚡", title: "이 기간에 받은 이벤트가 없어요", desc: "at('event', '이벤트_이름', {{ 속성 }}) 으로 원하는 행동을 기록할 수 있어요." } };
+                    return rsx! { EmptyState { icon: crate::components::icon::IconName::Events, title: "이 기간에 받은 이벤트가 없어요", desc: "at('event', '이벤트_이름', {{ 속성 }}) 으로 원하는 행동을 기록할 수 있어요." } };
                 }
                 sort_rows(&mut rows, sort(), |a, b, k| match k {
                     Col::Name => cmp_text(&a.event_name, &b.event_name),
@@ -159,7 +159,7 @@ fn PropertyDrawer(pid: i32, event: String, onclose: EventHandler<()>) -> Element
                 let total: u64 = rows.iter().map(|r| r.count).sum();
                 rsx! {
                     if rows.is_empty() {
-                        EmptyState { icon: "🔎", title: "값이 없어요", desc: "이 이벤트에 해당 속성이 기록되지 않았거나 이름이 다릅니다. 속성 이름을 확인해 보세요." }
+                        EmptyState { icon: crate::components::icon::IconName::Search, title: "값이 없어요", desc: "이 이벤트에 해당 속성이 기록되지 않았거나 이름이 다릅니다. 속성 이름을 확인해 보세요." }
                     } else {
                         div { class: "muted", "상위 {rows.len()}개 값 · 합계 {format::count(total)}회" }
                         BarList { items: rows.iter().map(|r| (if r.value.is_empty() { "(빈 값)".to_string() } else { r.value.clone() }, r.count as i64)).collect::<Vec<_>>(), show_share: true }

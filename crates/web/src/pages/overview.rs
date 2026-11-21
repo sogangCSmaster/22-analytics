@@ -119,7 +119,7 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                 if empty {
                     Card { filled: true,
                         EmptyState {
-                            icon: "🛰",
+                            icon: crate::components::icon::IconName::Realtime,
                             title: "아직 받은 데이터가 없어요",
                             desc: "사이트에 스크립트를 설치하면 몇 초 안에 방문 기록이 나타나요. 설치했다면 실시간 화면에서 확인해 보세요.",
                             action: rsx! {
@@ -163,7 +163,7 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                 let total: f64 = s[0].values.iter().sum();
                 rsx! {
                     if cur.points.is_empty() {
-                        EmptyState { icon: "📈", title: "표시할 기간이 없어요", desc: "기간을 다시 선택해 주세요." }
+                        EmptyState { icon: crate::components::icon::IconName::Overview, title: "표시할 기간이 없어요", desc: "기간을 다시 선택해 주세요." }
                     } else {
                         LineChart {
                             series: s,
@@ -184,7 +184,7 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                     let items: Vec<(String, i64)> = rows.iter().map(|r| (labels::channel(&r.channel), r.sessions as i64)).collect();
                     rsx! {
                         if rows.is_empty() {
-                            EmptyState { icon: "↗", title: "유입 기록이 없어요", desc: "이 기간에 시작된 세션이 없습니다." }
+                            EmptyState { icon: crate::components::icon::IconName::Acquisition, title: "유입 기록이 없어요", desc: "이 기간에 시작된 세션이 없습니다." }
                         } else {
                             ShareBar { parts: top_with_rest(&items, 4) }
                             div { style: "margin-top: 20px",
@@ -199,7 +199,7 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                 actions: rsx! { Link { class: "link", to: Route::Pages { pid: pid() }, "전체 보기 →" } },
                 {load(pages, rsx! { SkeletonBlock { rows: 6 } }, |rows| rsx! {
                     if rows.is_empty() {
-                        EmptyState { icon: "▤", title: "페이지 조회가 없어요", desc: "이 기간에 기록된 페이지뷰가 없습니다." }
+                        EmptyState { icon: crate::components::icon::IconName::Pages, title: "페이지 조회가 없어요", desc: "이 기간에 기록된 페이지뷰가 없습니다." }
                     } else {
                         div { class: "table-wrap",
                             table { class: "table",

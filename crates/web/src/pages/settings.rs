@@ -196,7 +196,7 @@ fn ApiKeys(pid: i32, is_admin: bool) -> Element {
             }
             {load(keys, rsx! { SkeletonBlock { rows: 2 } }, |list| rsx! {
                 if list.is_empty() {
-                    EmptyState { icon: "🔑", title: "아직 만든 키가 없어요", desc: if is_admin { "‘새 키 만들기’를 눌러 주문 서버용 키를 발급하세요." } else { "광고주 관리자가 키를 발급할 수 있어요." } }
+                    EmptyState { icon: crate::components::icon::IconName::Lock, title: "아직 만든 키가 없어요", desc: if is_admin { "‘새 키 만들기’를 눌러 주문 서버용 키를 발급하세요." } else { "광고주 관리자가 키를 발급할 수 있어요." } }
                 } else {
                     div { class: "table-wrap",
                         table { class: "table",
@@ -393,7 +393,7 @@ fn OriginsTab(pid: i32, can_edit: bool) -> Element {
             }
             {load(res, rsx! { SkeletonBlock { rows: 3 } }, |o| rsx! {
                 if o.origins.is_empty() {
-                    EmptyState { icon: "🌐", title: "허용 도메인이 없어요", desc: "도메인을 추가해야 사이트에서 보낸 이벤트를 받을 수 있어요." }
+                    EmptyState { icon: crate::components::icon::IconName::Acquisition, title: "허용 도메인이 없어요", desc: "도메인을 추가해야 사이트에서 보낸 이벤트를 받을 수 있어요." }
                 } else {
                     ul { class: "list",
                         for d in o.origins.iter() {
@@ -475,7 +475,7 @@ fn RulesTab(pid: i32, can_edit: bool) -> Element {
             p { class: "page-desc", style: "margin: 0 0 16px", "기본 분류(네이버·메타·구글 등)보다 먼저 적용돼요. 우선순위 숫자가 작을수록 먼저 봅니다. 바꾸면 과거 데이터에도 다시 적용돼요." }
             {load(res, rsx! { SkeletonBlock { rows: 3 } }, |rules| rsx! {
                 if rules.is_empty() {
-                    EmptyState { icon: "🧭", title: "직접 만든 규칙이 없어요", desc: "예: utm_source=naver 이고 캠페인이 shop_으로 시작하면 ‘네이버 쇼핑’으로 분류" }
+                    EmptyState { icon: crate::components::icon::IconName::Settings, title: "직접 만든 규칙이 없어요", desc: "예: utm_source=naver 이고 캠페인이 shop_으로 시작하면 ‘네이버 쇼핑’으로 분류" }
                 } else {
                     div { class: "table-wrap",
                         table { class: "table",
@@ -759,7 +759,7 @@ fn SpendTab(pid: i32, can_edit: bool) -> Element {
                 let by = spend_by_channel(&s.rows);
                 rsx! {
                     if s.rows.is_empty() {
-                        EmptyState { icon: "💸", title: "이 기간 광고비가 없어요", desc: "CSV를 올리면 실제 매출 화면에서 ROAS를 볼 수 있어요." }
+                        EmptyState { icon: crate::components::icon::IconName::Revenue, title: "이 기간 광고비가 없어요", desc: "CSV를 올리면 실제 매출 화면에서 ROAS를 볼 수 있어요." }
                     } else {
                         div { class: "kv", style: "margin-bottom: 16px", span { class: "muted", "합계" } strong { "{format::won(total)}" } }
                         crate::components::chart::BarList { items: by.iter().map(|(c, v)| (labels::channel(c), *v)).collect::<Vec<_>>(), money: true, show_share: true }

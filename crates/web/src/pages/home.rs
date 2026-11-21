@@ -35,7 +35,7 @@ pub fn Home() -> Element {
         div { class: "center-page",
             div { class: "card login-card",
                 EmptyState {
-                    icon: "📂",
+                    icon: crate::components::icon::IconName::Inbox,
                     title: "아직 볼 수 있는 프로젝트가 없어요",
                     desc: "광고주 관리자에게 멤버 추가를 요청하세요. 추가되면 다시 로그인하면 됩니다.",
                 }

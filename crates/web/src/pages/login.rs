@@ -65,17 +65,23 @@ pub fn Login(next: String) -> Element {
     };
 
     rsx! {
-        div { class: "center-page login-page",
+        div { class: "login-page",
+            section { class: "login-hero",
+                img { class: "brand-wordmark", src: crate::components::brand::LOGO_WHITE, alt: "22Brix" }
+                div {
+                    h2 { "광고 성과를" br {} "실제 매출로 봅니다" }
+                    p { "매체마다 따로 잡히던 매출을 주문번호 기준으로 한 번만 세고, 기여 모델별로 나눠 보여줍니다." }
+                }
+                span { class: "login-tag", "22Brix · AI Growth Marketing" }
+            }
+            div { class: "login-panel",
             form {
                 class: "card login-card",
                 onsubmit: move |e| {
                     e.prevent_default();
                     submit();
                 },
-                div { class: "brand login-brand",
-                    div { class: "brand-mark", "22" }
-                    "Analytics"
-                }
+                crate::components::brand::BrandSymbol { size: 40 }
                 h1 { class: "login-title", "로그인" }
                 p { class: "page-desc", "광고 성과와 실제 매출을 한 곳에서 확인하세요." }
                 div { class: "login-fields",
@@ -101,6 +107,7 @@ pub fn Login(next: String) -> Element {
                 }
                 Button { size: Size::Lg, disabled: busy(), if busy() { "확인 중…" } else { "로그인" } }
                 p { class: "login-foot", "계정이 없으면 대행사 담당자에게 요청하세요." }
+            }
             }
         }
     }

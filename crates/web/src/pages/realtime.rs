@@ -72,7 +72,7 @@ pub fn Realtime(pid: ReadSignal<i32>) -> Element {
                 }
                 Card { title: "분당 페이지뷰 (최근 30분)",
                     if d.per_minute.iter().all(|m| m.pageviews == 0) {
-                        EmptyState { icon: "⏱", title: "최근 30분 동안 조회가 없어요", desc: "설치를 확인하려면 사이트를 새 창으로 열어 보세요. 몇 초 안에 막대가 올라옵니다." }
+                        EmptyState { icon: crate::components::icon::IconName::Realtime, title: "최근 30분 동안 조회가 없어요", desc: "설치를 확인하려면 사이트를 새 창으로 열어 보세요. 몇 초 안에 막대가 올라옵니다." }
                     } else {
                         ColumnChart {
                             values: d.per_minute.iter().map(|m| m.pageviews as f64).collect::<Vec<_>>(),
@@ -85,7 +85,7 @@ pub fn Realtime(pid: ReadSignal<i32>) -> Element {
                 }
                 Card { title: "지금 많이 보는 페이지",
                     if d.top_pages.is_empty() {
-                        EmptyState { icon: "▤", title: "아직 없어요", desc: "최근 30분 동안 조회된 페이지가 없습니다." }
+                        EmptyState { icon: crate::components::icon::IconName::Pages, title: "아직 없어요", desc: "최근 30분 동안 조회된 페이지가 없습니다." }
                     } else {
                         BarList { items: d.top_pages.iter().map(|p| (format::path(&p.path), p.pageviews as i64)).collect::<Vec<_>>(), show_share: true }
                     }

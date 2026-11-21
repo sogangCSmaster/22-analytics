@@ -35,7 +35,7 @@ pub fn Acquisition(pid: ReadSignal<i32>) -> Element {
         {load(res, rsx! { Card { SkeletonBlock { rows: 8 } } }, |mut rows| {
             if rows.is_empty() {
                 return rsx! {
-                    Card { EmptyState { icon: "↗", title: "이 기간에 유입이 없어요", desc: "기간을 넓히거나 설치 상태를 확인해 주세요." } }
+                    Card { EmptyState { icon: crate::components::icon::IconName::Acquisition, title: "이 기간에 유입이 없어요", desc: "기간을 넓히거나 설치 상태를 확인해 주세요." } }
                 };
             }
             let total_sessions: u64 = rows.iter().map(|r| r.sessions).sum();

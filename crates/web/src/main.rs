@@ -119,8 +119,9 @@ fn main() {
 fn App() -> Element {
     state::AppCtx::provide();
     rsx! {
-        document::Title { "22 Analytics" }
+        document::Title { "22Brix Analytics" }
         document::Link { rel: "stylesheet", href: PRETENDARD }
+        document::Link { rel: "icon", r#type: "image/png", href: components::brand::FAVICON }
         document::Stylesheet { href: TOKENS_CSS }
         document::Stylesheet { href: MAIN_CSS }
         document::Stylesheet { href: APP_CSS }

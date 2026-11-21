@@ -217,3 +217,54 @@
 .c3 { background: var(--chart-4); }
 .c4 { background: var(--chart-5); }
 .c5 { background: var(--chart-6); }
+
+/* ===== 22Brix 브랜드 ===== */
+.brand {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-2);
+  padding: 14px 16px; border-radius: var(--radius-lg);
+  background: var(--brand-gradient); color: #fff; box-shadow: 0 6px 18px rgba(75, 31, 143, 0.22);
+}
+.brand-wordmark { height: 20px; width: auto; display: block; align-self: center; }
+.brand-product { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255, 255, 255, 0.86); }
+.brand-symbol { display: block; object-fit: contain; }
+
+/* 메뉴 아이콘: 선 아이콘이 글자색을 따른다 */
+.nav-icon { width: 20px; height: 20px; display: inline-grid; place-items: center; font-size: 0; opacity: 1; color: var(--text-weak); flex-shrink: 0; }
+.nav a:hover .nav-icon { color: var(--text-sub); }
+.nav a.active .nav-icon { color: var(--primary); }
+.icon { display: block; flex-shrink: 0; }
+.icon-btn .icon { margin: auto; }
+
+/* 핵심 지표(실제 매출) 카드: 브랜드 그라데이션 */
+.card.primary { background: var(--brand-gradient); box-shadow: 0 10px 28px rgba(75, 31, 143, 0.25); }
+
+/* 빈 화면 아이콘 */
+.empty-icon { color: var(--primary); background: var(--primary-weak); font-size: 0; }
+
+/* 제목은 브랜드 네이비 */
+.page-title, .card-title, .drawer-title, .stat-value { color: var(--navy); }
+.card.primary .stat-value { color: #fff; }
+
+/* 로그인: 왼쪽 브랜드 패널 + 오른쪽 폼 */
+.login-page { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, 1fr); min-height: 100vh; padding: 0; place-items: stretch; background: var(--bg); }
+.login-hero {
+  position: relative; overflow: hidden; background: var(--brand-gradient); color: #fff;
+  display: flex; flex-direction: column; justify-content: space-between; padding: 48px 56px;
+}
+.login-hero::after {
+  content: ""; position: absolute; right: -120px; bottom: -120px; width: 420px; height: 420px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 70%);
+}
+.login-hero .brand-wordmark { height: 30px; width: auto; align-self: flex-start; }
+.login-hero h2 { font-size: 40px; line-height: 1.2; font-weight: 800; letter-spacing: -0.03em; margin: 0 0 var(--s-4); max-width: 520px; }
+.login-hero p { font-size: var(--fs-lead); line-height: 1.6; color: rgba(255, 255, 255, 0.86); margin: 0; max-width: 460px; }
+.login-hero .login-tag { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255, 255, 255, 0.7); }
+.login-panel { display: grid; place-items: center; padding: var(--s-6) var(--s-4); background: var(--bg-page); }
+.login-card { box-shadow: var(--shadow-pop); border: 0; }
+.login-card .brand-symbol { margin-bottom: var(--s-2); }
+@media (max-width: 860px) {
+  .login-page { grid-template-columns: 1fr; }
+  .login-hero { padding: 28px 24px; gap: var(--s-5); }
+  .login-hero h2 { font-size: 28px; }
+  .login-hero::after { display: none; }
+}

@@ -273,10 +273,15 @@ pub fn TextField(
 }
 
 #[component]
-pub fn EmptyState(icon: String, title: String, desc: String, action: Option<Element>) -> Element {
+pub fn EmptyState(
+    icon: crate::components::icon::IconName,
+    title: String,
+    desc: String,
+    action: Option<Element>,
+) -> Element {
     rsx! {
         div { class: "empty",
-            div { class: "empty-icon", "{icon}" }
+            div { class: "empty-icon", crate::components::icon::Icon { name: icon, size: 26 } }
             div { class: "empty-title", "{title}" }
             div { class: "empty-desc", "{desc}" }
             if let Some(a) = action {

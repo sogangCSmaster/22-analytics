@@ -180,7 +180,7 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                 }
                 {load(revenue, rsx! { SkeletonBlock { rows: 5 } }, |r| {
                     if r.channels.is_empty() {
-                        return rsx! { EmptyState { icon: "₩", title: "기여 연산된 주문이 없어요", desc: "주문 서버 연동(S2S) 후 기여 연산이 끝나면 매체별 매출이 나타나요. 연산은 몇 분마다 돌아요." } };
+                        return rsx! { EmptyState { icon: crate::components::icon::IconName::Revenue, title: "기여 연산된 주문이 없어요", desc: "주문 서버 연동(S2S) 후 기여 연산이 끝나면 매체별 매출이 나타나요. 연산은 몇 분마다 돌아요." } };
                     }
                     let msg = explain(&r);
                     rsx! {
@@ -234,7 +234,7 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                 Card { title: "중복이 생기는 매체 조합",
                     {load(overlap, rsx! { SkeletonBlock { rows: 5 } }, |o| rsx! {
                         if o.paths.is_empty() {
-                            EmptyState { icon: "⇄", title: "여러 매체를 거친 주문이 없어요", desc: "한 매체만 거쳐 구매한 주문뿐이라 중복이 없습니다." }
+                            EmptyState { icon: crate::components::icon::IconName::Acquisition, title: "여러 매체를 거친 주문이 없어요", desc: "한 매체만 거쳐 구매한 주문뿐이라 중복이 없습니다." }
                         } else {
                             p { class: "page-desc", style: "margin: 0 0 16px",
                                 "서로 다른 매체를 2개 이상 거친 주문 "
@@ -247,7 +247,7 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                 Card { title: "최근 주문",
                     {load(orders, rsx! { SkeletonBlock { rows: 6 } }, |o| rsx! {
                         if o.rows.is_empty() {
-                            EmptyState { icon: "🧾", title: "이 기간에 주문이 없어요", desc: "주문은 S2S 주문 API로 받은 것만 보여요." }
+                            EmptyState { icon: crate::components::icon::IconName::Revenue, title: "이 기간에 주문이 없어요", desc: "주문은 S2S 주문 API로 받은 것만 보여요." }
                         } else {
                             div { class: "table-wrap",
                                 table { class: "table",

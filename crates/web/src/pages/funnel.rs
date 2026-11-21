@@ -43,7 +43,7 @@ pub fn Funnel(pid: ReadSignal<i32>) -> Element {
                 return rsx! {
                     Card {
                         EmptyState {
-                            icon: "▽",
+                            icon: crate::components::icon::IconName::Funnel,
                             title: "전자상거래 이벤트가 없어요",
                             desc: "설정에서 '전자상거래'를 켜고 view_item · add_to_cart · begin_checkout · purchase 이벤트를 보내면 단계별 전환이 나타나요.",
                             action: rsx! { Link { class: "btn btn-secondary", to: Route::Settings { pid: pid(), tab: "tracking".into() }, "수집 설정 열기" } },

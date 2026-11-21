@@ -61,7 +61,7 @@ pub fn Pages(pid: ReadSignal<i32>) -> Element {
                 if rows.is_empty() {
                     return rsx! {
                         EmptyState {
-                            icon: "▤",
+                            icon: crate::components::icon::IconName::Pages,
                             title: if input().trim().is_empty() { "페이지 조회가 없어요" } else { "검색 결과가 없어요" },
                             desc: if input().trim().is_empty() { "이 기간에 기록된 페이지뷰가 없습니다." } else { "경로 일부만 입력해 보세요. 대소문자는 구분하지 않아요." },
                         }
