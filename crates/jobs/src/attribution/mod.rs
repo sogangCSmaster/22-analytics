@@ -229,15 +229,47 @@ async fn process_batch(
     Ok((written_orders, writes.len()))
 }
 
-/// 매출 보존 검증 (§7.4). (project_id, 깨진 주문) 목록.
+/// 매시간 보존 검증이 보는 기간 (일). 기본 lookback(30일)과 늦게 도착한 환불을 덮는다.
+pub const DEFAULT_CONSERVATION_DAYS: u32 = 40;
+
+/// 보존 검증 범위.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConservationWindow {
+    /// 모든 주문 (주간 워커, CLI)
+    Full,
+    /// `ordered_at`이 최근 `days`일 안인 주문만 (매시간 워커)
+    Recent { days: u32, now_ms: i64 },
+}
+
+impl ConservationWindow {
+    fn ordered_since_ms(self) -> Option<i64> {
+        match self {
+            Self::Full => None,
+            Self::Recent { days, now_ms } => Some(now_ms - i64::from(days) * DAY_MS),
+        }
+    }
+}
+
+/// 매출 보존 검증 (§7.4), 전체 주문. (project_id, 깨진 주문) 목록.
 pub async fn conservation_check(
     ch: &Client,
     pg: &PgPool,
     project: Option<u32>,
 ) -> anyhow::Result<Vec<(u32, BrokenOrder)>> {
+    conservation_check_window(ch, pg, project, ConservationWindow::Full).await
+}
+
+/// 매출 보존 검증 (§7.4), 범위 지정.
+pub async fn conservation_check_window(
+    ch: &Client,
+    pg: &PgPool,
+    project: Option<u32>,
+    window: ConservationWindow,
+) -> anyhow::Result<Vec<(u32, BrokenOrder)>> {
+    let since = window.ordered_since_ms();
     let mut out = Vec::new();
     for p in target_projects(pg, project).await? {
-        let broken = ch_attr::conservation_check(ch, ProjectScope::authorized(p)).await?;
+        let broken = ch_attr::conservation_check(ch, ProjectScope::authorized(p), since).await?;
         out.extend(broken.into_iter().map(|b| (p, b)));
     }
     Ok(out)

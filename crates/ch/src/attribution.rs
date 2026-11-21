@@ -110,6 +110,10 @@ fn placeholders(n: usize) -> String {
 }
 
 /// `version > since_version`인 주문 (version 오름차순).
+///
+/// 프로젝트 주문 전체에 FINAL을 걸지 않는다: 먼저 FINAL 없이 바뀐 주문 ID만 고르고
+/// (작은 집합), 그 ID들에만 FINAL을 건다. 정렬 키가 `(project_id, order_id)`라서 IN 조건으로
+/// 읽을 그래뉼이 줄어든다. 어떤 버전이 watermark보다 크면 최신 버전도 크므로 결과는 같다.
 pub async fn changed_orders(
     client: &Client,
     scope: ProjectScope,
@@ -117,9 +121,13 @@ pub async fn changed_orders(
 ) -> anyhow::Result<Vec<OrderForAttribution>> {
     Ok(client
         .query(&format!(
-            "{ORDER_COLS} AND version > ? ORDER BY version, order_id"
+            "{ORDER_COLS} \
+             AND order_id IN (SELECT order_id FROM orders WHERE project_id = ? AND version > ?) \
+             AND version > ? ORDER BY version, order_id"
         ))
         .bind(scope.project_id())
+        .bind(scope.project_id())
+        .bind(since_version)
         .bind(since_version)
         .fetch_all()
         .await?)
@@ -300,10 +308,15 @@ pub async fn insert_rows(
 }
 
 /// 매출 보존 검증 (§7.4): raw_sum 외 모델에서 Σamount ≠ effective_amount인 주문.
+///
+/// `ordered_since_ms`가 있으면 `ordered_at >= ordered_since_ms`인 주문만 본다. 두 테이블 모두
+/// `ordered_at` 월 파티션이라 오래된 파티션을 읽지 않는다 (매시간 검증용). `None`이면 전체.
 pub async fn conservation_check(
     client: &Client,
     scope: ProjectScope,
+    ordered_since_ms: Option<i64>,
 ) -> anyhow::Result<Vec<BrokenOrder>> {
+    let since = ordered_since_ms.unwrap_or(0);
     Ok(client
         .query(
             "SELECT a.model AS model, a.lookback_days AS lookback_days, a.order_id AS order_id, \
@@ -312,16 +325,20 @@ pub async fn conservation_check(
                SELECT model, lookback_days, order_id, sum(amount) AS s \
                FROM attributed_revenue FINAL \
                WHERE project_id = ? AND model != 'raw_sum' AND is_deleted = 0 \
+                 AND ordered_at >= fromUnixTimestamp64Milli(toInt64(?), 'UTC') \
                GROUP BY model, lookback_days, order_id \
              ) AS a \
              INNER JOIN ( \
                SELECT order_id, effective_amount FROM orders FINAL WHERE project_id = ? \
+                 AND ordered_at >= fromUnixTimestamp64Milli(toInt64(?), 'UTC') \
              ) AS o ON a.order_id = o.order_id \
              WHERE a.s != o.effective_amount \
              ORDER BY order_id, model, lookback_days",
         )
         .bind(scope.project_id())
+        .bind(since)
         .bind(scope.project_id())
+        .bind(since)
         .fetch_all()
         .await?)
 }

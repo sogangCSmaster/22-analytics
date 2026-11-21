@@ -1,6 +1,7 @@
-//! 상주 워커: 증분 기여 연산(기본 5분), 전체 재연산(매일 04:00 KST), 보존 검증(매시간).
+//! 상주 워커: 증분 기여 연산(기본 5분), 전체 재연산(매일 04:00 KST),
+//! 보존 검증(매시간 최근 40일 주문, 매주 전체).
 
-use super::{DEFAULT_FULL_DAYS, Mode};
+use super::{ConservationWindow, DEFAULT_CONSERVATION_DAYS, DEFAULT_FULL_DAYS, Mode};
 use analytics_ch::Client;
 use analytics_pg::PgPool;
 use std::collections::BTreeMap;
@@ -14,8 +15,12 @@ pub use analytics_core::timeutil::KST_OFFSET_MS;
 pub struct WorkerConfig {
     /// 증분 실행 간격
     pub incremental_every: Duration,
-    /// 보존 검증 간격
+    /// 보존 검증 간격 (최근 `conservation_days`일 주문)
     pub conservation_every: Duration,
+    /// 매시간 보존 검증이 보는 기간 (일)
+    pub conservation_days: u32,
+    /// 전체 주문 보존 검증 간격
+    pub conservation_full_every: Duration,
     /// 전체 재연산 시각 (KST 시)
     pub full_hour_kst: u32,
     pub full_days: u32,
@@ -26,6 +31,8 @@ impl Default for WorkerConfig {
         Self {
             incremental_every: Duration::from_secs(300),
             conservation_every: Duration::from_secs(3_600),
+            conservation_days: DEFAULT_CONSERVATION_DAYS,
+            conservation_full_every: Duration::from_secs(7 * 24 * 3_600),
             full_hour_kst: 4,
             full_days: DEFAULT_FULL_DAYS,
         }
@@ -57,6 +64,18 @@ pub fn next_daily_run_ms(now_ms: i64, hour_kst: u32) -> i64 {
     next - KST_OFFSET_MS
 }
 
+/// 이번 보존 검증 범위: 전체 검증 차례면 전체, 아니면 최근 `conservation_days`일.
+pub fn conservation_window(cfg: &WorkerConfig, full_due: bool, now_ms: i64) -> ConservationWindow {
+    if full_due {
+        ConservationWindow::Full
+    } else {
+        ConservationWindow::Recent {
+            days: cfg.conservation_days,
+            now_ms,
+        }
+    }
+}
+
 fn instant_at(epoch_ms: i64) -> Instant {
     let wait = (epoch_ms - super::now_ms()).max(0) as u64;
     Instant::now() + Duration::from_millis(wait)
@@ -76,6 +95,7 @@ pub async fn run(
     let mut shutdown = std::pin::pin!(shutdown);
     let mut next_inc = Instant::now();
     let mut next_cons = Instant::now() + cfg.conservation_every;
+    let mut next_cons_full = Instant::now() + cfg.conservation_full_every;
     let mut next_full = instant_at(next_daily_run_ms(super::now_ms(), cfg.full_hour_kst));
     tracing::info!(
         incremental_secs = cfg.incremental_every.as_secs(),
@@ -107,8 +127,13 @@ pub async fn run(
                 next_inc = Instant::now() + cfg.incremental_every;
             }
             if now >= next_cons {
-                conservation_round(ch, pg).await;
+                let full_due = now >= next_cons_full;
+                conservation_round(ch, pg, conservation_window(cfg, full_due, super::now_ms()))
+                    .await;
                 next_cons = Instant::now() + cfg.conservation_every;
+                if full_due {
+                    next_cons_full = Instant::now() + cfg.conservation_full_every;
+                }
             }
         };
         tokio::select! {
@@ -121,8 +146,8 @@ pub async fn run(
 }
 
 /// 보존 검증 후 깨진 주문을 알리고(error 로그) 다시 연산한다.
-async fn conservation_round(ch: &Client, pg: &PgPool) {
-    let broken = match super::conservation_check(ch, pg, None).await {
+async fn conservation_round(ch: &Client, pg: &PgPool, window: ConservationWindow) {
+    let broken = match super::conservation_check_window(ch, pg, None, window).await {
         Ok(b) => b,
         Err(e) => {
             tracing::error!(error = %format!("{e:#}"), "보존 검증 실패");
