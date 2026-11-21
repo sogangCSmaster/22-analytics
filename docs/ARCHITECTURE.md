@@ -707,6 +707,9 @@ GROUP BY model, lookback_days;
 | SSM | Session Manager로 접속 (SSH 포트 없음) | Parameter Store로 비밀값 관리 |
 | IaC | Terraform | `infra/terraform` |
 
+- **ingest는 한 대(단일 writer)를 권장합니다.** 같은 주문의 처리 직렬화(줄무늬 잠금)는 프로세스 안에서만
+  유효합니다. 여러 대를 띄우면 투영을 쓴 뒤 이벤트를 다시 읽어 달라졌으면 다시 쓰는 재확인(최대 3회)으로
+  수렴시키지만, 이는 보정일 뿐 직렬화를 보장하지 않습니다(같은 ms의 version 충돌 등).
 - **ClickHouse 메모리 설정**: 8GB 장비에서는 `max_server_memory_usage_to_ram_ratio=0.6`, `async_insert=0`(ingest가 직접 배치), `max_threads=2`로 둡니다.
 - **Tiered storage**: 30일이 지난 파티션은 S3 disk로 `MOVE`합니다(`TTL ... TO VOLUME 'cold'`).
 - **백업**:

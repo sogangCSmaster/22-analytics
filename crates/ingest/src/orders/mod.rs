@@ -9,6 +9,8 @@
 //! 4. 전체 이벤트로 상태를 계산하고([`project`]: fold + 이전 행의 `ordered_at` 유지), 현재 `orders`
 //!    행과 다르면 새 version으로 insert한다. `ordered_at`은 처음 투영한 값으로 고정되므로 한 주문의
 //!    모든 버전이 같은 월 파티션에 남는다 (ReplacingMergeTree는 파티션을 넘어 중복을 없애지 않는다).
+//! 5. 쓴 뒤에는 이벤트를 다시 읽어 계산이 달라졌으면(다른 ingest 프로세스가 그 사이 append) 다시 쓴다.
+//!    잠금은 프로세스 안에서만 유효하므로 이 재확인이 프로세스 간 경합을 보정한다 (단일 writer 권장, §10).
 //!
 //! 3이나 4가 실패하면 에러를 돌려주고 호출자는 5xx로 응답한다. 고객사가 재시도하면
 //! 2에서 중복으로 판정되지만 4는 다시 수행되므로, 반쯤 쓰인 상태가 남지 않는다.
@@ -38,6 +40,8 @@ pub const CLIENT_CONCURRENCY: usize = 64;
 /// 주문 하나에 받는 클라이언트 이벤트 상한. 넘는 이벤트는 무시한다
 /// (반영할 때마다 주문의 전체 이벤트를 다시 읽으므로 무한히 쌓이면 비용이 제곱으로 는다).
 pub const MAX_CLIENT_EVENTS_PER_ORDER: usize = 50;
+/// 투영을 쓴 뒤 이벤트를 다시 읽어 확인하는 최대 횟수 (다른 프로세스와의 경합 보정).
+const MAX_RECHECKS: usize = 3;
 
 /// 주문 처리에 필요한 프로젝트 정보.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,23 +191,59 @@ impl OrderService {
             events.push(ev);
         }
         let current = ch_orders::current_order(&self.ch, scope, &order_id).await?;
-        let prev = current.as_ref().and_then(OrderRow::to_state);
-        // 이전 행의 ordered_at을 유지한다 (파티션 고정, core::orders::project)
-        let state = project(&events, prev.as_ref()).expect("이벤트가 최소 1건 있다");
-        if prev.as_ref() == Some(&state) {
-            return Ok(Applied {
-                duplicate,
-                ..Applied::default()
-            });
-        }
-        let version =
-            ch_orders::next_version(current.map(|c| c.version), crate::internal::now_ms());
-        ch_orders::insert_order(&self.ch, &OrderRow::from_state(&state, version)).await?;
+        let projected = self
+            .write_projection(scope, &order_id, events, current)
+            .await?;
         Ok(Applied {
             duplicate,
-            projected: true,
+            projected,
             ..Applied::default()
         })
+    }
+
+    /// 주문의 이벤트를 다시 읽어 투영이 다르면 다시 쓴다. 썼으면 `true`.
+    pub async fn reproject(&self, scope: ProjectScope, order_id: &str) -> anyhow::Result<bool> {
+        let _guard = self.lock_for(scope.project_id(), order_id).lock().await;
+        let events = ch_orders::order_events(&self.ch, scope, order_id).await?;
+        let current = ch_orders::current_order(&self.ch, scope, order_id).await?;
+        self.write_projection(scope, order_id, events, current)
+            .await
+    }
+
+    /// `events`로 계산한 상태가 `current`와 다르면 새 version으로 쓴다. 쓴 뒤에는 이벤트와 현재 행을
+    /// 다시 읽어, 그 사이 다른 writer(다른 ingest 프로세스: 줄무늬 잠금은 프로세스 안에서만 유효)가
+    /// 이벤트를 추가했으면 다시 쓴다 (최대 [`MAX_RECHECKS`]번). 하나라도 썼으면 `true`.
+    async fn write_projection(
+        &self,
+        scope: ProjectScope,
+        order_id: &str,
+        mut events: Vec<OrderEvent>,
+        mut current: Option<OrderRow>,
+    ) -> anyhow::Result<bool> {
+        let mut wrote = false;
+        for attempt in 0..=MAX_RECHECKS {
+            let prev = current.as_ref().and_then(OrderRow::to_state);
+            // 이전 행의 ordered_at을 유지한다 (파티션 고정, core::orders::project)
+            let Some(state) = project(&events, prev.as_ref()) else {
+                return Ok(wrote);
+            };
+            if prev.as_ref() == Some(&state) {
+                return Ok(wrote);
+            }
+            let version = ch_orders::next_version(
+                current.as_ref().map(|c| c.version),
+                crate::internal::now_ms(),
+            );
+            ch_orders::insert_order(&self.ch, &OrderRow::from_state(&state, version)).await?;
+            wrote = true;
+            if attempt == MAX_RECHECKS {
+                tracing::warn!(order_id, "주문 투영 재확인 한도 초과");
+                break;
+            }
+            events = ch_orders::order_events(&self.ch, scope, order_id).await?;
+            current = ch_orders::current_order(&self.ch, scope, order_id).await?;
+        }
+        Ok(wrote)
     }
 
     /// 수집 파이프라인의 `purchase` 이벤트를 클라이언트 주문으로 투영한다
