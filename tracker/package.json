@@ -8,7 +8,8 @@
     "build": "esbuild src/t.ts --bundle --minify --format=iife --target=es2018 --outfile=dist/t.js --legal-comments=none",
     "typecheck": "tsc --noEmit",
     "size": "node scripts/size.mjs",
-    "check": "npm run typecheck && npm run build && npm run size"
+    "check": "npm run typecheck && npm run build && npm run size",
+    "test": "esbuild test/lib.test.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/test/lib.test.mjs --log-level=warning && node --test dist/test/lib.test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

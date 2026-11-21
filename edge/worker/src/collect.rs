@@ -171,6 +171,24 @@ mod tests {
             None,
             "사유를 노출하지 않는다"
         );
+        assert_eq!(o.response.header("x-cfg-v"), None);
+    }
+
+    #[test]
+    fn response_carries_settings_version_for_tracker_config_refresh() {
+        // C1: 트래커는 이 값이 캐시한 설정의 v와 다를 때만 /v1/config를 다시 받는다.
+        let p = project();
+        let o = run(&req(), Some(&p), &body(&pv(E1)));
+        assert_eq!(o.response.header("x-cfg-v"), Some("3"));
+        assert_eq!(
+            o.response.header("access-control-expose-headers"),
+            Some("x-cfg-v")
+        );
+        // Origin 없는 요청(서버 간)도 같은 헤더
+        let mut r = req();
+        r.origin = None;
+        let o = run(&r, Some(&p), &body(&pv(E1)));
+        assert_eq!(o.response.header("x-cfg-v"), Some("3"));
     }
 
     // ── 해피 ──

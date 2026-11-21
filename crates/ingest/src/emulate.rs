@@ -201,3 +201,16 @@ fn cookie_vid(headers: &HeaderMap) -> Option<Uuid> {
         .filter_map(|v| v.to_str().ok())
         .find_map(|raw| visitor_id(Some(raw)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_response_exposes_settings_version() {
+        let mut r = StatusCode::NO_CONTENT.into_response();
+        set_cfg_version(&mut r, 7);
+        assert_eq!(r.headers()["x-cfg-v"], "7");
+        assert_eq!(r.headers()["access-control-expose-headers"], "x-cfg-v");
+    }
+}
