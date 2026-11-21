@@ -348,16 +348,16 @@ fn sample_minute(u: f64) -> i64 {
 /// 프로모션 (블랙프라이데이): 며칠 전 → 배수
 fn promo(days_ago: i32) -> f64 {
     match days_ago {
-        6 => 1.35,
-        7 => 2.4,
-        8 => 1.9,
-        9 => 1.45,
+        3 => 1.35,
+        4 => 2.4,
+        5 => 1.9,
+        6 => 1.45,
         _ => 1.0,
     }
 }
 
 pub fn is_promo(days_ago: i32) -> bool {
-    (6..=9).contains(&days_ago)
+    (3..=6).contains(&days_ago)
 }
 
 /// 하루 전체 세션 (오늘도 하루 전체 기준). 데이터 없는 날은 0.

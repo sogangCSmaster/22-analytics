@@ -412,6 +412,7 @@ pub struct DemoServer {
 }
 
 impl DemoServer {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new(now_ms: i64) -> Self {
         Self::with_state(DemoState::default(), now_ms)
     }

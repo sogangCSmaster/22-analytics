@@ -77,15 +77,24 @@ pub fn join(base: &str, path: &str) -> String {
 /// 배포 기본 경로 정규화: `22-analytics`, `/22-analytics/` → `/22-analytics`. 없거나 `/`면 빈 문자열.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub fn base_prefix(base: Option<&str>) -> String {
-    let _ = base;
-    String::new()
+    match base.map(|b| b.trim_matches('/')) {
+        Some(b) if !b.is_empty() => format!("/{b}"),
+        _ => String::new(),
+    }
 }
 
 /// 브라우저 주소에서 기본 경로를 뺀 앱 안의 경로 (`/22-analytics/p/1` → `/p/1`).
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub fn strip_base(full: &str, prefix: &str) -> String {
-    let _ = prefix;
-    full.to_owned()
+    if prefix.is_empty() {
+        return full.to_owned();
+    }
+    match full.strip_prefix(prefix) {
+        Some("") => "/".into(),
+        Some(rest) if rest.starts_with('/') => rest.to_owned(),
+        Some(rest) if rest.starts_with('?') => format!("/{rest}"),
+        _ => full.to_owned(),
+    }
 }
 
 fn project(pid: i32) -> String {

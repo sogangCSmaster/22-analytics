@@ -4,6 +4,7 @@
   "type": "module",
   "description": "실제 프로세스(ingest·api·jobs) + 브라우저로 돌리는 E2E 테스트",
   "scripts": {
-    "test": "node --test --test-concurrency=1 --test-timeout=1200000 *.test.mjs"
+    "test": "node --test --test-concurrency=1 --test-timeout=1200000 manual_1a.test.mjs dashboard.test.mjs",
+    "test:demo": "node --test --test-concurrency=1 --test-timeout=1200000 demo.test.mjs"
   }
 }

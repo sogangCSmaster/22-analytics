@@ -3,6 +3,8 @@
 //! - 변경 요청에는 항상 `Content-Type: application/json`(광고비는 `text/csv`)을 붙인다 (CSRF 검사).
 //! - 401은 로그인 화면으로 보낸다 (로그인 요청 자체는 제외).
 //! - 경로·쿼리는 [`crate::logic::query`]에서 만든다.
+//! - 데모 빌드(`--features demo`)에서는 fetch 대신 브라우저 안의 [`crate::demo::DemoServer`]가
+//!   답한다 (백엔드 없이 GitHub Pages에서 동작). 401 처리 등 나머지는 같다.
 
 use crate::logic::errors::ApiError;
 use serde::Serialize;
@@ -70,7 +72,7 @@ pub async fn post_csv<T: DeserializeOwned>(path: &str, csv: String) -> ApiResult
     decode(&text)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(feature = "demo")))]
 mod imp {
     use super::{ApiResult, Method};
     use crate::logic::{errors::ApiError, query};
@@ -107,7 +109,7 @@ mod imp {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "demo")))]
 mod imp {
     use super::{ApiResult, Method};
     use crate::logic::errors::ApiError;
@@ -118,5 +120,41 @@ mod imp {
         _body: Option<(String, &'static str)>,
     ) -> ApiResult<(u16, String)> {
         Err(ApiError::Network)
+    }
+}
+
+/// 데모: 요청을 브라우저 안의 데모 서버로 보낸다. 상태(로그인·설정 변경)는 localStorage에 둔다.
+#[cfg(feature = "demo")]
+mod imp {
+    use super::{ApiResult, Method};
+    use crate::demo::{DemoServer, DemoState, STORAGE_KEY};
+    use crate::platform;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static SERVER: RefCell<Option<DemoServer>> = const { RefCell::new(None) };
+    }
+
+    pub async fn fetch(
+        method: Method,
+        path: &str,
+        body: Option<(String, &'static str)>,
+    ) -> ApiResult<(u16, String)> {
+        // 실제 네트워크처럼 아주 잠깐 기다린다 (로딩 표시가 깜빡이지 않게 짧게)
+        platform::sleep_ms(60).await;
+        let now = platform::now_ms();
+        Ok(SERVER.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            let server = slot.get_or_insert_with(|| {
+                let saved = platform::storage_get(STORAGE_KEY);
+                DemoServer::with_state(DemoState::decode(saved.as_deref()), now)
+            });
+            server.set_now(now);
+            let res = server.handle(method, path, body.as_ref().map(|(b, _)| b.as_str()));
+            if method != Method::Get {
+                platform::storage_set(STORAGE_KEY, &server.state().encode());
+            }
+            res
+        }))
     }
 }

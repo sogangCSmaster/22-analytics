@@ -8,7 +8,8 @@ use analytics_core::dto::admin::ApiErrorBody;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiError {
-    /// 서버에 닿지 못함 (오프라인, CORS, DNS)
+    /// 서버에 닿지 못함 (오프라인, CORS, DNS). 데모 빌드에는 네트워크가 없다.
+    #[cfg_attr(feature = "demo", allow(dead_code))]
     Network,
     /// 세션 없음·만료 → 로그인 화면으로
     Unauthorized,
