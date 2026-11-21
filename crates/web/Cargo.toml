@@ -27,3 +27,5 @@ dioxus-ssr = "0.7"
 [features]
 default = ["web"]
 web = ["dioxus/web"]
+# 데모 모드: 백엔드 없이 브라우저 안의 가짜 API로 동작 (GitHub Pages)
+demo = []
