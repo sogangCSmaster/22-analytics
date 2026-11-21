@@ -266,8 +266,19 @@ async fn idempotency_key_header_first_wins() {
     )
     .await;
     assert_eq!(s, StatusCode::ACCEPTED);
-    // 같은 키로 다른 금액을 재전송해도 처음 것만 반영된다
+    // 같은 키로 같은 요청 재전송은 202 (한 번만 반영)
     let (s, _) = send(
+        &h.app,
+        "/v1/orders",
+        &hdr,
+        refund("O1", 10_000, "2026-11-20T12:00:00Z")
+            .to_string()
+            .into_bytes(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    // 같은 키로 다른 금액을 보내면 조용히 버리지 않고 409로 알린다
+    let (s, v) = send(
         &h.app,
         "/v1/orders",
         &hdr,
@@ -276,7 +287,10 @@ async fn idempotency_key_header_first_wins() {
             .into_bytes(),
     )
     .await;
-    assert_eq!(s, StatusCode::ACCEPTED);
+    assert_eq!(
+        (s, err_code(&v)),
+        (StatusCode::CONFLICT, "idempotency_key_reused")
+    );
     let o = h.order("O1").await.unwrap();
     assert_eq!(o.refunded_amount, 10_000);
     assert_eq!(h.event_count("O1").await, 1);
@@ -291,6 +305,53 @@ async fn idempotency_key_header_first_wins() {
     .await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(err_code(&v), "invalid_idempotency_key");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn same_explicit_key_on_confirm_and_refund_both_apply() {
+    // 가맹점이 확정·환불 모두 `Idempotency-Key: <order_id>`를 보낸다
+    let h = setup().await;
+    let auth = format!("Bearer {}", h.key);
+    let hdr = [("authorization", auth.as_str()), ("idempotency-key", "O1")];
+    let (s, _) = send(
+        &h.app,
+        "/v1/orders",
+        &hdr,
+        confirm("O1", 100_000).to_string().into_bytes(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let (s, _) = send(
+        &h.app,
+        "/v1/orders",
+        &hdr,
+        refund("O1", 30_000, "2026-11-20T12:00:00Z")
+            .to_string()
+            .into_bytes(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let o = h.order("O1").await.unwrap();
+    assert_eq!(o.status, "PARTIALLY_REFUNDED", "환불이 버려지지 않는다");
+    assert_eq!(o.effective_amount, 70_000);
+    assert_eq!(h.event_count("O1").await, 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_item_reusing_key_with_other_payload_is_rejected() {
+    let h = setup().await;
+    let mut a = confirm("O1", 100_000);
+    a["idempotency_key"] = json!("k1");
+    let (s, _) = h.batch(&json!([a.clone()])).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let mut b = confirm("O1", 1);
+    b["idempotency_key"] = json!("k1");
+    let (s, v) = h.batch(&json!([a, b])).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    assert_eq!(v["results"][0]["accepted"], true);
+    assert_eq!(v["results"][1]["accepted"], false);
+    assert_eq!(v["results"][1]["error"], "idempotency_key_reused");
+    assert_eq!(h.order("O1").await.unwrap().net_amount, 100_000);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -854,7 +915,10 @@ async fn internal_route_with_edge_signature() {
     let evs = ch_orders::order_events(&h.db.ch, h.scope(), "E1")
         .await
         .unwrap();
-    assert!(evs.iter().any(|e| e.idempotency_key == "edge-key-1"));
+    assert!(
+        evs.iter()
+            .any(|e| e.idempotency_key == "ORDER_REFUNDED:edge-key-1")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

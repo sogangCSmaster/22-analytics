@@ -682,10 +682,51 @@ mod tests {
 
     #[test]
     fn explicit_idempotency_key_wins() {
+        // 명시 키는 이벤트 유형으로 네임스페이스를 붙여 저장한다
         let v = validate(&project(), &confirm_json(), Some("retry-abc-1"), NOW).unwrap();
-        assert_eq!(v.event.idempotency_key, "retry-abc-1");
+        assert_eq!(v.event.idempotency_key, "PURCHASE_CONFIRMED:retry-abc-1");
         let body_key = with(confirm_json(), "idempotency_key", json!("body-key"));
-        assert_eq!(ok(body_key).event.idempotency_key, "body-key");
+        assert_eq!(
+            ok(body_key).event.idempotency_key,
+            "PURCHASE_CONFIRMED:body-key"
+        );
+    }
+
+    #[test]
+    fn explicit_key_reused_across_event_types_does_not_collide() {
+        // 가맹점이 확정·환불 모두 `Idempotency-Key: <order_id>`를 보내는 경우
+        let c = validate(&project(), &confirm_json(), Some("ORD-1"), NOW).unwrap();
+        let r = json!({ "event_type": "ORDER_REFUNDED", "order_id": "ORD-20261120-009901",
+            "refund_amount": 1000, "refunded_at": "2026-11-20T12:00:00Z" });
+        let r = validate(&project(), &r, Some("ORD-1"), NOW).unwrap();
+        assert_ne!(c.event.idempotency_key, r.event.idempotency_key);
+        assert_eq!(r.event.idempotency_key, "ORDER_REFUNDED:ORD-1");
+        let s = fold(&[c.event, r.event]).unwrap();
+        assert_eq!(s.status, OrderStatus::PartiallyRefunded);
+        assert_eq!(s.effective_amount, 99_000);
+    }
+
+    #[test]
+    fn same_payload_detects_key_reuse_with_different_content() {
+        let a = validate(&project(), &confirm_json(), Some("K"), NOW)
+            .unwrap()
+            .event;
+        let mut b = a.clone();
+        b.received_at_ms += 1000;
+        b.raw = "{}".into();
+        assert!(
+            a.same_payload(&b),
+            "재전송(수신 시각·원문만 다름)은 같은 요청"
+        );
+        let mut c = a.clone();
+        c.net_amount -= 1;
+        assert!(!a.same_payload(&c));
+        let mut d = a.clone();
+        d.occurred_at_ms += 1;
+        assert!(!a.same_payload(&d));
+        let mut e = a.clone();
+        e.refund_amount = 5;
+        assert!(!a.same_payload(&e));
     }
 
     #[test]
