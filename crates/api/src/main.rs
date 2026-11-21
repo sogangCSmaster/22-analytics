@@ -19,6 +19,11 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = TcpListener::bind(&bind).await?;
     tracing::info!(%bind, "api 시작");
-    axum::serve(listener, app).await?;
+    // 소켓 상대 주소를 [`analytics_api::extract::ClientIp`]가 읽는다.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

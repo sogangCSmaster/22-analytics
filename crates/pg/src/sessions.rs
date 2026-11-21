@@ -49,6 +49,11 @@ pub async fn create(pool: &PgPool, user_id: i64) -> anyhow::Result<String> {
 /// 유효한 세션의 사용자. 만료 시각이 지금이거나 지났으면 무효다.
 /// 사용자가 삭제되면 세션도 함께 지워진다 (FK cascade).
 pub async fn lookup(pool: &PgPool, token: &str) -> anyhow::Result<Option<User>> {
+    Ok(lookup_refreshing(pool, token).await?.map(|(u, _)| u))
+}
+
+/// [`lookup`]과 같고, 이번 조회로 만료를 연장했는지(쿠키도 다시 보내야 하는지)를 함께 돌려준다.
+pub async fn lookup_refreshing(pool: &PgPool, token: &str) -> anyhow::Result<Option<(User, bool)>> {
     if !is_well_formed(token) {
         return Ok(None);
     }
@@ -78,24 +83,28 @@ pub async fn lookup(pool: &PgPool, token: &str) -> anyhow::Result<Option<User>> 
     else {
         return Ok(None);
     };
+    let mut refreshed = false;
     if needs_refresh {
-        sqlx::query(
+        refreshed = sqlx::query(
             "UPDATE sessions SET expires_at = now() + make_interval(days => $2::int) \
              WHERE id = $1 AND expires_at > now()",
         )
         .bind(&id)
         .bind(TTL_DAYS as i32)
         .execute(pool)
-        .await?;
+        .await?
+        .rows_affected()
+            > 0;
     }
-    Ok(Some(User {
+    let user = User {
         id: uid,
         email,
         name,
         is_super_admin,
         created_at,
         last_login_at,
-    }))
+    };
+    Ok(Some((user, refreshed)))
 }
 
 /// 세션 삭제. 없어도 성공 (멱등).

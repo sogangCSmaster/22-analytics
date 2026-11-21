@@ -72,9 +72,7 @@ async fn secure_flag_when_configured() {
         .await;
     assert_eq!(plain.status, StatusCode::UNAUTHORIZED);
 
-    let out = app
-        .call(Req::post("/v1/auth/logout").cookie(&cookie))
-        .await;
+    let out = app.call(Req::post("/v1/auth/logout").cookie(&cookie)).await;
     let cleared = out.set_cookie().unwrap();
     assert!(
         cleared.starts_with("__Host-at_session=;") && cleared.contains("Max-Age=0"),

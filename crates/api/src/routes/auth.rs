@@ -4,9 +4,9 @@ use super::{audit, project_dto, user_dto};
 use crate::AppState;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{
-    ApiJson, AuthUser, clear_session_cookie, client_ip, session_cookie, session_token,
+    ApiJson, AuthUser, ClientIp, clear_session_cookie, session_cookie, session_token,
 };
-use crate::validate;
+use crate::{ratelimit, validate};
 use analytics_core::dto::admin::{LoginRequest, MeResponse, OrgAccess, ProjectSummary, Role};
 use axum::Json;
 use axum::extract::State;
@@ -16,23 +16,34 @@ use serde_json::json;
 
 pub async fn login(
     State(state): State<AppState>,
+    client: ClientIp,
     headers: HeaderMap,
     ApiJson(req): ApiJson<LoginRequest>,
 ) -> ApiResult<Response> {
     let email = validate::normalize_email(&req.email);
-    let ip = client_ip(&headers);
-
-    if let Err(retry_after) = state.limiter.check(&email, ip.as_deref()) {
-        tracing::warn!(%email, ?ip, "로그인 rate limit");
-        return Err(ApiError::too_many_requests(retry_after));
+    // 길이 초과 입력은 제한기·DB·argon2를 거치지 않고 일반 실패와 같은 응답으로 끝낸다
+    // (제한기 키를 늘리거나 큰 입력으로 해시 비용을 쓰게 하지 못하게). 길이는 비밀이 아니다.
+    if email.len() > validate::MAX_EMAIL_BYTES
+        || req.password.chars().count() > validate::MAX_PASSWORD_CHARS
+    {
+        return Err(ApiError::invalid_credentials());
     }
+    let ip = client.ip();
+    let email_key = ratelimit::email_hash(&email);
+    // 로그에는 이메일 원문 대신 해시 앞부분만 남긴다 (같은 계정의 시도끼리 묶을 수 있을 만큼).
+    let email_tag = hex::encode(&email_key[..6]);
 
-    // 없는 이메일·너무 긴 비밀번호도 같은 비용의 argon2 검증을 거친다 (응답 시간으로 계정 존재를 알 수 없게).
-    let creds = if req.password.chars().count() <= validate::MAX_PASSWORD_CHARS {
-        analytics_pg::users::credentials_by_email(&state.pg, &email).await?
-    } else {
-        None
+    // 상한 검사와 "진행 중" 기록을 한 번에: 동시에 보낸 시도도 상한을 넘지 못한다.
+    let reservation = match state.limiter.reserve(&email_key, ip) {
+        Ok(r) => r,
+        Err(retry_after) => {
+            tracing::warn!(email = %email_tag, ?ip, "로그인 rate limit");
+            return Err(ApiError::too_many_requests(retry_after));
+        }
     };
+
+    // 없는 이메일도 같은 비용의 argon2 검증을 거친다 (응답 시간으로 계정 존재를 알 수 없게).
+    let creds = analytics_pg::users::credentials_by_email(&state.pg, &email).await?;
     let password = req.password;
     let user_id = tokio::task::spawn_blocking(move || match creds {
         Some((id, hash)) => analytics_pg::users::verify_password(&password, &hash).then_some(id),
@@ -45,14 +56,14 @@ pub async fn login(
     .map_err(|e| ApiError::internal(e.into()))?;
 
     let Some(user_id) = user_id else {
-        state.limiter.record_failure(&email, ip.as_deref());
-        tracing::info!(%email, ?ip, "로그인 실패");
+        reservation.fail();
+        tracing::info!(email = %email_tag, ?ip, "로그인 실패");
         return Err(ApiError::invalid_credentials());
     };
-    state.limiter.reset_email(&email);
+    reservation.succeed();
 
     // 세션 고정 방지: 요청에 실려 온 기존 세션은 지우고 항상 새 토큰을 발급한다.
-    if let Some(old) = session_token(&headers) {
+    if let Some(old) = session_token(&headers, state.config.cookie_secure) {
         analytics_pg::sessions::delete(&state.pg, &old).await?;
     }
     let token = analytics_pg::sessions::create(&state.pg, user_id).await?;
@@ -66,7 +77,7 @@ pub async fn login(
         user_id,
         "auth.login",
         format!("user:{user_id}"),
-        json!({ "ip": ip }),
+        client.audit_fields(),
     )
     .await?;
 
@@ -77,7 +88,7 @@ pub async fn login(
 
 /// 로그아웃. 세션이 없거나 이미 지워졌어도 204 (멱등).
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
-    let token = session_token(&headers);
+    let token = session_token(&headers, state.config.cookie_secure);
     let user = match token.as_deref() {
         Some(t) => analytics_pg::sessions::lookup(&state.pg, t).await?,
         None => None,
