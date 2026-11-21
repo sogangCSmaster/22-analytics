@@ -434,6 +434,31 @@ async fn channel_rules_crud() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn channel_rule_names_are_lowercased_like_ad_spend() {
+    let app = TestApp::new().await;
+    let f = app.fixture().await;
+    let path = format!("/v1/projects/{}/channel-rules", f.project_id);
+    // 광고비 CSV는 채널을 소문자로 저장한다. 규칙도 같게 해야 매출·광고비가 한 채널로 묶인다.
+    let r = app
+        .call(Req::post(&path).cookie(&f.analyst).json(json!({
+            "channel": " Meta_Ads ", "match": { "utm_source": ["meta"] }
+        })))
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert_eq!(r.body["channel"], "meta_ads");
+    let id = r.body["id"].as_i64().unwrap();
+    let r = app
+        .call(
+            Req::patch(&format!("{path}/{id}"))
+                .cookie(&f.analyst)
+                .json(json!({ "channel": "KAKAO" })),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.body["channel"], "kakao");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn channel_rule_validation() {
     let app = TestApp::new().await;
     let f = app.fixture().await;
