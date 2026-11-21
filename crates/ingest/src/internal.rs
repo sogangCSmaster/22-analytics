@@ -27,15 +27,7 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
     if s.cfg.edge_secret.is_empty() {
         return StatusCode::NOT_FOUND;
     }
-    let ts = headers
-        .get(HEADER_TIMESTAMP)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<i64>().ok());
-    let sig = headers.get(HEADER_SIGNATURE).and_then(|v| v.to_str().ok());
-    let (Some(ts), Some(sig)) = (ts, sig) else {
-        return StatusCode::UNAUTHORIZED;
-    };
-    if !edge_auth::verify(&s.cfg.edge_secret, ts, &body, sig, now_ms()) {
+    if !verify_collect(&s.cfg.edge_secret, &headers, &body, now_ms()) {
         return StatusCode::UNAUTHORIZED;
     }
     let Ok(fwd) = serde_json::from_slice::<EdgeForward>(&body) else {
@@ -57,6 +49,24 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         }
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
+}
+
+/// `/internal/collect` 서명 검증 (v1, 내부 경로 고정, 전달 헤더 없음).
+fn verify_collect(secret: &[u8], headers: &HeaderMap, body: &[u8], now_ms: i64) -> bool {
+    let ts = headers
+        .get(HEADER_TIMESTAMP)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok());
+    let sig = headers.get(HEADER_SIGNATURE).and_then(|v| v.to_str().ok());
+    let (Some(ts), Some(sig)) = (ts, sig) else {
+        return false;
+    };
+    edge_auth::verify(
+        secret,
+        &edge_auth::SignedRequest::collect(ts, body),
+        sig,
+        now_ms,
+    )
 }
 
 pub fn now_ms() -> i64 {

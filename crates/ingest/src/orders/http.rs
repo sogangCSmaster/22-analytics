@@ -2,7 +2,8 @@
 //!
 //! - 로컬(`EDGE_EMULATION=true`): `POST /v1/orders`, `POST /v1/orders:batch` (`Authorization: Bearer sk_...`)
 //! - 운영: `POST /internal/orders` (Worker가 전달). 계약:
-//!   - `x-edge-timestamp`, `x-edge-signature`: 원 요청 본문(raw)에 대한 HMAC ([`edge_auth`])
+//!   - `x-edge-timestamp`, `x-edge-signature`: v1 서명 ([`edge_auth`]). 내부 경로·본문 해시와
+//!     아래 전달 헤더 3개(없으면 빈 문자열)를 모두 덮는다
 //!   - `x-forwarded-authorization`: 클라이언트의 `Authorization` 헤더 원문 (원점이 다시 검증)
 //!   - `x-forwarded-path`: `/v1/orders` 또는 `/v1/orders:batch`
 //!   - `idempotency-key`: 클라이언트의 `Idempotency-Key` (있을 때만)
@@ -96,7 +97,15 @@ async fn internal(State(st): State<OrdersHttp>, headers: HeaderMap, body: Bytes)
             "엣지 서명이 없습니다",
         );
     };
-    if !edge_auth::verify(&st.edge_secret, ts, &body, sig, now_ms()) {
+    let signed = edge_auth::SignedRequest {
+        internal_path: edge_auth::ORDERS_PATH,
+        timestamp_ms: ts,
+        body: &body,
+        forwarded_path: header(&headers, HEADER_FORWARDED_PATH).unwrap_or(""),
+        forwarded_authorization: header(&headers, HEADER_FORWARDED_AUTH).unwrap_or(""),
+        idempotency_key: header(&headers, HEADER_IDEMPOTENCY_KEY).unwrap_or(""),
+    };
+    if !edge_auth::verify(&st.edge_secret, &signed, sig, now_ms()) {
         return error(
             StatusCode::UNAUTHORIZED,
             "invalid_signature",

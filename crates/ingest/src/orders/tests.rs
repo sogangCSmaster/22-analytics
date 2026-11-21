@@ -719,12 +719,26 @@ async fn internal_signature_covers_forwarded_headers_and_path() {
 
     // 단건 경로로 서명한 요청을 일괄 경로로 바꿔 보낼 수 없다
     let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", &auth, "");
-    let s = post_internal(&h.app, edge_headers(&ts, &sig, "/v1/orders:batch", &auth), body.clone()).await;
+    let s = post_internal(
+        &h.app,
+        edge_headers(&ts, &sig, "/v1/orders:batch", &auth),
+        body.clone(),
+    )
+    .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED, "x-forwarded-path 바꿔치기");
     // 다른 Authorization으로 바꿔치기
     let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", "Bearer sk_live_a", "");
-    let s = post_internal(&h.app, edge_headers(&ts, &sig, "/v1/orders", &auth), body.clone()).await;
-    assert_eq!(s, StatusCode::UNAUTHORIZED, "x-forwarded-authorization 바꿔치기");
+    let s = post_internal(
+        &h.app,
+        edge_headers(&ts, &sig, "/v1/orders", &auth),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::UNAUTHORIZED,
+        "x-forwarded-authorization 바꿔치기"
+    );
     // 서명되지 않은 멱등 키 추가
     let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", &auth, "");
     let mut hs = edge_headers(&ts, &sig, "/v1/orders", &auth);
@@ -743,7 +757,12 @@ async fn internal_signature_covers_forwarded_headers_and_path() {
     // (이전 형식 서명 거부는 core edge_auth 단위 테스트가 확인한다)
     // 극단 타임스탬프는 패닉 없이 401
     let (ts, sig) = signed_for(SECRET, &body, i64::MIN, "/v1/orders", &auth, "");
-    let s = post_internal(&h.app, edge_headers(&ts, &sig, "/v1/orders", &auth), body.clone()).await;
+    let s = post_internal(
+        &h.app,
+        edge_headers(&ts, &sig, "/v1/orders", &auth),
+        body.clone(),
+    )
+    .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
     assert_eq!(h.event_count("X1").await, 0);
 }

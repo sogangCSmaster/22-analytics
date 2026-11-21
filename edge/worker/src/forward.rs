@@ -1,6 +1,6 @@
 //! 원점(ingest) 전달: 서명된 요청 생성, 결과 분류, Queue 메시지와 재시도 정책.
 //!
-//! 서명은 `analytics_core::edge_auth`(HMAC-SHA256, `"{ts}.{body}"`)를 쓴다. 클라이언트 헤더는
+//! 서명은 `analytics_core::edge_auth` v1(내부 경로·타임스탬프·본문 해시·전달 헤더)을 쓴다. 클라이언트 헤더는
 //! 하나도 복사하지 않고 매번 새로 만든다. 따라서 클라이언트가 보낸 `x-edge-*` 헤더는 원점에
 //! 닿지 않는다.
 
@@ -8,8 +8,8 @@ use analytics_core::Event;
 use analytics_core::edge_auth::{self, HEADER_SIGNATURE, HEADER_TIMESTAMP};
 use serde::{Deserialize, Serialize};
 
-pub const COLLECT_PATH: &str = "/internal/collect";
-pub const ORDERS_PATH: &str = "/internal/orders";
+pub const COLLECT_PATH: &str = edge_auth::COLLECT_PATH;
+pub const ORDERS_PATH: &str = edge_auth::ORDERS_PATH;
 
 /// Cloudflare Queue 메시지 한도는 128KB. JSON 래핑 여유를 두고 본문을 이 크기 이하로 나눈다.
 pub const MAX_QUEUE_BODY: usize = 100 * 1024;
@@ -43,7 +43,19 @@ pub fn join_url(origin_url: &str, path: &str) -> String {
     format!("{}{path}", origin_url.trim_end_matches('/'))
 }
 
-/// 서명 헤더를 붙인 원점 요청. 본문은 바이트 그대로 서명한다.
+/// 원점에 전달하는 클라이언트 유래 헤더. 비어 있으면 보내지 않고, 서명에는 `""`로 들어간다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Forwarded<'a> {
+    pub path: &'a str,
+    pub authorization: &'a str,
+    pub idempotency_key: &'a str,
+}
+
+pub const HEADER_FORWARDED_AUTHORIZATION: &str = "x-forwarded-authorization";
+pub const HEADER_FORWARDED_PATH: &str = "x-forwarded-path";
+pub const HEADER_IDEMPOTENCY_KEY: &str = "idempotency-key";
+
+/// 서명 헤더를 붙인 원점 요청 (전달 헤더 없음). 본문은 바이트 그대로 서명한다.
 pub fn signed(
     origin_url: &str,
     path: &str,
@@ -51,14 +63,46 @@ pub fn signed(
     body: Vec<u8>,
     now_ms: i64,
 ) -> ForwardRequest {
-    let signature = edge_auth::sign(secret, now_ms, &body);
+    signed_with(origin_url, path, secret, body, now_ms, Forwarded::default())
+}
+
+/// 전달 헤더까지 서명한 원점 요청 (v1: 내부 경로·타임스탬프·본문 해시·전달 헤더).
+pub fn signed_with(
+    origin_url: &str,
+    path: &str,
+    secret: &[u8],
+    body: Vec<u8>,
+    now_ms: i64,
+    fwd: Forwarded<'_>,
+) -> ForwardRequest {
+    let signature = edge_auth::sign(
+        secret,
+        &edge_auth::SignedRequest {
+            internal_path: path,
+            timestamp_ms: now_ms,
+            body: &body,
+            forwarded_path: fwd.path,
+            forwarded_authorization: fwd.authorization,
+            idempotency_key: fwd.idempotency_key,
+        },
+    );
+    let mut headers: Vec<(String, String)> = vec![
+        ("content-type".into(), "application/json".into()),
+        (HEADER_TIMESTAMP.into(), now_ms.to_string()),
+        (HEADER_SIGNATURE.into(), signature),
+    ];
+    for (name, v) in [
+        (HEADER_FORWARDED_AUTHORIZATION, fwd.authorization),
+        (HEADER_FORWARDED_PATH, fwd.path),
+        (HEADER_IDEMPOTENCY_KEY, fwd.idempotency_key),
+    ] {
+        if !v.is_empty() {
+            headers.push((name.into(), v.to_owned()));
+        }
+    }
     ForwardRequest {
         url: join_url(origin_url, path),
-        headers: vec![
-            ("content-type".into(), "application/json".into()),
-            (HEADER_TIMESTAMP.into(), now_ms.to_string()),
-            (HEADER_SIGNATURE.into(), signature),
-        ],
+        headers,
         body,
     }
 }

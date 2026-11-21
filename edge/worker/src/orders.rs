@@ -17,9 +17,9 @@ pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
 /// 원점 장애 시 `Retry-After` (초)
 pub const RETRY_AFTER_SECS: u32 = 30;
 
-pub const HEADER_FORWARDED_AUTHORIZATION: &str = "x-forwarded-authorization";
-pub const HEADER_FORWARDED_PATH: &str = "x-forwarded-path";
-pub const HEADER_IDEMPOTENCY_KEY: &str = "idempotency-key";
+pub use crate::forward::{
+    HEADER_FORWARDED_AUTHORIZATION, HEADER_FORWARDED_PATH, HEADER_IDEMPOTENCY_KEY,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct OrdersRequest<'a> {
@@ -45,25 +45,23 @@ pub fn build_forward(
     if req.body.is_empty() {
         return Err(EdgeResponse::error(400, "empty_body"));
     }
-    let mut f = forward::signed(
+    // 전달 헤더도 서명에 포함된다 (원점이 같은 값으로 다시 계산한다).
+    let idempotency_key = req
+        .idempotency_key
+        .filter(|k| valid_idempotency_key(k))
+        .unwrap_or("");
+    Ok(forward::signed_with(
         origin_url,
         forward::ORDERS_PATH,
         secret,
         req.body.to_vec(),
         now_ms,
-    );
-    f.headers.extend([
-        (
-            HEADER_FORWARDED_AUTHORIZATION.into(),
-            authorization.to_owned(),
-        ),
-        (HEADER_FORWARDED_PATH.into(), req.kind.public_path().into()),
-    ]);
-    if let Some(k) = req.idempotency_key.filter(|k| valid_idempotency_key(k)) {
-        f.headers
-            .push((HEADER_IDEMPOTENCY_KEY.into(), k.to_owned()));
-    }
-    Ok(f)
+        forward::Forwarded {
+            path: req.kind.public_path(),
+            authorization,
+            idempotency_key,
+        },
+    ))
 }
 
 fn is_header_text(s: &str) -> bool {

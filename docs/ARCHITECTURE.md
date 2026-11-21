@@ -238,7 +238,13 @@ at('getVisitorId', id => ...);         // 비 HttpOnly 모드에서 주문서에
 
 ### 4.2 원점 인증
 
-- Worker에서 Tunnel로 가는 요청에는 `X-Edge-Auth: HMAC(secret, body)` 헤더를 붙입니다.
+- Worker에서 Tunnel로 가는 요청에는 `x-edge-timestamp`, `x-edge-signature` 헤더를 붙입니다.
+  서명은 `hex(HMAC-SHA256(secret, canonical))`이고 canonical(v1)은 다음 7줄을 `\n`으로 잇습니다
+  (`analytics_core::edge_auth`):
+  `v1`, 내부 경로(`/internal/collect`·`/internal/orders`), 타임스탬프(ms), `sha256_hex(body)`,
+  `x-forwarded-path`, `x-forwarded-authorization`, `idempotency-key` (없는 헤더는 빈 문자열).
+  내부 경로와 전달 헤더까지 덮으므로 한 경로용 서명을 다른 경로에 재생하거나 전달 헤더만 바꿔치기할 수
+  없습니다. 타임스탬프 허용 오차는 ±5분입니다.
 - `ingest`는 Tunnel 인터페이스로만 listen합니다(compose 내부 네트워크).
 
 ### 4.3 KV 동기화
