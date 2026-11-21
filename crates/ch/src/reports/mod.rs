@@ -37,6 +37,8 @@ use time::{Date, Duration, format_description::BorrowedFormatItem, macros::forma
 pub const TZ: &str = "Asia/Seoul";
 /// 한 번에 조회할 수 있는 최대 일수.
 pub const MAX_RANGE_DAYS: u32 = 400;
+/// SQL 조각: 취소되지 않은 주문 (`orders.status`).
+pub(crate) const NOT_CANCELLED: &str = "upper(status) != 'CANCELLED'";
 /// 상위 N 목록의 최대 행 수.
 pub const MAX_LIMIT: u32 = 1000;
 
