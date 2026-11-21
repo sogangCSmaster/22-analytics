@@ -2,6 +2,7 @@
 
 use super::http::{OrdersHttp, router};
 use super::{OrderService, ProjectCtx};
+use crate::config::Config;
 use analytics_ch::ProjectScope;
 use analytics_ch::orders::{self as ch_orders, OrderRow};
 use analytics_core::collect::rehash_member;
@@ -42,8 +43,7 @@ async fn make_project(db: &TestDb, settings: Value) -> (i32, String) {
 fn app_for(svc: Arc<OrderService>) -> Router {
     router(OrdersHttp {
         svc,
-        edge_secret: Arc::new(SECRET.to_vec()),
-        emulation: true,
+        cfg: Arc::new(Config::for_tests(SECRET, true)),
     })
 }
 
@@ -1044,8 +1044,7 @@ async fn internal_route_disabled_without_secret() {
     let h = setup().await;
     let app = router(OrdersHttp {
         svc: h.svc.clone(),
-        edge_secret: Arc::new(vec![]),
-        emulation: false,
+        cfg: Arc::new(Config::for_tests(&[], false)),
     });
     let (s, _) = send(&app, "/internal/orders", &[], b"{}".to_vec()).await;
     assert_eq!(s, StatusCode::NOT_FOUND);

@@ -14,6 +14,7 @@
 //! 409 `idempotency_key_reused`: 같은 (이벤트 유형, 멱등 키)로 금액·시각이 다른 요청이 이미 있다.
 
 use super::{OrderService, ProjectCtx};
+use crate::config::Config;
 use analytics_core::edge_auth::{self, HEADER_SIGNATURE, HEADER_TIMESTAMP};
 use analytics_core::orders::api::{ApiError, OrdersKind as Kind, bearer};
 use analytics_core::orders::{self as core_orders, MAX_BATCH_ORDERS, OrderProject};
@@ -42,20 +43,19 @@ const BATCH_CONCURRENCY: usize = 16;
 #[derive(Clone)]
 pub struct OrdersHttp {
     pub svc: Arc<OrderService>,
-    /// 비어 있으면 `/internal/orders`를 등록하지 않는다.
-    pub edge_secret: Arc<Vec<u8>>,
-    /// 참이면 `/v1/orders*`를 직접 받는다 (로컬 엣지 에뮬레이션).
-    pub emulation: bool,
+    /// `edge_secret`이 비어 있으면 `/internal/orders`를 등록하지 않는다.
+    /// `edge_emulation`이면 `/v1/orders*`를 직접 받는다 (로컬 엣지 에뮬레이션).
+    pub cfg: Arc<Config>,
 }
 
 pub fn router<S: Clone + Send + Sync + 'static>(st: OrdersHttp) -> Router<S> {
     let mut r = Router::new();
-    if st.emulation {
+    if st.cfg.edge_emulation {
         r = r
             .route(PATH_SINGLE, post(emulated_single))
             .route(PATH_BATCH, post(emulated_batch));
     }
-    if !st.edge_secret.is_empty() {
+    if !st.cfg.edge_secret.is_empty() {
         r = r.route("/internal/orders", post(internal));
     }
     r.with_state(st)
@@ -87,7 +87,7 @@ async fn internal(State(st): State<OrdersHttp>, headers: HeaderMap, body: Bytes)
         idempotency_key: header(&headers, HEADER_IDEMPOTENCY_KEY).unwrap_or(""),
     };
     if !edge_auth::verify_headers(
-        &st.edge_secret,
+        &st.cfg.edge_secret,
         edge_auth::ORDERS_PATH,
         header(&headers, HEADER_TIMESTAMP),
         header(&headers, HEADER_SIGNATURE),

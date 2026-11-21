@@ -73,8 +73,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(internal::router())
         .merge(orders::http::router(orders::http::OrdersHttp {
             svc: orders,
-            edge_secret: Arc::new(cfg.edge_secret.clone()),
-            emulation: cfg.edge_emulation,
+            cfg: cfg.clone(),
         }));
     if emulator.is_some() {
         app = app.merge(emulate::router(&cfg));

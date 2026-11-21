@@ -14,6 +14,11 @@ pub use clickhouse::Client;
 /// [`ChConfig::client`] 쿼리 실행 시간 제한 (초).
 pub const MAX_EXECUTION_SECS: u32 = 10;
 
+/// 환경 변수 값, 없거나 UTF-8이 아니면 `default`. 서버 설정 로딩(`from_env`) 공용.
+pub fn env_or(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.to_owned())
+}
+
 #[derive(Debug, Clone)]
 pub struct ChConfig {
     pub url: String,
@@ -25,12 +30,11 @@ pub struct ChConfig {
 impl ChConfig {
     /// `CLICKHOUSE_URL`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`
     pub fn from_env() -> Self {
-        let get = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_owned());
         Self {
-            url: get("CLICKHOUSE_URL", "http://localhost:8123"),
-            user: get("CLICKHOUSE_USER", "default"),
-            password: get("CLICKHOUSE_PASSWORD", ""),
-            database: get("CLICKHOUSE_DATABASE", "analytics"),
+            url: env_or("CLICKHOUSE_URL", "http://localhost:8123"),
+            user: env_or("CLICKHOUSE_USER", "default"),
+            password: env_or("CLICKHOUSE_PASSWORD", ""),
+            database: env_or("CLICKHOUSE_DATABASE", "analytics"),
         }
     }
 
