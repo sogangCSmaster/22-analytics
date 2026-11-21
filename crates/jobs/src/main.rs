@@ -239,6 +239,43 @@ async fn shutdown_signal() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn cleanup_sessions_subcommand_parses() {
+        let cli = Cli::try_parse_from(["analytics-jobs", "cleanup-sessions"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::CleanupSessions));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cleanup_sessions_removes_only_expired() {
+        let db = analytics_testkit::TestDb::new().await;
+        let u = analytics_pg::users::create(
+            &db.pg,
+            &analytics_pg::users::NewUser {
+                email: "a@agency.test".into(),
+                password_hash: analytics_pg::users::hash_password("password!!").unwrap(),
+                name: String::new(),
+                is_super_admin: false,
+            },
+        )
+        .await
+        .unwrap();
+        let live = analytics_pg::sessions::create(&db.pg, u.id).await.unwrap();
+        let dead = analytics_pg::sessions::create(&db.pg, u.id).await.unwrap();
+        sqlx::query("UPDATE sessions SET expires_at = now() - interval '1 second' WHERE id = $1")
+            .bind(analytics_pg::sessions::token_hash(&dead))
+            .execute(&db.pg)
+            .await
+            .unwrap();
+        assert_eq!(cleanup_sessions(&db.pg).await.unwrap(), 1);
+        assert_eq!(cleanup_sessions(&db.pg).await.unwrap(), 0, "멱등");
+        assert!(
+            analytics_pg::sessions::lookup(&db.pg, &live)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn create_admin_is_idempotent_and_promotes() {
         let db = analytics_testkit::TestDb::new().await;

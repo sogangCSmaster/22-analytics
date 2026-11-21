@@ -99,6 +99,12 @@ mod tests {
     }
 
     #[test]
+    fn default_bind_does_not_clash_with_dashboard_dev_server() {
+        // 대시보드 개발 서버가 8080을 쓴다
+        assert_eq!(ApiConfig::default().bind, "0.0.0.0:8082");
+    }
+
+    #[test]
     fn parses_bool_flags() {
         assert!(parse_bool("TRUE") && parse_bool("1") && parse_bool(" yes "));
         assert!(!parse_bool("false") && !parse_bool("0") && !parse_bool("nope"));
