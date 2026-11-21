@@ -344,3 +344,156 @@ async fn removed_member_loses_access_immediately() {
         StatusCode::NOT_FOUND
     );
 }
+
+// ---- 멤버 추가 범위 (테넌트 경계) -----------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn org_admin_can_only_add_unaffiliated_accounts() {
+    let app = TestApp::new().await;
+    let f = app.fixture().await;
+    let path = format!("/v1/orgs/{}/members", f.org_id);
+    let org_b = app.create_org(&f.root, "광고주 B").await;
+    app.member("other@agency.test").await;
+    app.add_member(&f.root, org_b, "other@agency.test", "viewer")
+        .await;
+    app.member("free@agency.test").await;
+    let add = |cookie: &str, email: &str, role: &str| {
+        Req::post(&path)
+            .cookie(cookie)
+            .json(json!({ "email": email, "role": role }))
+    };
+
+    // 없는 계정·슈퍼 관리자·다른 광고주 소속 계정은 모두 같은 403 (계정 존재·소속을 알려주지 않는다).
+    let ghost = app.call(add(&f.admin, "ghost@agency.test", "viewer")).await;
+    assert_eq!(ghost.status, StatusCode::FORBIDDEN, "{}", ghost.text);
+    assert_eq!(ghost.error_code(), "forbidden");
+    for email in ["root@agency.test", "other@agency.test"] {
+        let r = app.call(add(&f.admin, email, "admin")).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{email}: {}", r.text);
+        assert_eq!(r.text, ghost.text, "{email}");
+    }
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM memberships m JOIN users u ON u.id = m.user_id \
+         WHERE m.org_id = $1 AND u.email IN ('root@agency.test', 'other@agency.test')",
+    )
+    .bind(f.org_id)
+    .fetch_one(&app.db.pg)
+    .await
+    .unwrap();
+    assert_eq!(n, 0);
+
+    // 어디에도 소속되지 않은 계정은 추가할 수 있다.
+    let r = app.call(add(&f.admin, "free@agency.test", "viewer")).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+
+    // 슈퍼 관리자는 제한 없이 추가하고, 이미 이 광고주 멤버면 org admin도 역할을 바꿀 수 있다.
+    let r = app.call(add(&f.root, "other@agency.test", "viewer")).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = app
+        .call(add(&f.admin, "other@agency.test", "analyst"))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    // 슈퍼 관리자에게는 없는 계정을 알려줘도 된다.
+    let r = app.call(add(&f.root, "ghost@agency.test", "viewer")).await;
+    assert_eq!(r.error_code(), "user_not_found");
+}
+
+// ---- 마지막 admin ---------------------------------------------------------
+
+async fn user_id(app: &TestApp, email: &str) -> i64 {
+    sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
+        .bind(email)
+        .fetch_one(&app.db.pg)
+        .await
+        .unwrap()
+}
+
+async fn admin_count(app: &TestApp, org_id: i64) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM memberships WHERE org_id = $1 AND role = 'admin'")
+        .bind(org_id)
+        .fetch_one(&app.db.pg)
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn last_admin_cannot_be_removed_or_demoted() {
+    let app = TestApp::new().await;
+    let f = app.fixture().await;
+    let path = format!("/v1/orgs/{}/members", f.org_id);
+    let admin = user_id(&app, "admin@agency.test").await;
+
+    // 스스로 강등·탈퇴하거나 슈퍼 관리자가 지워도, 남는 admin이 없으면 409.
+    let demote = Req::post(&path)
+        .cookie(&f.admin)
+        .json(json!({ "email": "admin@agency.test", "role": "viewer" }));
+    let r = app.call(demote).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text);
+    assert_eq!(r.error_code(), "last_admin");
+    for cookie in [&f.admin, &f.root] {
+        let r = app
+            .call(Req::delete(&format!("{path}/{admin}")).cookie(cookie))
+            .await;
+        assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text);
+        assert_eq!(r.error_code(), "last_admin");
+    }
+    assert_eq!(admin_count(&app, f.org_id).await, 1);
+    assert_eq!(app.audit_count("member.remove").await, 0);
+
+    // admin이 한 명 더 있으면 강등할 수 있다. 그다음 남은 한 명은 다시 보호된다.
+    app.member("second@agency.test").await;
+    app.add_member(&f.admin, f.org_id, "second@agency.test", "admin")
+        .await;
+    let r = app
+        .call(
+            Req::post(&path)
+                .cookie(&f.root)
+                .json(json!({ "email": "admin@agency.test", "role": "viewer" })),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let second = user_id(&app, "second@agency.test").await;
+    let r = app
+        .call(Req::delete(&format!("{path}/{second}")).cookie(&f.root))
+        .await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    // 멤버가 아닌 사용자 삭제는 여전히 멱등 204.
+    let r = app
+        .call(Req::delete(&format!("{path}/{admin}9")).cookie(&f.root))
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_admin_removals_leave_one_admin() {
+    let app = TestApp::new().await;
+    let f = app.fixture().await;
+    let path = format!("/v1/orgs/{}/members", f.org_id);
+    app.member("second@agency.test").await;
+    app.add_member(&f.root, f.org_id, "second@agency.test", "admin")
+        .await;
+    let ids = [
+        user_id(&app, "admin@agency.test").await,
+        user_id(&app, "second@agency.test").await,
+    ];
+    for _ in 0..5 {
+        let mut set = tokio::task::JoinSet::new();
+        for id in ids {
+            set.spawn(call_router(
+                app.router.clone(),
+                Req::delete(&format!("{path}/{id}")).cookie(&f.root),
+            ));
+        }
+        let mut codes = vec![];
+        while let Some(r) = set.join_next().await {
+            codes.push(r.unwrap().status);
+        }
+        codes.sort();
+        assert_eq!(codes, [StatusCode::NO_CONTENT, StatusCode::CONFLICT]);
+        assert_eq!(admin_count(&app, f.org_id).await, 1);
+        // 다음 회차를 위해 지워진 쪽을 되돌린다.
+        for email in ["admin@agency.test", "second@agency.test"] {
+            app.add_member(&f.root, f.org_id, email, "admin").await;
+        }
+    }
+}
