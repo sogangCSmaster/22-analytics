@@ -1,0 +1,60 @@
+# 데모 대시보드 → GitHub Pages (백엔드 없음, `--features demo`).
+# 주소: https://<owner>.github.io/22-analytics/
+# 사전 설정: Settings → Pages → Build and deployment → Source: "GitHub Actions"
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pages
+      - name: dioxus-cli 캐시
+        id: dx-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/dx
+          key: dx-0.7.10-${{ runner.os }}
+      - name: dioxus-cli 설치
+        if: steps.dx-cache.outputs.cache-hit != 'true'
+        run: cargo install dioxus-cli@0.7.10 --locked
+      - name: 데모 번들 (릴리스, wasm-opt)
+        run: make demo-pages
+      - name: SPA 폴백(404.html)·.nojekyll
+        run: |
+          OUT=target/dx/analytics-web/release/web/public
+          cp "$OUT/index.html" "$OUT/404.html"
+          touch "$OUT/.nojekyll"
+          ls -la "$OUT"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/dx/analytics-web/release/web/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
