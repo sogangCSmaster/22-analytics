@@ -11,8 +11,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = ApiConfig::from_env();
-    let pg = analytics_pg::connect(&config.database_url).await?;
-    let ch = analytics_ch::ChConfig::from_env().client();
+    let pg = analytics_pg::connect(&config.database_url, config.pg_max_connections).await?;
+    let ch = analytics_ch::ChConfig::from_env().guarded_client();
     let bind = config.bind.clone();
     let app = build_router(AppState::new(pg, ch, config))
         .layer(tower_http::trace::TraceLayer::new_for_http());

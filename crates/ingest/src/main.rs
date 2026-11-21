@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     let (pipeline, writer) = pipeline::start(client.clone(), cfg.clone(), metrics.clone()).await?;
 
     // 주문 API(비밀 키 검증)는 운영·로컬 모두 Postgres가 필요하다.
-    let pool = analytics_pg::connect(&cfg.database_url).await?;
+    let pool = analytics_pg::connect(&cfg.database_url, cfg.pg_max_connections).await?;
     let orders = Arc::new(
         orders::OrderService::new(pool.clone(), client).with_multi_writer(cfg.orders_multi_writer),
     );

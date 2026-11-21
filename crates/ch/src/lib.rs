@@ -13,6 +13,10 @@ pub use clickhouse::Client;
 
 /// [`ChConfig::client`] 쿼리 실행 시간 제한 (초).
 pub const MAX_EXECUTION_SECS: u32 = 10;
+/// [`ChConfig::guarded_client`] 쿼리당 스레드 수. 대시보드 쿼리 몇 개가 서버 코어를 독점하지 않게 한다.
+pub const GUARD_MAX_THREADS: u64 = 2;
+/// [`ChConfig::guarded_client`] 쿼리당 메모리 상한 (바이트, 1.5GB).
+pub const GUARD_MAX_MEMORY_USAGE: u64 = 1_500_000_000;
 
 /// 환경 변수 값, 없거나 UTF-8이 아니면 `default`. 서버 설정 로딩(`from_env`) 공용.
 pub fn env_or(key: &str, default: &str) -> String {
@@ -53,6 +57,15 @@ impl ChConfig {
         self.base()
             .with_database(&self.database)
             .with_setting("max_execution_time", MAX_EXECUTION_SECS.to_string())
+    }
+
+    /// [`Self::client`] + 쿼리당 스레드·메모리 상한. api(리포트)·jobs(기여 연산)용:
+    /// 같은 서버에서 수집 insert와 리포트가 함께 돌아도 한쪽이 자원을 독점하지 않게 한다.
+    /// 수집 insert(ingest)와 테스트는 기본 [`Self::client`]를 쓴다.
+    pub fn guarded_client(&self) -> Client {
+        self.client()
+            .with_setting("max_threads", GUARD_MAX_THREADS.to_string())
+            .with_setting("max_memory_usage", GUARD_MAX_MEMORY_USAGE.to_string())
     }
 
     /// 데이터베이스 지정 없는 클라이언트 (DB 생성용).

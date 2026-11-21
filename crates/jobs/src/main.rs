@@ -2,6 +2,9 @@ use analytics_jobs::attribution::{self, Mode, worker};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+/// jobs Postgres 풀 기본 크기. 잡은 배치 단위로 순차 실행한다.
+const DEFAULT_PG_MAX_CONNECTIONS: u32 = 3;
+
 #[derive(Parser)]
 #[command(name = "analytics-jobs", about = "22-analytics 운영 CLI")]
 struct Cli {
@@ -11,6 +14,9 @@ struct Cli {
         default_value = "postgres://analytics:analytics@localhost:5432/analytics"
     )]
     database_url: String,
+    /// Postgres 풀 크기
+    #[arg(long, env = analytics_pg::ENV_MAX_CONNECTIONS, default_value_t = DEFAULT_PG_MAX_CONNECTIONS)]
+    pg_max_connections: u32,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -132,14 +138,14 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.cmd {
         Cmd::Migrate => {
-            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let pool = analytics_pg::connect(&cli.database_url, cli.pg_max_connections).await?;
             analytics_pg::migrate(&pool).await?;
             tracing::info!("Postgres 마이그레이션 완료");
             let applied = analytics_ch::migrate::run(&analytics_ch::ChConfig::from_env()).await?;
             tracing::info!(?applied, "ClickHouse 마이그레이션 완료");
         }
         Cmd::SeedDev => {
-            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let pool = analytics_pg::connect(&cli.database_url, cli.pg_max_connections).await?;
             let seed = analytics_pg::seed::dev(&pool).await?;
             println!("광고주 id      : {}", seed.org_id);
             println!("프로젝트 id    : {}", seed.project_id);
@@ -147,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
             println!("테스트 페이지  : http://localhost:8081/dev/");
         }
         Cmd::CreateKey { project } => {
-            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let pool = analytics_pg::connect(&cli.database_url, cli.pg_max_connections).await?;
             let (plain, row) = analytics_pg::api_keys::create(&pool, project, None).await?;
             println!("키 id   : {}", row.id);
             println!("prefix  : {}", row.prefix);
@@ -159,8 +165,8 @@ async fn main() -> anyhow::Result<()> {
             full,
             since_days,
         } => {
-            let pool = analytics_pg::connect(&cli.database_url).await?;
-            let ch = analytics_ch::ChConfig::from_env().client();
+            let pool = analytics_pg::connect(&cli.database_url, cli.pg_max_connections).await?;
+            let ch = analytics_ch::ChConfig::from_env().guarded_client();
             let mode = if full {
                 Mode::Full { since_days }
             } else {
@@ -173,8 +179,8 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         Cmd::ConservationCheck { project, full } => {
-            let pool = analytics_pg::connect(&cli.database_url).await?;
-            let ch = analytics_ch::ChConfig::from_env().client();
+            let pool = analytics_pg::connect(&cli.database_url, cli.pg_max_connections).await?;
+            let ch = analytics_ch::ChConfig::from_env().guarded_client();
             let window = if full {
                 attribution::ConservationWindow::Full
             } else {
@@ -205,7 +211,7 @@ async fn main() -> anyhow::Result<()> {
             name,
             reset_password,
         } => {
-            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let pool = analytics_pg::connect(&cli.database_url, cli.pg_max_connections).await?;
             match create_admin(&pool, &email, &password, &name, reset_password).await? {
                 AdminOutcome::Created(id) => println!("슈퍼 관리자 생성: id={id}"),
                 AdminOutcome::Promoted(id) if reset_password => {
@@ -217,13 +223,13 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::CleanupSessions => {
-            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let pool = analytics_pg::connect(&cli.database_url, cli.pg_max_connections).await?;
             let n = cleanup_sessions(&pool).await?;
             println!("만료 세션 {n}건 삭제");
         }
         Cmd::Worker => {
-            let pool = analytics_pg::connect(&cli.database_url).await?;
-            let ch = analytics_ch::ChConfig::from_env().client();
+            let pool = analytics_pg::connect(&cli.database_url, cli.pg_max_connections).await?;
+            let ch = analytics_ch::ChConfig::from_env().guarded_client();
             worker::run(
                 &ch,
                 &pool,

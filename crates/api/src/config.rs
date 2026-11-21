@@ -19,7 +19,12 @@ pub struct ApiConfig {
     /// `TRACKER_HOST`: 스니펫의 `t.js` 호스트
     pub tracker_host: String,
     pub login_limit: LoginLimitConfig,
+    /// `PG_MAX_CONNECTIONS` (기본 [`DEFAULT_PG_MAX_CONNECTIONS`])
+    pub pg_max_connections: u32,
 }
+
+/// api 서버 Postgres 풀 기본 크기.
+pub const DEFAULT_PG_MAX_CONNECTIONS: u32 = 4;
 
 /// 로그인 실패 제한. 창(window) 안의 실패 횟수가 상한에 닿으면 429.
 #[derive(Debug, Clone)]
@@ -58,6 +63,7 @@ impl Default for ApiConfig {
             trust_proxy_headers: false,
             tracker_host: "http://localhost:8081".into(),
             login_limit: LoginLimitConfig::default(),
+            pg_max_connections: DEFAULT_PG_MAX_CONNECTIONS,
         }
     }
 }
@@ -76,6 +82,7 @@ impl ApiConfig {
             trust_proxy_headers: get("TRUST_PROXY_HEADERS").is_some_and(|v| parse_bool(&v)),
             tracker_host: get("TRACKER_HOST").unwrap_or(d.tracker_host),
             login_limit: d.login_limit,
+            pg_max_connections: analytics_pg::max_connections_from_env(d.pg_max_connections),
         }
     }
 }

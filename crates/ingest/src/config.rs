@@ -4,6 +4,8 @@ use std::time::Duration;
 
 /// ClickHouse 배치 플러시 주기 기본값. 길수록 INSERT(파트) 수가 줄어든다.
 pub const DEFAULT_FLUSH_INTERVAL_MS: &str = "3000";
+/// Postgres 풀 기본 크기 (`PG_MAX_CONNECTIONS`). 키 검증·프로젝트 조회뿐이고 결과를 캐시한다.
+pub const DEFAULT_PG_MAX_CONNECTIONS: u32 = 3;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -20,6 +22,8 @@ pub struct Config {
     /// 주문을 쓰는 ingest가 여러 대인가 (`ORDERS_MULTI_WRITER`, 기본 false).
     /// 켜면 주문 투영을 쓴 뒤 다시 읽어 프로세스 간 경합을 보정한다 (orders 모듈 문서 5번).
     pub orders_multi_writer: bool,
+    /// `PG_MAX_CONNECTIONS`
+    pub pg_max_connections: u32,
 }
 
 impl Config {
@@ -53,6 +57,7 @@ impl Config {
             tracker_dist: get("TRACKER_DIST", "./tracker/dist").into(),
             dev_site_dir: get("DEV_SITE_DIR", "./dev/site").into(),
             orders_multi_writer: flag(&get("ORDERS_MULTI_WRITER", "false")),
+            pg_max_connections: analytics_pg::max_connections_from_env(DEFAULT_PG_MAX_CONNECTIONS),
         })
     }
 }
@@ -78,6 +83,7 @@ impl Config {
             tracker_dist: "./tracker/dist".into(),
             dev_site_dir: "./dev/site".into(),
             orders_multi_writer: false,
+            pg_max_connections: DEFAULT_PG_MAX_CONNECTIONS,
         }
     }
 }
