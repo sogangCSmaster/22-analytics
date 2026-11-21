@@ -41,7 +41,7 @@ test:      ## 전체 테스트 (DB 필요: make up migrate)
 	cargo test -p analytics-web --no-default-features
 	cd tracker && npm run -s check && npm test
 
-e2e:       ## 매뉴얼 1.A 시나리오 E2E (실제 프로세스 + 브라우저, DB 필요)
+e2e:       ## E2E: 매뉴얼 1.A 시나리오 + 대시보드 (실제 프로세스 + 브라우저, DB·dx 필요)
 	cd e2e && npm test
 
 lint:

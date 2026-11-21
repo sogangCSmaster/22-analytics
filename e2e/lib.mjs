@@ -13,7 +13,8 @@ export const DATABASE_URL = process.env.DATABASE_URL || "postgres://analytics:an
 export const CLICKHOUSE_URL = process.env.CLICKHOUSE_URL || "http://localhost:8123";
 export const INGEST = "http://localhost:18081";
 export const API = "http://localhost:18082";
-export const DASHBOARD_ORIGIN = "http://localhost:8080";
+export const DASHBOARD = "http://localhost:18080";
+export const DASHBOARD_ORIGIN = DASHBOARD;
 
 // 헤드리스 표시가 없는 일반 브라우저 UA (봇 필터 통과용)
 export const UA =
@@ -32,6 +33,38 @@ export function build() {
     stdio: "inherit",
   });
   execFileSync("npm", ["run", "-s", "build"], { cwd: join(ROOT, "tracker"), stdio: "inherit" });
+}
+
+/** 대시보드(dx) 빌드: API 주소를 E2E 포트로 넣어 빌드한다 */
+export function buildDashboard() {
+  execFileSync("dx", ["build", "--platform", "web", "--package", "analytics-web"], {
+    cwd: ROOT,
+    stdio: ["ignore", "ignore", "inherit"],
+    env: { ...process.env, API_BASE: API },
+  });
+  return join(TARGET, "dx/analytics-web/debug/web/public");
+}
+
+/** SPA 폴백(없는 경로 → index.html)이 있는 정적 서버 */
+export async function serveStatic(dir, port) {
+  const http = await import("node:http");
+  const { readFile } = await import("node:fs/promises");
+  const { extname } = await import("node:path");
+  const types = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml" };
+  const server = http.createServer(async (req, res) => {
+    const path = decodeURIComponent(new URL(req.url, "http://x").pathname);
+    const file = join(dir, path.includes("..") ? "index.html" : path);
+    try {
+      const body = await readFile(file);
+      res.writeHead(200, { "content-type": types[extname(file)] || "application/octet-stream" });
+      res.end(body);
+    } catch {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(await readFile(join(dir, "index.html")));
+    }
+  });
+  await new Promise((r) => server.listen(port, "127.0.0.1", r));
+  return () => server.close();
 }
 
 export function jobs(args) {

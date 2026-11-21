@@ -88,6 +88,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo install dioxus-cli@0.7.10 --locked
       - run: cd tracker && npm install
       - run: npm install -g playwright && npx playwright install --with-deps chromium
       - run: cd e2e && NODE_PATH=$(npm root -g) npm test
