@@ -1,10 +1,12 @@
 //! 라우트 핸들러와 DB 행 → DTO 변환.
 
 pub mod ad_spend;
+pub mod api_keys;
 pub mod auth;
 pub mod orgs;
 pub mod project_config;
 pub mod projects;
+pub mod reports;
 pub mod users;
 
 use crate::AppState;

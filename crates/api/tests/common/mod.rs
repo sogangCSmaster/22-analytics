@@ -8,6 +8,7 @@
 //! I/O를 처리할 스레드가 없어 교착된다.
 #![allow(dead_code)]
 
+use analytics_api::clock::FixedClock;
 use analytics_api::{ApiConfig, AppState, build_router};
 use analytics_testkit::TestDb;
 use axum::Router;
@@ -15,6 +16,7 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use tower::ServiceExt;
 
 pub const ORIGIN: &str = "http://localhost:8080";
@@ -123,12 +125,25 @@ impl TestApp {
     }
 
     pub async fn with_config(f: impl FnOnce(&mut ApiConfig)) -> Self {
+        Self::build(f, |s| s).await
+    }
+
+    /// 설정과 상태(시계·ClickHouse 클라이언트 등)를 바꿔 만든다.
+    pub async fn build(
+        f: impl FnOnce(&mut ApiConfig),
+        g: impl FnOnce(AppState) -> AppState,
+    ) -> Self {
         let db = TestDb::new().await;
         let mut config = ApiConfig::default();
         f(&mut config);
-        let state = AppState::new(db.pg.clone(), db.ch.clone(), config);
+        let state = g(AppState::new(db.pg.clone(), db.ch.clone(), config));
         let router = build_router(state);
         Self { db, router }
+    }
+
+    /// 시계를 `now`로 고정한 앱.
+    pub async fn at(now: time::OffsetDateTime) -> Self {
+        Self::build(|_| {}, |s| s.with_clock(Arc::new(FixedClock(now)))).await
     }
 
     pub async fn call(&self, req: Req) -> Resp {
