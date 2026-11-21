@@ -51,9 +51,9 @@ pub struct Forwarded<'a> {
     pub idempotency_key: &'a str,
 }
 
-pub const HEADER_FORWARDED_AUTHORIZATION: &str = "x-forwarded-authorization";
-pub const HEADER_FORWARDED_PATH: &str = "x-forwarded-path";
-pub const HEADER_IDEMPOTENCY_KEY: &str = "idempotency-key";
+pub use analytics_core::orders::api::{
+    HEADER_FORWARDED_AUTHORIZATION, HEADER_FORWARDED_PATH, HEADER_IDEMPOTENCY_KEY,
+};
 
 /// 서명 헤더를 붙인 원점 요청 (전달 헤더 없음). 본문은 바이트 그대로 서명한다.
 pub fn signed(

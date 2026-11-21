@@ -266,7 +266,7 @@ async fn handle_config(req: &Request, env: &Env) -> EdgeResponse {
 
 async fn handle_orders(req: &mut Request, env: &Env, kind: OrdersKind) -> EdgeResponse {
     if http::declared_too_large(header(req, "content-length").as_deref(), kind.body_limit()) {
-        return EdgeResponse::error(413, "payload_too_large");
+        return EdgeResponse::api_error(http::ApiError::TooLarge);
     }
     let Ok(body) = req.bytes().await else {
         return EdgeResponse::error(400, "bad_body");
