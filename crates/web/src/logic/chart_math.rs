@@ -22,10 +22,19 @@ pub fn nice_ceil(v: f64) -> f64 {
 }
 
 /// 0부터 `nice_ceil(max)`까지 `count`등분 눈금 (count+1개).
+/// 간격은 1·2·2.5·5×10ⁿ. 칸 수는 `count`, `count+1`, `count-1` 중 위쪽 여백이 가장 작은 것.
 pub fn ticks(max: f64, count: usize) -> Vec<f64> {
-    let top = nice_ceil(max);
+    let max = if max.is_finite() && max > 0.0 { max } else { 1.0 };
     let count = count.max(1);
-    (0..=count).map(|k| top * k as f64 / count as f64).collect()
+    let (step, n) = [count, count + 1, count.saturating_sub(1).max(1)]
+        .into_iter()
+        .map(|c| (nice_ceil(max / c as f64), c))
+        .fold(None::<(f64, usize)>, |best, (s, c)| match best {
+            Some((bs, bc)) if bs * bc as f64 <= s * c as f64 => Some((bs, bc)),
+            _ => Some((s, c)),
+        })
+        .unwrap_or((1.0, 1));
+    (0..=n).map(|k| step * k as f64).collect()
 }
 
 /// 그리기 영역.

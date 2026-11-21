@@ -87,7 +87,7 @@ pub fn Realtime(pid: ReadSignal<i32>) -> Element {
                     if d.top_pages.is_empty() {
                         EmptyState { icon: "▤", title: "아직 없어요", desc: "최근 30분 동안 조회된 페이지가 없습니다." }
                     } else {
-                        BarList { items: d.top_pages.iter().map(|p| (p.path.clone(), p.pageviews as i64)).collect::<Vec<_>>(), show_share: true }
+                        BarList { items: d.top_pages.iter().map(|p| (format::path(&p.path), p.pageviews as i64)).collect::<Vec<_>>(), show_share: true }
                     }
                 }
             },

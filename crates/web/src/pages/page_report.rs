@@ -51,7 +51,7 @@ pub fn Pages(pid: ReadSignal<i32>) -> Element {
                 }
                 {
                     let rows: Vec<Vec<String>> = match &*res.read() {
-                        Some(Ok(v)) => v.iter().map(|r| vec![r.path.clone(), r.pageviews.to_string(), r.visitors.to_string(), r.entrances.to_string()]).collect(),
+                        Some(Ok(v)) => v.iter().map(|r| vec![format::path(&r.path), r.pageviews.to_string(), r.visitors.to_string(), r.entrances.to_string()]).collect(),
                         _ => vec![],
                     };
                     rsx! { CsvButton { file_name: format!("페이지_{}.csv", range.label()), headers: vec!["경로".into(), "페이지뷰".into(), "방문자".into(), "시작 세션".into()], rows } }
@@ -69,7 +69,7 @@ pub fn Pages(pid: ReadSignal<i32>) -> Element {
                 }
                 let total: u64 = rows.iter().map(|r| r.pageviews).sum();
                 sort_rows(&mut rows, sort(), |a, b, k| match k {
-                    Col::Path => cmp_text(&a.path, &b.path),
+                    Col::Path => cmp_text(&format::path(&a.path), &format::path(&b.path)),
                     Col::Pageviews => a.pageviews.cmp(&b.pageviews),
                     Col::Visitors => a.visitors.cmp(&b.visitors),
                     Col::Entrances => a.entrances.cmp(&b.entrances),
@@ -89,7 +89,7 @@ pub fn Pages(pid: ReadSignal<i32>) -> Element {
                             tbody {
                                 for (i, r) in rows.iter().enumerate() {
                                     tr { key: "{i}",
-                                        td { class: "path-cell", title: "{r.path}", "{r.path}" }
+                                        td { class: "path-cell", title: "{format::path(&r.path)}", "{format::path(&r.path)}" }
                                         td { class: "r", "{format::count(r.pageviews)}" }
                                         td { class: "r muted", {format::pct(if total > 0 { r.pageviews as f64 / total as f64 } else { 0.0 }, 1)} }
                                         td { class: "r", "{format::count(r.visitors)}" }

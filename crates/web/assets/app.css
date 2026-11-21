@@ -71,7 +71,8 @@
 .sort-arrow { font-size: 10px; color: var(--primary); min-width: 8px; }
 .cell-title { font-weight: 600; }
 .cell-sub { font-size: 12px; color: var(--text-weak); margin-top: 2px; }
-.path-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 13px; }
+.grid-2 .path-cell { max-width: 260px; }
+.path-cell { max-width: 520px; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 13px; }
 .wrap-cell { white-space: normal !important; min-width: 220px; color: var(--text-sub); font-size: 14px; }
 .strike-soft { text-decoration: line-through; text-decoration-color: var(--text-disabled); }
 .table tbody tr.clickable:focus-visible td { background: var(--primary-weak); }
@@ -96,7 +97,7 @@
 .chips { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .chip { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer; color: var(--text-sub); font-family: var(--font-mono); }
 .chip.on { border-color: var(--primary); background: var(--primary-weak); color: var(--primary); }
-.savebar { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: var(--s-4); padding: var(--s-4) 0; background: linear-gradient(transparent, var(--bg) 30%); }
+.savebar { position: sticky; bottom: 0; z-index: 3; display: flex; align-items: center; justify-content: flex-end; gap: var(--s-4); padding: var(--s-3) 0; background: var(--bg); border-top: 1px solid var(--line); }
 .savebar .muted { margin-right: auto; font-size: var(--fs-caption); }
 .file-btn { position: relative; overflow: hidden; }
 .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
@@ -156,7 +157,7 @@
 .swatch { display: inline-block; width: 12px; height: 3px; border-radius: 2px; background: var(--chart-1); }
 .swatch.dashed { background: repeating-linear-gradient(90deg, var(--text-disabled) 0 4px, transparent 4px 7px); }
 .chart-legend { margin-top: var(--s-3); }
-.chart-legend .swatch { margin-right: 6px; vertical-align: middle; }
+.chart-legend .swatch, .legend i.swatch { width: 14px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
 .split-bar .seg { transition: opacity .15s; min-width: 2px; }
 .split-bar:hover .seg:not(.on) { opacity: .45; }
 .legend span.on { color: var(--text); }
@@ -198,9 +199,21 @@
   .page-title { font-size: 22px; }
   .card-head { flex-wrap: wrap; }
   .barlist-row { grid-template-columns: minmax(0, 110px) 1fr auto; }
-  .path-cell { max-width: 200px; }
+  .path-cell, .grid-2 .path-cell { max-width: 180px; }
+  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); }
+  .grid-4 .card.stat { padding: var(--s-4) var(--s-3); }
+  .grid-4 .stat-value { font-size: 22px; }
+  .grid-4 .sparkline { display: none; }
   .inline-form { flex-direction: column; align-items: stretch; }
   .inline-form .field { max-width: none; }
   .inline-form > .btn { margin-top: 0; }
   .segmented { max-width: 100%; overflow-x: auto; }
 }
+
+/* 범주 색 (차트 조각·범례) */
+.c0 { background: var(--chart-1); }
+.c1 { background: var(--chart-2); }
+.c2 { background: var(--chart-3); }
+.c3 { background: var(--chart-4); }
+.c4 { background: var(--chart-5); }
+.c5 { background: var(--chart-6); }

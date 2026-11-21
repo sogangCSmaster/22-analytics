@@ -208,13 +208,32 @@ pub fn datetime_kr(s: &str) -> String {
         && b[10] == b'T'
         && b[13] == b':'
         && [11, 12, 14, 15].iter().all(|&i| b[i].is_ascii_digit());
-    match ok.then(|| Day::parse(&s[..10])).flatten() {
-        Some(d) => {
-            let (_, m, dd) = d.ymd();
-            format!("{m}월 {dd}일 {}", &s[11..16])
+    let (Some(d), true) = (ok.then(|| Day::parse(&s[..10])).flatten(), ok) else {
+        return s.to_owned();
+    };
+    let hm: i64 = s[11..13].parse::<i64>().unwrap_or(0) * 60 + s[14..16].parse::<i64>().unwrap_or(0);
+    // 초·소수점 뒤의 오프셋 (`Z`, `+09:00`, `-05:00`). 없으면 서울 시각으로 본다.
+    let tail = &s[16..];
+    let offset_min = match tail.find(['Z', '+', '-']) {
+        Some(i) if &tail[i..] == "Z" => Some(0),
+        Some(i) => {
+            let o = &tail[i + 1..];
+            let sign = if tail.as_bytes()[i] == b'-' { -1 } else { 1 };
+            match (o.get(0..2).and_then(|h| h.parse::<i64>().ok()), o.get(3..5).and_then(|m| m.parse::<i64>().ok())) {
+                (Some(h), Some(m)) if o.len() == 5 => Some(sign * (h * 60 + m)),
+                _ => None,
+            }
         }
-        None => s.to_owned(),
-    }
+        None => Some(9 * 60),
+    };
+    let Some(off) = offset_min else {
+        return s.to_owned();
+    };
+    let total = d.0 as i64 * 1440 + hm - off + 9 * 60;
+    let day = Day(total.div_euclid(1440) as i32);
+    let mins = total.rem_euclid(1440);
+    let (_, m, dd) = day.ymd();
+    format!("{m}월 {dd}일 {:02}:{:02}", mins / 60, mins % 60)
 }
 
 fn days_in_month(y: i32, m: u32) -> u32 {

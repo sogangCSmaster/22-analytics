@@ -207,8 +207,7 @@ fn ProjectSwitcher(current: Option<i32>) -> Element {
                     if total == 0 {
                         div { class: "muted pop-empty", "접근 가능한 프로젝트가 없습니다" }
                     }
-                    for (org, projects) in tree.into_iter() {
-                        if projects.iter().any(|(_, n, _)| contains_ci(n, &q()) || contains_ci(&org, &q())) {
+                    for (org, projects) in tree.into_iter().filter(|(org, ps)| ps.iter().any(|(_, n, _)| contains_ci(n, &q()) || contains_ci(org, &q()))) {
                             div { key: "{org}", class: "pop-group",
                                 div { class: "pop-org", "{org}" }
                                 for (id, name, paused) in projects.into_iter().filter(|(_, n, _)| contains_ci(n, &q()) || contains_ci(&org, &q())) {
@@ -231,7 +230,6 @@ fn ProjectSwitcher(current: Option<i32>) -> Element {
                                     }
                                 }
                             }
-                        }
                     }
                 }
             }

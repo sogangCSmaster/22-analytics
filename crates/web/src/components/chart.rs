@@ -10,15 +10,9 @@ use crate::logic::chart_math::{
 };
 use dioxus::prelude::*;
 
-/// 차트 색 (primary 계열 중심, 상태색은 쓰지 않는다)
-pub const PALETTE: [&str; 6] = [
-    "var(--chart-1)",
-    "var(--chart-2)",
-    "var(--chart-3)",
-    "var(--chart-4)",
-    "var(--chart-5)",
-    "var(--chart-6)",
-];
+/// 범주 색 개수. 실제 색은 CSS `.c0`~`.c5` (tokens.css의 --chart-1~6, primary 계열 중심).
+/// 인라인 style로 넣으면 갱신 때 브라우저가 var() 배경을 떨어뜨리는 경우가 있어 클래스로 준다.
+pub const PALETTE_N: usize = 6;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Series {
@@ -123,14 +117,12 @@ pub fn LineChart(
                     }
                 }
                 if let Some(i) = hovered {
-                    for (si, s) in series.iter().enumerate() {
-                        if let Some(v) = s.values.get(i) {
+                    for (si, s, v) in series.iter().enumerate().filter_map(|(si, s)| s.values.get(i).map(|v| (si, s, v))) {
                             span {
                                 key: "d{si}",
                                 class: if s.muted { "dot muted" } else { "dot" },
                                 style: "left: {px(f.x(i, n)):.2}%; top: {f.y(*v, top) / f.h * 100.0:.2}%",
                             }
-                        }
                     }
                 }
                 div { class: "hover-layer",
@@ -332,15 +324,14 @@ pub fn ShareBar(parts: Vec<(String, i64)>, #[props(default)] money: bool) -> Ele
         div { class: "share-wrap",
             div { class: "split-bar", role: "img", aria_label: "구성 비율",
                 for (i, ((label, v), p)) in parts.iter().zip(pcts.iter()).enumerate() {
-                    if *p > 0.0 {
-                        div {
+                    div {
                             key: "{i}",
-                            class: if hover() == Some(i) { "seg on" } else { "seg" },
+                            class: if hover() == Some(i) { "seg c{i % PALETTE_N} on" } else { "seg c{i % PALETTE_N}" },
                             title: "{label} {fmt(*v)} ({format::trim_float(*p, 1)}%)",
-                            style: "flex: {p}; background: {PALETTE[i % PALETTE.len()]};",
+                            style: "flex: {p} 1 0",
+                            hidden: *p <= 0.0,
                             onmouseenter: move |_| hover.set(Some(i)),
                             onmouseleave: move |_| hover.set(None),
-                        }
                     }
                 }
             }
@@ -351,7 +342,7 @@ pub fn ShareBar(parts: Vec<(String, i64)>, #[props(default)] money: bool) -> Ele
                         class: if hover() == Some(i) { "on" } else { "" },
                         onmouseenter: move |_| hover.set(Some(i)),
                         onmouseleave: move |_| hover.set(None),
-                        i { style: "background: {PALETTE[i % PALETTE.len()]};" }
+                        i { class: "c{i % PALETTE_N}" }
                         "{label} "
                         b { "{format::trim_float(*p, 1)}%" }
                         if hover() == Some(i) {

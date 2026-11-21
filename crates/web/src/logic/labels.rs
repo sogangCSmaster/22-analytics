@@ -24,7 +24,7 @@ pub fn channel(id: &str) -> String {
         "youtube" => "유튜브",
         "dfinery" => "디파이너리",
         "email" => "이메일",
-        "unattributed" => "미귀속",
+        "unattributed" | "(unattributed)" | "(none)" => "미귀속",
         _ => return id.to_owned(),
     };
     known.to_owned()

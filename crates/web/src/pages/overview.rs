@@ -193,7 +193,7 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                                 tbody {
                                     for (i, r) in rows.iter().enumerate() {
                                         tr { key: "{i}",
-                                            td { class: "path-cell", title: "{r.path}", "{r.path}" }
+                                            td { class: "path-cell", title: "{format::path(&r.path)}", "{format::path(&r.path)}" }
                                             td { class: "r", "{format::count(r.pageviews)}" }
                                             td { class: "r muted", "{format::count(r.visitors)}" }
                                         }

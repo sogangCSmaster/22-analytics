@@ -15,7 +15,7 @@ use analytics_core::dto::admin::AttributionSettingsDto;
 use analytics_core::dto::reports::{OrderDetail, OverlapReport, RecentOrdersReport, RevenueReport};
 use dioxus::prelude::*;
 
-pub const ORDERS_PAGE: u32 = 20;
+pub const ORDERS_PAGE: u32 = 10;
 
 /// 광고주 설명용 문안 (매뉴얼 1.D(3) 톤). 실제 수치로 채운다.
 pub fn explain(r: &RevenueReport) -> Option<String> {
@@ -205,7 +205,7 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                 })}
             }
 
-            div { class: "grid grid-2",
+            div { class: "grid grid-2 align-start",
                 Card { title: "중복이 생기는 매체 조합",
                     {load(overlap, rsx! { SkeletonBlock { rows: 5 } }, |o| rsx! {
                         if o.paths.is_empty() {

@@ -114,7 +114,23 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
 
 /// 퍼센트 인코딩된 경로를 사람이 읽는 형태로 (화면 표시 전용, 텍스트로만 그린다).
 pub fn path(s: &str) -> String {
-    todo!()
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_owned())
 }
 
 pub(crate) fn trim_float(v: f64, digits: usize) -> String {
