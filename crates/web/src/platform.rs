@@ -31,14 +31,20 @@ mod imp {
             .is_some_and(|d| d.hidden())
     }
 
-    /// 현재 경로 + 쿼리 (`/p/1/pages?x=1`)
+    /// 배포 기본 경로 (`dx --base-path 22-analytics` → `/22-analytics`, 없으면 빈 문자열)
+    pub fn base_prefix() -> String {
+        crate::logic::query::base_prefix(dioxus::cli_config::web_base_path().as_deref())
+    }
+
+    /// 현재 경로 + 쿼리, 기본 경로를 뺀 앱 안의 경로 (`/p/1/pages?x=1`)
     pub fn current_path() -> String {
-        web_sys::window()
+        let full = web_sys::window()
             .and_then(|w| {
                 let l = w.location();
                 Some(format!("{}{}", l.pathname().ok()?, l.search().ok()?))
             })
-            .unwrap_or_else(|| "/".into())
+            .unwrap_or_else(|| "/".into());
+        crate::logic::query::strip_base(&full, &base_prefix())
     }
 
     /// 세션 만료: 로그인 화면으로 (전체 새로 고침으로 상태를 비운다).
@@ -48,7 +54,11 @@ mod imp {
             return;
         }
         if let Some(w) = web_sys::window() {
-            let url = format!("/login?next={}", crate::logic::query::encode(&next));
+            let url = format!(
+                "{}/login?next={}",
+                base_prefix(),
+                crate::logic::query::encode(&next)
+            );
             let _ = w.location().replace(&url);
         }
     }

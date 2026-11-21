@@ -1,9 +1,9 @@
-# 로컬 개발 명령. 배포 관련 명령은 없다 (배포는 대행사 계정·도메인 수령 후).
+# 로컬 개발 명령. 운영 배포 명령은 없다. 데모(GitHub Pages)만 `demo-pages`로 빌드한다.
 COMPOSE := docker compose -f infra/compose/docker-compose.yml
 export DATABASE_URL ?= postgres://analytics:analytics@localhost:5432/analytics
 export CLICKHOUSE_URL ?= http://localhost:8123
 
-.PHONY: up down reset migrate seed tracker ingest api web web-release test e2e lint fmt check
+.PHONY: up down reset migrate seed tracker ingest api web web-release demo demo-pages e2e-demo test e2e lint fmt check
 
 up:        ## DB 기동 (ClickHouse, Postgres)
 	$(COMPOSE) up -d --wait
@@ -34,6 +34,15 @@ web:       ## 대시보드 개발 서버 → http://localhost:8080
 
 web-release:  ## 대시보드 배포용 번들 (wasm-release 프로필: opt-level z, fat LTO + wasm-opt -Oz)
 	dx bundle --platform web --package analytics-web --release --profile wasm-release
+
+demo:      ## 데모 대시보드 (백엔드 없음, 예시 데이터) → http://localhost:8080 , 아무 이메일·비밀번호로 로그인
+	dx serve --platform web --package analytics-web --features demo
+
+demo-pages:  ## GitHub Pages용 데모 번들 (/22-analytics/ 경로, 릴리스 + wasm-opt) → target/dx/analytics-web/release/web/public
+	dx bundle --platform web --package analytics-web --release --features demo --base-path 22-analytics
+
+e2e-demo:  ## 데모 E2E: /22-analytics/ 경로 + 404.html 폴백으로 띄워 로그인~전 화면 확인, docs/screenshots/demo-*.png
+	cd e2e && npm run -s test:demo
 
 test:      ## 전체 테스트 (DB 필요: make up migrate)
 	cargo test --workspace --exclude analytics-web --exclude analytics-edge

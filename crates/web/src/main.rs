@@ -6,6 +6,8 @@
 
 mod api;
 mod components;
+#[cfg(any(feature = "demo", test))]
+mod demo;
 mod format;
 mod logic;
 mod pages;

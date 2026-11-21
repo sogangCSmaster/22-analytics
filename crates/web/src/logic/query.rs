@@ -6,7 +6,7 @@ use super::dates::DateRange;
 use analytics_core::attribution::Model;
 
 /// 컴파일 시 `API_BASE`로 바꿀 수 있다.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(any(not(target_arch = "wasm32"), feature = "demo"), allow(dead_code))]
 pub fn api_base() -> &'static str {
     option_env!("API_BASE").unwrap_or("http://localhost:8082")
 }
@@ -67,11 +67,34 @@ impl Query {
 }
 
 /// `base` + `path` (중복 슬래시 없이). 브라우저 fetch에서만 쓴다.
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(any(all(target_arch = "wasm32", not(feature = "demo")), test))]
 pub fn join(base: &str, path: &str) -> String {
     let b = base.trim_end_matches('/');
     let p = path.trim_start_matches('/');
     format!("{b}/{p}")
+}
+
+/// 배포 기본 경로 정규화: `22-analytics`, `/22-analytics/` → `/22-analytics`. 없거나 `/`면 빈 문자열.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn base_prefix(base: Option<&str>) -> String {
+    match base.map(|b| b.trim_matches('/')) {
+        Some(b) if !b.is_empty() => format!("/{b}"),
+        _ => String::new(),
+    }
+}
+
+/// 브라우저 주소에서 기본 경로를 뺀 앱 안의 경로 (`/22-analytics/p/1` → `/p/1`).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn strip_base(full: &str, prefix: &str) -> String {
+    if prefix.is_empty() {
+        return full.to_owned();
+    }
+    match full.strip_prefix(prefix) {
+        Some("") => "/".into(),
+        Some(rest) if rest.starts_with('/') => rest.to_owned(),
+        Some(rest) if rest.starts_with('?') => format!("/{rest}"),
+        _ => full.to_owned(),
+    }
 }
 
 fn project(pid: i32) -> String {
@@ -247,6 +270,32 @@ mod tests {
         assert_eq!(join("http://a:8082/", "/v1/x"), "http://a:8082/v1/x");
         assert_eq!(join("http://a:8082", "v1/x"), "http://a:8082/v1/x");
         assert_eq!(join("", "/v1/x"), "/v1/x");
+    }
+
+    #[test]
+    fn base_path_prefix() {
+        assert_eq!(base_prefix(None), "");
+        assert_eq!(base_prefix(Some("")), "");
+        assert_eq!(base_prefix(Some("/")), "");
+        assert_eq!(base_prefix(Some("22-analytics")), "/22-analytics");
+        assert_eq!(base_prefix(Some("/22-analytics/")), "/22-analytics");
+        assert_eq!(base_prefix(Some("a/b")), "/a/b");
+    }
+
+    #[test]
+    fn strips_base_path() {
+        let p = "/22-analytics";
+        assert_eq!(
+            strip_base("/22-analytics/p/1/pages?x=1", p),
+            "/p/1/pages?x=1"
+        );
+        assert_eq!(strip_base("/22-analytics", p), "/");
+        assert_eq!(strip_base("/22-analytics/", p), "/");
+        assert_eq!(strip_base("/22-analytics?next=1", p), "/?next=1");
+        // 이름만 비슷한 경로는 건드리지 않는다
+        assert_eq!(strip_base("/22-analyticsX/p", p), "/22-analyticsX/p");
+        assert_eq!(strip_base("/p/1", p), "/p/1");
+        assert_eq!(strip_base("/p/1", ""), "/p/1");
     }
 
     #[test]

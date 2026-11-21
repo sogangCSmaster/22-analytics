@@ -31,24 +31,36 @@ pub fn session_check(r: &crate::api::ApiResult<MeResponse>) -> Result<(), &'stat
     }
 }
 
+/// 데모 빌드: 미리 채울 (이메일, 비밀번호). 데모 서버는 어떤 값으로도 로그인시킨다.
+#[cfg(feature = "demo")]
+const DEMO: Option<(&str, &str)> = Some((crate::demo::DEMO_EMAIL, "demo1234"));
+#[cfg(not(feature = "demo"))]
+const DEMO: Option<(&str, &str)> = None;
+
+/// 데모 로그인 화면 안내
+pub const DEMO_HINT: &str = "데모입니다. 아무 이메일·비밀번호로 로그인할 수 있어요.";
+
 #[component]
 pub fn Login(next: String) -> Element {
     let mut ctx = use_app();
-    let mut email = use_signal(String::new);
-    let mut password = use_signal(String::new);
+    let mut email = use_signal(|| DEMO.map(|d| d.0.to_string()).unwrap_or_default());
+    let mut password = use_signal(|| DEMO.map(|d| d.1.to_string()).unwrap_or_default());
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let mut touched = use_signal(|| false);
 
-    let email_err = (touched() && validate::email(&email()).is_err())
+    let email_err = (DEMO.is_none() && touched() && validate::email(&email()).is_err())
         .then(|| "올바른 이메일 주소를 입력하세요".to_string());
 
     let mut submit = move || {
         touched.set(true);
-        let Ok(e) = validate::email(&email()) else {
-            return;
+        // 데모는 입력 검사 없이 그대로 보낸다 (빈 값도 들어간다)
+        let e = match (DEMO, validate::email(&email())) {
+            (Some(_), _) => email(),
+            (None, Ok(e)) => e,
+            (None, Err(_)) => return,
         };
-        if password().is_empty() {
+        if DEMO.is_none() && password().is_empty() {
             error.set(Some("비밀번호를 입력하세요".into()));
             return;
         }
@@ -98,6 +110,8 @@ pub fn Login(next: String) -> Element {
             div { class: "login-panel",
             form {
                 class: "card login-card",
+                // 데모: 브라우저의 이메일 형식 검사도 끈다 (아무 값으로 들어간다)
+                novalidate: DEMO.is_some(),
                 onsubmit: move |e| {
                     e.prevent_default();
                     submit();
@@ -105,6 +119,9 @@ pub fn Login(next: String) -> Element {
                 crate::components::brand::BrandSymbol { size: 40 }
                 h1 { class: "login-title", "로그인" }
                 p { class: "page-desc", "광고 성과와 실제 매출을 한 곳에서 확인하세요." }
+                if DEMO.is_some() {
+                    p { class: "demo-hint", role: "note", "{DEMO_HINT}" }
+                }
                 div { class: "login-fields",
                     TextField {
                         label: "이메일",
@@ -127,7 +144,9 @@ pub fn Login(next: String) -> Element {
                     div { class: "form-error", role: "alert", "{e}" }
                 }
                 Button { size: Size::Lg, disabled: busy(), if busy() { "확인 중…" } else { "로그인" } }
-                p { class: "login-foot", "계정이 없으면 대행사 담당자에게 요청하세요." }
+                if DEMO.is_none() {
+                    p { class: "login-foot", "계정이 없으면 대행사 담당자에게 요청하세요." }
+                }
             }
             }
         }

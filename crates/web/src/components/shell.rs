@@ -129,6 +129,9 @@ pub fn Shell() -> Element {
                             }
                         }
                     }
+                    if cfg!(feature = "demo") {
+                        span { class: "demo-badge", title: "백엔드 없이 브라우저 안에서 만든 예시 데이터입니다", "데모 · 예시 데이터" }
+                    }
                 }
                 main { id: "main", class: "content",
                     if forbidden {
