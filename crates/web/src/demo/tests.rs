@@ -4,10 +4,8 @@ use super::*;
 use crate::logic::dates::{DateRange, Day};
 use crate::logic::query::{self, Report};
 use analytics_core::attribution::Model;
-use analytics_core::dto::admin::*;
-use analytics_core::dto::reports::*;
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::json;
 
 const HOUR: i64 = 3_600_000;
 const SEOUL: i64 = 9 * HOUR;
