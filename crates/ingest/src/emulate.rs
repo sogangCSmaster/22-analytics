@@ -60,7 +60,8 @@ pub fn router(cfg: &Config) -> Router<AppState> {
         .allow_origin(AllowOrigin::mirror_request())
         .allow_credentials(true)
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE]);
+        .allow_headers([header::CONTENT_TYPE])
+        .expose_headers([header::HeaderName::from_static("x-cfg-v")]);
     Router::new()
         .route("/t.js", get(tracker_js))
         .route("/v1/config", get(public_config))
@@ -167,6 +168,7 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
     s.metrics.events_received.fetch_add(n, Relaxed);
 
     let mut resp = StatusCode::NO_CONTENT.into_response();
+    set_cfg_version(&mut resp, project.settings_version);
     if processed.issue_cookie {
         // 운영에서는 커스텀 호스트명의 상위 도메인으로 Domain을 지정하고 Secure를 붙인다.
         let c = format!(
@@ -178,6 +180,17 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         }
     }
     resp
+}
+
+/// 트래커가 설정 변경을 알 수 있게 설정 버전을 붙인다 (엣지 `cors::config_version_headers`와 같다).
+/// expose 헤더는 CORS 레이어도 붙이지만, 응답만으로 계약이 드러나도록 여기서도 넣는다.
+fn set_cfg_version(resp: &mut Response, settings_version: u32) {
+    let h = resp.headers_mut();
+    h.insert("x-cfg-v", HeaderValue::from(settings_version));
+    h.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static("x-cfg-v"),
+    );
 }
 
 fn reject(s: &AppState, code: &'static str) -> Response {

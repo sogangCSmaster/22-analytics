@@ -72,7 +72,6 @@ pub fn handle(
             (Some(o), r)
         }
     };
-
     let ctx = RequestCtx {
         origin: origin.as_deref(),
         referer: req.referer,
@@ -86,6 +85,11 @@ pub fn handle(
     };
     match collect::process(&ctx, cfg, batch, new_uuid) {
         Ok(p) => {
+            // 트래커는 이 값이 캐시한 설정 버전과 다를 때만 /v1/config를 다시 받는다 (C1).
+            // 거부 응답에는 붙이지 않는다 (거부 사유와 무관하게 같은 응답).
+            response
+                .headers
+                .extend(cors::config_version_headers(cfg.settings_version));
             if p.issue_cookie {
                 response.headers.push((
                     "set-cookie".into(),
