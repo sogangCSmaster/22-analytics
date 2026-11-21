@@ -58,6 +58,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.21",
+ "time",
  "url",
  "uuid",
  "woothee",
@@ -108,11 +109,15 @@ name = "analytics-pg"
 version = "0.1.0"
 dependencies = [
  "analytics-core",
+ "analytics-testkit",
  "anyhow",
  "hex",
  "rand 0.9.5",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
+ "time",
+ "tokio",
  "tracing",
 ]
 
