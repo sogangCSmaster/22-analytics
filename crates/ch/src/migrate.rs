@@ -14,6 +14,10 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
         "0004_rollups",
         include_str!("../../../migrations/clickhouse/0004_rollups.sql"),
     ),
+    (
+        "0005_storage",
+        include_str!("../../../migrations/clickhouse/0005_storage.sql"),
+    ),
 ];
 
 pub async fn run(cfg: &ChConfig) -> anyhow::Result<Vec<&'static str>> {
