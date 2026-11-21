@@ -1,11 +1,12 @@
-//! 프로젝트 설정: KV 키, Worker 메모리 캐시(60초), `GET /v1/config` 응답.
+//! 프로젝트 설정: KV 키, Worker 메모리 캐시(5분), `GET /v1/config` 응답.
 
 use crate::http::EdgeResponse;
 use analytics_core::PublicKey;
 use analytics_core::cache::TtlCache;
 use analytics_core::collect::ProjectConfig;
 
-pub const CONFIG_TTL_MS: i64 = 60_000;
+/// 설정 변경은 KV 반영 후 최대 5분 안에 적용된다 (공개 설정 응답 max-age와 같다).
+pub const CONFIG_TTL_MS: i64 = 300_000;
 /// 무작위 키로 메모리를 채우는 공격을 막기 위한 캐시 상한 (isolate당).
 pub const CONFIG_CACHE_MAX: usize = 10_000;
 /// 공개 설정 응답 캐시 (ARCHITECTURE §3.1: 설정 변경은 5분 안에 반영)

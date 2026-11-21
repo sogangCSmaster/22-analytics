@@ -7,7 +7,7 @@
 //! |---|---|
 //! | `http` | 라우팅, 응답 구조체, Content-Length 검사 |
 //! | `collect` | `/v1/collect` 검증·보강 (core `collect::process`) → 응답 + 전달할 이벤트 |
-//! | `config` | KV 키, 60초 메모리 캐시, `/v1/config` 응답 |
+//! | `config` | KV 키, 5분 메모리 캐시, `/v1/config` 응답 |
 //! | `orders` | `/v1/orders(:batch)` 프록시 검증·응답 매핑 |
 //! | `cookie` | `_at_vid` 파싱·발급, 쿠키 Domain |
 //! | `cors` | Origin 검증, preflight |
