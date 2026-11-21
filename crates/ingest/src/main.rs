@@ -9,6 +9,7 @@ mod config;
 mod emulate;
 mod internal;
 mod metrics;
+mod orders;
 mod pipeline;
 
 use axum::{Router, routing::get};
