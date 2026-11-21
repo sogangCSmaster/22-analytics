@@ -24,7 +24,7 @@ async fn project(pool: &PgPool, status: &str) -> u32 {
     id as u32
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn defaults_when_row_missing() {
     let db = TestDb::new().await;
     let p = project(&db.pg, "active").await;
@@ -42,7 +42,7 @@ async fn defaults_when_row_missing() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn loads_stored_row() {
     let db = TestDb::new().await;
     let p = project(&db.pg, "active").await;
@@ -67,7 +67,7 @@ async fn loads_stored_row() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn sanitizes_invalid_values() {
     let db = TestDb::new().await;
     let p = project(&db.pg, "active").await;
@@ -92,7 +92,7 @@ async fn sanitizes_invalid_values() {
     assert_eq!(s::load(&db.pg, p).await.unwrap().lookback_days, vec![7, 30]);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn watermark_roundtrip_and_isolation() {
     let db = TestDb::new().await;
     assert_eq!(
@@ -123,7 +123,7 @@ async fn watermark_roundtrip_and_isolation() {
     assert_eq!(s::get_watermark(&db.pg, "other", 1).await.unwrap(), None);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn channel_rules_project_first_then_global() {
     let db = TestDb::new().await;
     let p = project(&db.pg, "active").await;
@@ -167,7 +167,7 @@ async fn channel_rules_project_first_then_global() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn active_projects_only() {
     let db = TestDb::new().await;
     let a = project(&db.pg, "active").await;

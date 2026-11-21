@@ -141,7 +141,7 @@ fn assert_manual(rows: &[Final], amount: i64) {
 
 // ---------------------------------------------------------------- 해피 케이스
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn manual_scenario_end_to_end() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -184,7 +184,7 @@ async fn manual_scenario_end_to_end() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn run_all_projects_skips_inactive() {
     let db = TestDb::new().await;
     let a = project(&db.pg).await;
@@ -208,7 +208,7 @@ async fn run_all_projects_skips_inactive() {
     assert_manual(&finals(&db, paused).await, 100_000);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn organic_and_referral_included_by_default_direct_excluded() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -267,7 +267,7 @@ async fn organic_and_referral_included_by_default_direct_excluded() {
 
 // ---------------------------------------------------------------- 멱등성
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn rerun_is_idempotent() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -304,7 +304,7 @@ async fn rerun_is_idempotent() {
 
 // ---------------------------------------------------------------- 경계값·엣지
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn lookback_boundary_and_future_touch() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -359,7 +359,7 @@ async fn lookback_boundary_and_future_touch() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn zero_amount_order_writes_nothing() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -390,7 +390,7 @@ async fn zero_amount_order_writes_nothing() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn order_without_visitor_uses_member_hash() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -426,7 +426,7 @@ async fn order_without_visitor_uses_member_hash() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn no_touches_is_unattributed() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -464,7 +464,7 @@ async fn no_touches_is_unattributed() {
     assert!(rows.iter().all(|r| r.touch_index == 0));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn thousand_touches() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -511,21 +511,18 @@ async fn thousand_touches() {
 
 // ---------------------------------------------------------------- 희귀 케이스
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn late_touchpoint_is_picked_up_by_full_run() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
     let v = Uuid::new_v4();
     insert_orders(
         &db.ch,
-        &[OrderFixture::confirmed(
-            p,
-            "O1",
-            Some(v),
-            5_000,
-            ORDER_AT,
-            1,
-        )],
+        &[
+            OrderFixture::confirmed(p, "O1", Some(v), 5_000, ORDER_AT, 1),
+            // watermark를 겹침 구간 밖으로 밀어내는 이후 주문
+            OrderFixture::confirmed(p, "LATER", None, 1, ORDER_AT, 10_000_000),
+        ],
     )
     .await
     .unwrap();
@@ -573,17 +570,21 @@ async fn late_touchpoint_is_picked_up_by_full_run() {
         vec![("naver_sa".into(), 5_000)]
     );
     // 미귀속(touch_index 0) 행은 삭제 표시로 사라졌다
-    assert!(rows.iter().all(|r| r.touch_index != 0));
+    assert!(
+        rows.iter()
+            .filter(|r| r.order_id == "O1")
+            .all(|r| r.touch_index != 0)
+    );
     let deleted: u64 = db
         .ch
-        .query("SELECT count() FROM attributed_revenue FINAL WHERE touch_index = 0")
+        .query("SELECT count() FROM attributed_revenue FINAL WHERE touch_index = 0 AND order_id = 'O1'")
         .fetch_one()
         .await
         .unwrap();
     assert_eq!(deleted, 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cancel_after_attribution_marks_rows_deleted() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -633,7 +634,7 @@ async fn cancel_after_attribution_marks_rows_deleted() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn partial_refund_lowers_amounts() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -666,7 +667,7 @@ async fn partial_refund_lowers_amounts() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn channel_rule_change_relabels_retroactively_on_full_run() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -694,7 +695,7 @@ async fn channel_rule_change_relabels_retroactively_on_full_run() {
     assert!(rows.iter().all(|r| r.channel != "naver_sa"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn identity_link_added_later_merges_other_device() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -743,7 +744,7 @@ async fn identity_link_added_later_merges_other_device() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn two_touches_same_ms_are_deterministic() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -790,7 +791,7 @@ async fn two_touches_same_ms_are_deterministic() {
     assert_eq!(finals(&db, p).await, first);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn stale_version_below_watermark_is_caught_by_full_run() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -836,7 +837,7 @@ async fn stale_version_below_watermark_is_caught_by_full_run() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn full_run_respects_since_days() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -866,7 +867,7 @@ async fn full_run_respects_since_days() {
 
 // ---------------------------------------------------------------- 테넌트 격리
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn touches_never_cross_projects() {
     let db = TestDb::new().await;
     let a = project(&db.pg).await;
@@ -913,7 +914,7 @@ async fn touches_never_cross_projects() {
 
 // ---------------------------------------------------------------- 보존 검증
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn conservation_check_detects_corruption_and_recompute_fixes_it() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -972,7 +973,7 @@ async fn conservation_check_detects_corruption_and_recompute_fixes_it() {
 
 // ---------------------------------------------------------------- 장애·복구
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn failed_write_keeps_watermark_and_retry_succeeds() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -1004,7 +1005,7 @@ async fn failed_write_keeps_watermark_and_retry_succeeds() {
     assert_manual(&finals(&db, p).await, 100_000);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn many_orders_span_multiple_batches() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -1042,7 +1043,7 @@ async fn many_orders_span_multiple_batches() {
 
 // ---------------------------------------------------------------- 워커·CLI
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn worker_runs_incremental_and_stops_on_shutdown() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;
@@ -1078,7 +1079,7 @@ fn cli(db: &TestDb, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cli_attribution_and_conservation_check() {
     let db = TestDb::new().await;
     let p = project(&db.pg).await;

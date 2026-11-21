@@ -74,6 +74,7 @@ pub struct AttributedRow {
 /// 삭제 표시된 행도 포함한다 (`computed_at`을 단조 증가시키기 위해).
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize, Deserialize)]
 pub struct ExistingRow {
+    pub project_id: u32,
     pub order_id: String,
     pub model: String,
     pub lookback_days: u8,
@@ -98,77 +99,227 @@ pub struct BrokenOrder {
     pub effective_amount: i64,
 }
 
+const ORDER_COLS: &str = "SELECT order_id, status, visitor_id, member_hash, effective_amount, \
+     toUnixTimestamp64Milli(ordered_at) AS ordered_at_ms, version \
+     FROM orders FINAL WHERE project_id = ?";
+
+/// `?, ?, ?` (n개)
+fn placeholders(n: usize) -> String {
+    vec!["?"; n].join(", ")
+}
+
 /// `version > since_version`인 주문 (version 오름차순).
 pub async fn changed_orders(
-    _client: &Client,
-    _scope: ProjectScope,
-    _since_version: u64,
+    client: &Client,
+    scope: ProjectScope,
+    since_version: u64,
 ) -> anyhow::Result<Vec<OrderForAttribution>> {
-    anyhow::bail!("미구현")
+    Ok(client
+        .query(&format!(
+            "{ORDER_COLS} AND version > ? ORDER BY version, order_id"
+        ))
+        .bind(scope.project_id())
+        .bind(since_version)
+        .fetch_all()
+        .await?)
 }
 
 /// `ordered_at >= from_ms`인 주문 (ordered_at 오름차순).
 pub async fn orders_since(
-    _client: &Client,
-    _scope: ProjectScope,
-    _from_ms: i64,
+    client: &Client,
+    scope: ProjectScope,
+    from_ms: i64,
 ) -> anyhow::Result<Vec<OrderForAttribution>> {
-    anyhow::bail!("미구현")
+    Ok(client
+        .query(&format!(
+            "{ORDER_COLS} AND ordered_at >= fromUnixTimestamp64Milli(toInt64(?), 'UTC') \
+             ORDER BY ordered_at, order_id"
+        ))
+        .bind(scope.project_id())
+        .bind(from_ms)
+        .fetch_all()
+        .await?)
 }
 
 /// 주문 ID로 조회한다 (없는 ID는 무시).
 pub async fn orders_by_ids(
-    _client: &Client,
-    _scope: ProjectScope,
-    _order_ids: &[String],
+    client: &Client,
+    scope: ProjectScope,
+    order_ids: &[String],
 ) -> anyhow::Result<Vec<OrderForAttribution>> {
-    anyhow::bail!("미구현")
+    let mut out = Vec::new();
+    for chunk in order_ids.chunks(IN_CHUNK) {
+        let mut q = client
+            .query(&format!(
+                "{ORDER_COLS} AND order_id IN ({}) ORDER BY order_id",
+                placeholders(chunk.len())
+            ))
+            .bind(scope.project_id());
+        for id in chunk {
+            q = q.bind(id.as_str());
+        }
+        out.extend(q.fetch_all::<OrderForAttribution>().await?);
+    }
+    Ok(out)
 }
 
 /// 회원 해시들에 연결된 visitor_id. 빈 해시는 무시한다.
 pub async fn identity_links(
-    _client: &Client,
-    _scope: ProjectScope,
-    _member_hashes: &[String],
+    client: &Client,
+    scope: ProjectScope,
+    member_hashes: &[String],
 ) -> anyhow::Result<Vec<IdentityLink>> {
-    anyhow::bail!("미구현")
+    let mut hashes: Vec<&str> = member_hashes
+        .iter()
+        .map(String::as_str)
+        .filter(|h| !h.is_empty())
+        .collect();
+    hashes.sort_unstable();
+    hashes.dedup();
+    let mut out = Vec::new();
+    for chunk in hashes.chunks(IN_CHUNK) {
+        let mut q = client
+            .query(&format!(
+                "SELECT DISTINCT member_hash, visitor_id FROM identity_links \
+                 WHERE project_id = ? AND member_hash IN ({}) ORDER BY member_hash, visitor_id",
+                placeholders(chunk.len())
+            ))
+            .bind(scope.project_id());
+        for h in chunk {
+            q = q.bind(*h);
+        }
+        out.extend(q.fetch_all::<IdentityLink>().await?);
+    }
+    Ok(out)
 }
 
 /// visitor_id 집합의 `[from_ms, to_ms]` 터치포인트. (ts, session_id) 순.
 pub async fn touchpoints(
-    _client: &Client,
-    _scope: ProjectScope,
-    _visitor_ids: &[Uuid],
-    _from_ms: i64,
-    _to_ms: i64,
+    client: &Client,
+    scope: ProjectScope,
+    visitor_ids: &[Uuid],
+    from_ms: i64,
+    to_ms: i64,
 ) -> anyhow::Result<Vec<TouchRow>> {
-    anyhow::bail!("미구현")
+    let mut ids = visitor_ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut out = Vec::new();
+    for chunk in ids.chunks(IN_CHUNK) {
+        let mut q = client
+            .query(&format!(
+                "SELECT visitor_id, session_id, toUnixTimestamp64Milli(ts) AS ts_ms, \
+                        utm_source, utm_medium, utm_campaign, click_id_type, referrer_host, page_host \
+                 FROM touchpoints \
+                 WHERE project_id = ? AND visitor_id IN ({}) \
+                   AND ts >= fromUnixTimestamp64Milli(toInt64(?), 'UTC') \
+                   AND ts <= fromUnixTimestamp64Milli(toInt64(?), 'UTC')",
+                placeholders(chunk.len())
+            ))
+            .bind(scope.project_id());
+        for v in chunk {
+            // UUID 문자열 리터럴은 IN 집합에서 UUID로 변환된다.
+            q = q.bind(v.to_string());
+        }
+        out.extend(q.bind(from_ms).bind(to_ms).fetch_all::<TouchRow>().await?);
+    }
+    out.sort_by(|a, b| {
+        (a.ts_ms, a.session_id, a.visitor_id).cmp(&(b.ts_ms, b.session_id, b.visitor_id))
+    });
+    Ok(out)
 }
 
 /// 주문들의 기존 기여 결과 (키별 최신 행, 삭제 표시 포함).
+///
+/// FINAL은 삭제 표시 행을 숨기므로, `computed_at` 최댓값을 알기 위해 argMax로 직접 접는다.
 pub async fn latest_rows(
-    _client: &Client,
-    _scope: ProjectScope,
-    _order_ids: &[String],
+    client: &Client,
+    scope: ProjectScope,
+    order_ids: &[String],
 ) -> anyhow::Result<Vec<ExistingRow>> {
-    anyhow::bail!("미구현")
+    let mut out = Vec::new();
+    for chunk in order_ids.chunks(IN_CHUNK) {
+        let mut q = client
+            .query(&format!(
+                "SELECT toUInt32(?) AS project_id, k_order AS order_id, k_model AS model, k_lb AS lookback_days, \
+                        k_idx AS touch_index, k_oa AS ordered_at, \
+                        argMax(v_channel, v_c) AS channel, \
+                        argMax(v_campaign, v_c) AS utm_campaign, \
+                        argMax(tuple(v_touch_ts), v_c).1 AS touch_ts, \
+                        argMax(v_amount, v_c) AS amount, \
+                        argMax(v_assist, v_c) AS is_assist, \
+                        argMax(v_deleted, v_c) AS is_deleted, \
+                        max(v_c) AS computed_at \
+                 FROM ( \
+                   SELECT order_id AS k_order, model AS k_model, lookback_days AS k_lb, \
+                          touch_index AS k_idx, toUnixTimestamp64Milli(ordered_at) AS k_oa, \
+                          channel AS v_channel, utm_campaign AS v_campaign, \
+                          toUnixTimestamp64Milli(touch_ts) AS v_touch_ts, amount AS v_amount, \
+                          is_assist AS v_assist, is_deleted AS v_deleted, \
+                          toUnixTimestamp64Milli(computed_at) AS v_c \
+                   FROM attributed_revenue \
+                   WHERE project_id = ? AND order_id IN ({}) \
+                 ) \
+                 GROUP BY k_order, k_model, k_lb, k_idx, k_oa \
+                 ORDER BY k_order, k_model, k_lb, k_idx, k_oa",
+                placeholders(chunk.len())
+            ))
+            .bind(scope.project_id())
+            .bind(scope.project_id());
+        for id in chunk {
+            q = q.bind(id.as_str());
+        }
+        out.extend(q.fetch_all::<ExistingRow>().await?);
+    }
+    Ok(out)
 }
 
 /// 기여 결과를 한 번의 INSERT로 쓴다. 모든 행은 `scope` 프로젝트여야 한다.
 pub async fn insert_rows(
-    _client: &Client,
-    _scope: ProjectScope,
-    _rows: &[AttributedRow],
+    client: &Client,
+    scope: ProjectScope,
+    rows: &[AttributedRow],
 ) -> anyhow::Result<()> {
-    anyhow::bail!("미구현")
+    if rows.is_empty() {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        rows.iter().all(|r| r.project_id == scope.project_id()),
+        "다른 프로젝트의 기여 행은 쓸 수 없다"
+    );
+    let mut ins = client.insert::<AttributedRow>("attributed_revenue").await?;
+    for r in rows {
+        ins.write(r).await?;
+    }
+    ins.end().await?;
+    Ok(())
 }
 
 /// 매출 보존 검증 (§7.4): raw_sum 외 모델에서 Σamount ≠ effective_amount인 주문.
 pub async fn conservation_check(
-    _client: &Client,
-    _scope: ProjectScope,
+    client: &Client,
+    scope: ProjectScope,
 ) -> anyhow::Result<Vec<BrokenOrder>> {
-    anyhow::bail!("미구현")
+    Ok(client
+        .query(
+            "SELECT a.model AS model, a.lookback_days AS lookback_days, a.order_id AS order_id, \
+                    a.s AS attributed, o.effective_amount AS effective_amount \
+             FROM ( \
+               SELECT model, lookback_days, order_id, sum(amount) AS s \
+               FROM attributed_revenue FINAL \
+               WHERE project_id = ? AND model != 'raw_sum' AND is_deleted = 0 \
+               GROUP BY model, lookback_days, order_id \
+             ) AS a \
+             INNER JOIN ( \
+               SELECT order_id, effective_amount FROM orders FINAL WHERE project_id = ? \
+             ) AS o ON a.order_id = o.order_id \
+             WHERE a.s != o.effective_amount \
+             ORDER BY order_id, model, lookback_days",
+        )
+        .bind(scope.project_id())
+        .bind(scope.project_id())
+        .fetch_all()
+        .await?)
 }
 
 /// 테스트 픽스처: 다른 패키지(WP1 주문 writer, 수집 MV)가 쓰는 테이블에 행을 직접 넣는다.
@@ -183,10 +334,13 @@ pub mod fixtures {
     pub struct OrderFixture {
         pub project_id: u32,
         pub order_id: String,
+        pub source: String,
         pub status: String,
         #[serde(with = "clickhouse::serde::uuid::option")]
         pub visitor_id: Option<Uuid>,
         pub member_hash: String,
+        pub currency: String,
+        pub gross_amount: i64,
         pub net_amount: i64,
         pub refunded_amount: i64,
         pub effective_amount: i64,
@@ -207,9 +361,12 @@ pub mod fixtures {
             Self {
                 project_id,
                 order_id: order_id.into(),
+                source: "s2s".into(),
                 status: "CONFIRMED".into(),
                 visitor_id,
                 member_hash: String::new(),
+                currency: "KRW".into(),
+                gross_amount: amount,
                 net_amount: amount,
                 refunded_amount: 0,
                 effective_amount: amount,
@@ -232,9 +389,13 @@ pub mod fixtures {
         pub utm_source: String,
         pub utm_medium: String,
         pub utm_campaign: String,
+        pub utm_content: String,
+        pub utm_term: String,
+        pub click_id: String,
         pub click_id_type: String,
         pub referrer_host: String,
         pub page_host: String,
+        pub landing_url: String,
         /// 수집 시점 채널 (기여 연산은 이 값을 쓰지 않고 다시 계산한다)
         pub channel: String,
     }
@@ -258,9 +419,13 @@ pub mod fixtures {
                 utm_source: source.into(),
                 utm_medium: medium.into(),
                 utm_campaign: campaign.into(),
+                utm_content: String::new(),
+                utm_term: String::new(),
+                click_id: String::new(),
                 click_id_type: String::new(),
                 referrer_host: String::new(),
                 page_host: "shop.example.com".into(),
+                landing_url: "https://shop.example.com/".into(),
                 channel: "stale_ingest_channel".into(),
             }
         }

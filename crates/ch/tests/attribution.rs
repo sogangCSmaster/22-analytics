@@ -30,7 +30,7 @@ fn row(order: &str, model: &str, idx: u16, amount: i64, computed_at: i64) -> Att
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn changed_orders_reads_latest_version_above_watermark() {
     let db = TestDb::new().await;
     let v = Uuid::new_v4();
@@ -72,7 +72,7 @@ async fn changed_orders_reads_latest_version_above_watermark() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn orders_since_and_by_ids() {
     let db = TestDb::new().await;
     insert_orders(
@@ -116,7 +116,7 @@ async fn orders_since_and_by_ids() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn identity_links_by_member_hash() {
     let db = TestDb::new().await;
     let (v1, v2, v3) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
@@ -152,7 +152,7 @@ async fn identity_links_by_member_hash() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn touchpoints_window_is_inclusive_and_scoped() {
     let db = TestDb::new().await;
     let (v1, v2, stranger) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
@@ -192,7 +192,7 @@ async fn touchpoints_window_is_inclusive_and_scoped() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn touchpoints_many_visitors_are_chunked() {
     let db = TestDb::new().await;
     let ids: Vec<Uuid> = (0..(a::IN_CHUNK * 2 + 7)).map(|_| Uuid::new_v4()).collect();
@@ -210,7 +210,7 @@ async fn touchpoints_many_visitors_are_chunked() {
     assert!(got.windows(2).all(|w| w[0].ts_ms <= w[1].ts_ms));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn latest_rows_returns_newest_including_deleted() {
     let db = TestDb::new().await;
     a::insert_rows(
@@ -255,7 +255,7 @@ async fn latest_rows_returns_newest_including_deleted() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn unattributed_row_has_null_touch_ts() {
     let db = TestDb::new().await;
     a::insert_rows(&db.ch, scope(P), &[row("o1", "last_click", 0, 100, 1)])
@@ -274,7 +274,7 @@ async fn unattributed_row_has_null_touch_ts() {
     assert_eq!(null, 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn insert_rejects_rows_of_another_project() {
     let db = TestDb::new().await;
     let mut r = row("o1", "linear", 1, 100, 1);
@@ -291,7 +291,7 @@ async fn insert_rejects_rows_of_another_project() {
     a::insert_rows(&db.ch, scope(P), &[]).await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn conservation_check_finds_broken_orders_only() {
     let db = TestDb::new().await;
     insert_orders(

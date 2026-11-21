@@ -1,51 +1,135 @@
 //! 주문 1건의 기여 결과 계산과 기존 결과와의 비교 (I/O 없음).
 
 use analytics_ch::attribution::{AttributedRow, ExistingRow, OrderForAttribution, TouchRow};
-use analytics_core::attribution::Touch;
-use analytics_core::channel::ChannelRule;
+use analytics_core::attribution::{
+    DAY_MS, HOUR_MS, Model, Params, Touch, attribute, within_lookback,
+};
+use analytics_core::channel::{
+    ChannelInput, ChannelRule, ORGANIC_SEARCH, ORGANIC_SOCIAL, REFERRAL, classify,
+    is_touchpoint_channel,
+};
 use analytics_pg::attribution_settings::AttributionSettings;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+/// 취소 상태 (WP1 orders 계약).
+pub const STATUS_CANCELLED: &str = "CANCELLED";
+
 /// 기여 대상 채널인지 (direct·내부 이동은 항상 제외, 자연 유입·추천은 설정에 따름).
-pub fn is_eligible(_channel: &str, _settings: &AttributionSettings) -> bool {
-    todo!()
+pub fn is_eligible(channel: &str, settings: &AttributionSettings) -> bool {
+    if !is_touchpoint_channel(channel) {
+        return false;
+    }
+    match channel {
+        ORGANIC_SEARCH | ORGANIC_SOCIAL => settings.include_organic,
+        REFERRAL => settings.include_referral,
+        _ => true,
+    }
 }
 
 /// 터치포인트 원본을 현재 채널 규칙으로 다시 분류한다. 기여 대상이 아니면 `None`.
 pub fn to_touch(
-    _row: &TouchRow,
-    _rules: &[ChannelRule],
-    _settings: &AttributionSettings,
+    row: &TouchRow,
+    rules: &[ChannelRule],
+    settings: &AttributionSettings,
 ) -> Option<Touch> {
-    todo!()
+    let channel = classify(
+        &ChannelInput {
+            utm_source: &row.utm_source,
+            utm_medium: &row.utm_medium,
+            utm_campaign: &row.utm_campaign,
+            click_id_type: &row.click_id_type,
+            referrer_host: &row.referrer_host,
+            page_host: &row.page_host,
+        },
+        rules,
+    );
+    is_eligible(&channel, settings).then(|| Touch {
+        ts_ms: row.ts_ms,
+        channel,
+        campaign: row.utm_campaign.clone(),
+    })
 }
 
 /// 주문 식별자 집합(`ids`)에 속한 터치포인트만 골라 분류한다.
 /// 같은 (visitor_id, session_id, ts)는 재전송 중복으로 보고 하나만 남긴다.
 pub fn select_touches(
-    _ids: &[Uuid],
-    _rows: &[TouchRow],
-    _rules: &[ChannelRule],
-    _settings: &AttributionSettings,
+    ids: &[Uuid],
+    rows: &[TouchRow],
+    rules: &[ChannelRule],
+    settings: &AttributionSettings,
 ) -> Vec<Touch> {
-    todo!()
+    let ids: HashSet<&Uuid> = ids.iter().collect();
+    let mut seen = HashSet::new();
+    rows.iter()
+        .filter(|r| ids.contains(&r.visitor_id))
+        .filter(|r| seen.insert((r.visitor_id, r.session_id, r.ts_ms)))
+        .filter_map(|r| to_touch(r, rules, settings))
+        .collect()
 }
 
 /// 주문이 기여 대상인지 (취소·0원 이하는 기존 결과를 삭제 표시만 한다).
-pub fn is_live(_order: &OrderForAttribution) -> bool {
-    todo!()
+pub fn is_live(order: &OrderForAttribution) -> bool {
+    order.status != STATUS_CANCELLED && order.effective_amount > 0
 }
 
 /// 원하는 결과 행 (lookback × 모델). `computed_at`은 0으로 두고 [`plan_writes`]가 채운다.
 /// `touches`는 이 주문 식별자들의 접점 전체(정렬·기간 필터 전)다.
+/// `ordered_at`은 주문 행 값을 그대로 쓴다 (파티션 키라서 다시 계산하면 안 된다).
 pub fn desired_rows(
-    _project_id: u32,
-    _order: &OrderForAttribution,
-    _touches: &[Touch],
-    _settings: &AttributionSettings,
+    project_id: u32,
+    order: &OrderForAttribution,
+    touches: &[Touch],
+    settings: &AttributionSettings,
 ) -> Vec<AttributedRow> {
-    todo!()
+    if !is_live(order) {
+        return Vec::new();
+    }
+    // 같은 ms 접점도 입력 순서와 무관하게 같은 결과가 나오도록 전체 순서를 고정한다.
+    let mut sorted = touches.to_vec();
+    sorted.sort_by(|a, b| {
+        (a.ts_ms, &a.channel, &a.campaign).cmp(&(b.ts_ms, &b.channel, &b.campaign))
+    });
+    let half_life_ms = i64::from(settings.half_life_hours) * HOUR_MS;
+    let mut out = Vec::new();
+    for &lb in &settings.lookback_days {
+        let params = Params {
+            lookback_ms: i64::from(lb) * DAY_MS,
+            half_life_ms,
+        };
+        let window = within_lookback(sorted.clone(), order.ordered_at_ms, params.lookback_ms);
+        for model in Model::ALL {
+            let shares = attribute(
+                model,
+                order.effective_amount,
+                order.ordered_at_ms,
+                &window,
+                &params,
+            );
+            out.extend(shares.into_iter().map(|s| AttributedRow {
+                project_id,
+                model: model.as_str().to_owned(),
+                lookback_days: lb,
+                order_id: order.order_id.clone(),
+                touch_index: s.touch_index,
+                channel: s.channel,
+                utm_campaign: s.campaign,
+                touch_ts: s.touch_ts_ms,
+                ordered_at: order.ordered_at_ms,
+                amount: s.amount,
+                is_assist: u8::from(s.is_assist),
+                computed_at: 0,
+                is_deleted: 0,
+            }));
+        }
+    }
+    out
 }
+
+/// (model, lookback_days, touch_index, ordered_at): 한 주문 안의 행 키.
+type Key = (String, u8, u16, i64);
+/// 비교 대상 내용: (channel, utm_campaign, touch_ts, amount, is_assist)
+type Content = (String, String, Option<i64>, i64, u8);
 
 /// 기존 결과와 비교해 써야 할 행을 만든다. 바뀐 게 없으면 빈 벡터.
 ///
@@ -53,17 +137,101 @@ pub fn desired_rows(
 /// - 기존에 살아 있던 키가 더는 없으면 같은 키(같은 ordered_at 파티션)로 `is_deleted=1`을 쓴다.
 /// - `computed_at = max(now_ms, 기존 최대 computed_at + 1)`: ReplacingMergeTree가 반드시 새 행을 고른다.
 pub fn plan_writes(
-    _desired: Vec<AttributedRow>,
-    _existing: &[ExistingRow],
-    _now_ms: i64,
+    desired: Vec<AttributedRow>,
+    existing: &[ExistingRow],
+    now_ms: i64,
 ) -> Vec<AttributedRow> {
-    todo!()
+    let alive: HashMap<Key, Content> = existing
+        .iter()
+        .filter(|e| e.is_deleted == 0)
+        .map(|e| {
+            (
+                (
+                    e.model.clone(),
+                    e.lookback_days,
+                    e.touch_index,
+                    e.ordered_at,
+                ),
+                (
+                    e.channel.clone(),
+                    e.utm_campaign.clone(),
+                    e.touch_ts,
+                    e.amount,
+                    e.is_assist,
+                ),
+            )
+        })
+        .collect();
+    let wanted: HashMap<Key, Content> = desired
+        .iter()
+        .map(|r| {
+            (
+                (
+                    r.model.clone(),
+                    r.lookback_days,
+                    r.touch_index,
+                    r.ordered_at,
+                ),
+                (
+                    r.channel.clone(),
+                    r.utm_campaign.clone(),
+                    r.touch_ts,
+                    r.amount,
+                    r.is_assist,
+                ),
+            )
+        })
+        .collect();
+    if alive == wanted {
+        return Vec::new();
+    }
+    let computed_at = existing
+        .iter()
+        .map(|e| e.computed_at.saturating_add(1))
+        .fold(now_ms, i64::max);
+
+    let mut out: Vec<AttributedRow> = desired
+        .into_iter()
+        .map(|mut r| {
+            r.computed_at = computed_at;
+            r.is_deleted = 0;
+            r
+        })
+        .collect();
+    out.extend(
+        existing
+            .iter()
+            .filter(|e| e.is_deleted == 0)
+            .filter(|e| {
+                !wanted.contains_key(&(
+                    e.model.clone(),
+                    e.lookback_days,
+                    e.touch_index,
+                    e.ordered_at,
+                ))
+            })
+            .map(|e| AttributedRow {
+                project_id: e.project_id,
+                model: e.model.clone(),
+                lookback_days: e.lookback_days,
+                order_id: e.order_id.clone(),
+                touch_index: e.touch_index,
+                channel: e.channel.clone(),
+                utm_campaign: e.utm_campaign.clone(),
+                touch_ts: e.touch_ts,
+                ordered_at: e.ordered_at,
+                amount: e.amount,
+                is_assist: e.is_assist,
+                computed_at,
+                is_deleted: 1,
+            }),
+    );
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use analytics_core::attribution::{DAY_MS, Touch};
     use analytics_core::channel::RuleMatch;
 
     const P: u32 = 7;
@@ -122,6 +290,7 @@ mod tests {
     fn existing_from(rows: &[AttributedRow], computed_at: i64) -> Vec<ExistingRow> {
         rows.iter()
             .map(|r| ExistingRow {
+                project_id: r.project_id,
                 order_id: r.order_id.clone(),
                 model: r.model.clone(),
                 lookback_days: r.lookback_days,
