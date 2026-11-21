@@ -257,6 +257,48 @@ async fn realtime_window_boundaries() {
     assert_eq!(r.per_minute[29].pageviews, 1);
 }
 
+/// 일자 조건(정렬키 프루닝)을 넣어도 KST 자정·월 경계를 넘는 창이 그대로 집계된다.
+#[tokio::test]
+async fn realtime_window_crossing_midnight_and_month() {
+    let db = TestDb::new().await;
+    let now = kst("2026-12-01 00:10:00");
+    insert(
+        &db.ch,
+        vec![
+            // 전날(11-30) 23:45 · 23:58
+            ev_at(P, "page_view", 1, 1, now - Duration::minutes(25)).path("/before"),
+            ev_at(P, "page_view", 2, 2, now - Duration::minutes(12)).path("/before"),
+            // 자정 이후 00:08
+            ev_at(P, "page_view", 3, 3, now - Duration::minutes(2)).path("/after"),
+            // 하루 전 같은 시각: 창 밖
+            ev_at(P, "page_view", 4, 4, now - Duration::days(1)).path("/yesterday"),
+        ],
+    )
+    .await;
+    let r = reports::realtime(&db.ch, scope(P), now).await.unwrap();
+    assert_eq!((r.active_5m, r.active_30m), (1, 3));
+    let nonzero: Vec<(&str, u64)> = r
+        .per_minute
+        .iter()
+        .filter(|m| m.pageviews > 0)
+        .map(|m| (m.minute.as_str(), m.pageviews))
+        .collect();
+    assert_eq!(nonzero, vec![("23:45", 1), ("23:58", 1), ("00:08", 1)]);
+    assert_eq!(
+        r.top_pages,
+        vec![
+            RealtimePage {
+                path: "/before".into(),
+                pageviews: 2
+            },
+            RealtimePage {
+                path: "/after".into(),
+                pageviews: 1
+            },
+        ]
+    );
+}
+
 #[tokio::test]
 async fn realtime_empty_and_top_pages_cap() {
     let db = TestDb::new().await;
