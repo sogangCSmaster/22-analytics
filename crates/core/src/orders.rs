@@ -4,6 +4,7 @@
 //! - [`fold`]: 한 주문의 모든 이벤트로 현재 상태([`OrderState`])를 계산한다.
 //!   입력 순서와 무관하고(정렬 후 계산), 같은 멱등 키는 한 번만 반영한다.
 //! - [`client_purchase_event`]: 트래커 `purchase` 이벤트를 `source='client'` 주문 이벤트로 바꾼다.
+//! - [`project`]: `orders`에 쓸 상태. [`fold`]에 더해 이전 행의 `ordered_at`을 유지한다 (파티션 고정).
 //!
 //! I/O는 하지 않는다. 현재 시각은 호출자가 주입한다.
 
@@ -518,6 +519,21 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
         effective_amount,
         ordered_at_ms,
     })
+}
+
+/// `orders`에 쓸 상태: [`fold`] + **`ordered_at` 고정**.
+///
+/// `orders`(와 `attributed_revenue`)는 `ReplacingMergeTree`이고 `PARTITION BY toYYYYMM(ordered_at)`이다.
+/// 엔진은 파티션을 넘어 중복을 없애지 않으므로, 버전마다 `ordered_at`이 달라 다른 월로 넘어가면
+/// 예전 행이 그 월에 남아 월 범위 리포트에서 이중 집계된다. 그래서 이전 행(`prev`)이 있으면
+/// 그 `ordered_at`을 그대로 쓴다. 즉 한 주문의 `ordered_at`은 **처음 투영한 값으로 고정**된다
+/// (확정 정정, 확정 전 환불·취소, 클라이언트 행을 S2S가 대체하는 경우 모두).
+pub fn project(events: &[OrderEvent], prev: Option<&OrderState>) -> Option<OrderState> {
+    let mut state = fold(events)?;
+    if let Some(p) = prev {
+        state.ordered_at_ms = p.ordered_at_ms;
+    }
+    Some(state)
 }
 
 fn amount(v: Option<i64>, field: &'static str) -> Result<Option<i64>, OrderError> {
@@ -1171,7 +1187,7 @@ mod tests {
         // orders는 toYYYYMM(ordered_at)로 파티션된다. 이전 행의 ordered_at을 유지해야
         // 같은 주문의 버전들이 한 파티션에 남아 FINAL이 중복을 없앤다.
         let first = [refund("r", 1_000, 5_000)];
-        let prev = project(&first, None).unwrap();
+        let prev = super::project(&first, None).unwrap();
         assert_eq!(prev.ordered_at_ms, 5_000);
         let more = [refund("r", 1_000, 5_000), confirm("c", 100_000, 1_000)];
         assert_eq!(
@@ -1179,18 +1195,18 @@ mod tests {
             1_000,
             "fold 자체는 확정 시각"
         );
-        let next = project(&more, Some(&prev)).unwrap();
+        let next = super::project(&more, Some(&prev)).unwrap();
         assert_eq!(next.ordered_at_ms, 5_000, "투영은 이전 행의 시각을 유지");
         assert_eq!(next.status, OrderStatus::PartiallyRefunded);
         // 확정 정정도 마찬가지
-        let a = project(&[confirm("c1", 100_000, 1_000)], None).unwrap();
-        let b = project(
+        let a = super::project(&[confirm("c1", 100_000, 1_000)], None).unwrap();
+        let b = super::project(
             &[confirm("c1", 100_000, 1_000), confirm("c2", 90_000, 9_000)],
             Some(&a),
         )
         .unwrap();
         assert_eq!((b.net_amount, b.ordered_at_ms), (90_000, 1_000));
-        assert!(project(&[], Some(&a)).is_none());
+        assert!(super::project(&[], Some(&a)).is_none());
     }
 
     #[test]

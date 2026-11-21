@@ -4,7 +4,9 @@
 //! 1. 같은 주문의 처리를 직렬화한다 (order_id 해시로 고른 잠금).
 //! 2. 주문의 기존 이벤트를 읽는다. 같은 멱등 키가 이미 있으면 append하지 않는다.
 //! 3. 새 이벤트를 `order_events`에 append한다.
-//! 4. 전체 이벤트를 [`fold`]해 상태를 계산하고, 현재 `orders` 행과 다르면 새 version으로 insert한다.
+//! 4. 전체 이벤트로 상태를 계산하고([`project`]: fold + 이전 행의 `ordered_at` 유지), 현재 `orders`
+//!    행과 다르면 새 version으로 insert한다. `ordered_at`은 처음 투영한 값으로 고정되므로 한 주문의
+//!    모든 버전이 같은 월 파티션에 남는다 (ReplacingMergeTree는 파티션을 넘어 중복을 없애지 않는다).
 //!
 //! 3이나 4가 실패하면 에러를 돌려주고 호출자는 5xx로 응답한다. 고객사가 재시도하면
 //! 2에서 중복으로 판정되지만 4는 다시 수행되므로, 반쯤 쓰인 상태가 남지 않는다.
@@ -16,7 +18,7 @@ mod tests;
 use analytics_ch::ProjectScope;
 use analytics_ch::orders::{self as ch_orders, OrderRow};
 use analytics_core::Event;
-use analytics_core::orders::{OrderEvent, client_purchase_event, fold};
+use analytics_core::orders::{OrderEvent, client_purchase_event, project};
 use analytics_core::settings::TrackingSettings;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
@@ -130,9 +132,11 @@ impl OrderService {
             ch_orders::insert_order_event(&self.ch, &ev).await?;
             events.push(ev);
         }
-        let state = fold(&events).expect("이벤트가 최소 1건 있다");
         let current = ch_orders::current_order(&self.ch, scope, &order_id).await?;
-        if current.as_ref().and_then(OrderRow::to_state).as_ref() == Some(&state) {
+        let prev = current.as_ref().and_then(OrderRow::to_state);
+        // 이전 행의 ordered_at을 유지한다 (파티션 고정, core::orders::project)
+        let state = project(&events, prev.as_ref()).expect("이벤트가 최소 1건 있다");
+        if prev.as_ref() == Some(&state) {
             return Ok(Applied {
                 duplicate,
                 projected: false,
@@ -151,7 +155,7 @@ impl OrderService {
 
     /// 수집 파이프라인의 `purchase` 이벤트를 클라이언트 주문으로 투영한다
     /// (`client_purchase_as_order`가 켜진 프로젝트만). 반영한 이벤트 수를 돌려준다.
-    /// 같은 order_id의 S2S 주문이 있으면 [`fold`]가 S2S만 보므로 상태는 바뀌지 않는다.
+    /// 같은 order_id의 S2S 주문이 있으면 `fold`가 S2S만 보므로 상태는 바뀌지 않는다.
     pub async fn client_purchases(&self, events: &[Event]) -> anyhow::Result<usize> {
         let mut n = 0;
         for e in events

@@ -305,7 +305,13 @@ Idempotency-Key: <선택. 없으면 order_id + event_type + 금액으로 계산>
 - 모든 주문 이벤트는 `order_events`에 **append-only**로 쌓습니다.
 - 현재 상태는 `orders`(ReplacingMergeTree)에 투영합니다.
   - `effective_amount = net_amount − Σ refund_amount` (0 미만이면 0)
-  - `status`: `CONFIRMED | PARTIALLY_REFUNDED | CANCELLED`
+  - `status`: `CONFIRMED | PARTIALLY_REFUNDED | CANCELLED` (확정 전에 환불만 온 주문은 `PENDING`, effective 0)
+  - **`ordered_at`은 처음 투영한 값으로 고정합니다.** `orders`·`attributed_revenue`는
+    `PARTITION BY toYYYYMM(ordered_at)`인 ReplacingMergeTree인데, 엔진은 파티션을 넘어 중복을 없애지 않습니다.
+    버전마다 `ordered_at`이 달라져 다른 월로 넘어가면(확정 정정, 확정 전 환불·취소, 클라이언트 행을 S2S가
+    대체) 예전 행이 그 월에 남아 월 범위 리포트에서 이중 집계됩니다. 그래서 `orders` 행이 한 번 생기면 이후
+    모든 버전은 이전 행의 `ordered_at`을 그대로 씁니다(`analytics_core::orders::project`). 그 결과 확정 전에
+    환불이 먼저 온 주문은 환불 시각이, 클라이언트 주문을 S2S가 대체한 경우 클라이언트 시각이 주문 시각이 됩니다.
 - 같은 `order_id`가 여러 번 들어와도 매출은 **한 번만** 확정됩니다. 매뉴얼 2.E(1)과 같습니다.
 - 주문 상태가 바뀌면 `order_changes`에 변경을 기록하고, 이 기록이 기여 연산을 다시 트리거합니다(§7).
 
