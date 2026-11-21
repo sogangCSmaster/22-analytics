@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// ClickHouse 배치 플러시 주기 기본값. 길수록 INSERT(파트) 수가 줄어든다.
-pub const DEFAULT_FLUSH_INTERVAL_MS: &str = "1000";
+pub const DEFAULT_FLUSH_INTERVAL_MS: &str = "3000";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -67,7 +67,7 @@ impl Config {
             edge_emulation,
             archive_dir: "./var/archive".into(),
             archive_rotate: Duration::from_secs(300),
-            flush_interval: Duration::from_millis(1000),
+            flush_interval: Duration::from_millis(3000),
             flush_rows: 10_000,
             tracker_dist: "./tracker/dist".into(),
             dev_site_dir: "./dev/site".into(),
