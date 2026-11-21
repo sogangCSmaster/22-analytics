@@ -13,9 +13,11 @@ use analytics_api::{ApiConfig, AppState, build_router};
 use analytics_testkit::TestDb;
 use axum::Router;
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -37,7 +39,7 @@ pub struct Resp {
 }
 
 impl Resp {
-    /// `Set-Cookie`에서 `at_session=...` 부분만 (속성 제외).
+    /// `Set-Cookie`에서 세션 쿠키(`at_session=...` 또는 `__Host-at_session=...`) 부분만 (속성 제외).
     pub fn session_cookie(&self) -> Option<String> {
         self.set_cookie()
             .map(|c| c.split(';').next().unwrap().trim().to_owned())
@@ -48,7 +50,7 @@ impl Resp {
             .get_all(header::SET_COOKIE)
             .iter()
             .filter_map(|v| v.to_str().ok())
-            .find(|v| v.starts_with("at_session="))
+            .find(|v| v.starts_with("at_session=") || v.starts_with("__Host-at_session="))
             .map(str::to_owned)
     }
 
@@ -63,6 +65,7 @@ pub struct Req {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     origin: Option<String>,
+    peer: Option<SocketAddr>,
 }
 
 impl Req {
@@ -73,6 +76,7 @@ impl Req {
             headers: vec![],
             body: vec![],
             origin: Some(ORIGIN.to_owned()),
+            peer: None,
         }
     }
     pub fn get(path: &str) -> Self {
@@ -107,6 +111,11 @@ impl Req {
     }
     pub fn origin(mut self, origin: Option<&str>) -> Self {
         self.origin = origin.map(str::to_owned);
+        self
+    }
+    /// 소켓 상대 주소 (`ConnectInfo`). 실제 서버는 항상 채우지만 테스트 기본값은 없음.
+    pub fn peer(mut self, ip: &str) -> Self {
+        self.peer = Some(SocketAddr::new(ip.parse().unwrap(), 40_000));
         self
     }
     pub fn json(mut self, v: Value) -> Self {
@@ -147,26 +156,7 @@ impl TestApp {
     }
 
     pub async fn call(&self, req: Req) -> Resp {
-        let mut b = Request::builder().method(req.method).uri(&req.path);
-        if let Some(o) = &req.origin {
-            b = b.header("origin", o);
-        }
-        for (k, v) in &req.headers {
-            b = b.header(k, v);
-        }
-        let request = b.body(Body::from(req.body)).unwrap();
-        let res = self.router.clone().oneshot(request).await.unwrap();
-        let status = res.status();
-        let headers = res.headers().clone();
-        let bytes = res.into_body().collect().await.unwrap().to_bytes();
-        let text = String::from_utf8_lossy(&bytes).into_owned();
-        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        Resp {
-            status,
-            headers,
-            text,
-            body,
-        }
+        call_router(self.router.clone(), req).await
     }
 
     /// DB에 직접 사용자를 만든다 (API 우회, 테스트 준비용).
@@ -270,6 +260,15 @@ impl TestApp {
         }
     }
 
+    /// 그 action의 감사 로그 payload (오래된 것부터).
+    pub async fn audit_payloads(&self, action: &str) -> Vec<Value> {
+        sqlx::query_scalar("SELECT payload FROM audit_log WHERE action = $1 ORDER BY id")
+            .bind(action)
+            .fetch_all(&self.db.pg)
+            .await
+            .unwrap()
+    }
+
     pub async fn audit_count(&self, action: &str) -> i64 {
         sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = $1")
             .bind(action)
@@ -287,3 +286,31 @@ pub struct Fixture {
     pub org_id: i64,
     pub project_id: i32,
 }
+
+/// 라우터에 요청 하나를 보낸다 (동시 요청 테스트용으로 `TestApp` 없이도 쓴다).
+pub async fn call_router(router: Router, req: Req) -> Resp {
+    let mut b = Request::builder().method(req.method).uri(&req.path);
+    if let Some(o) = &req.origin {
+        b = b.header("origin", o);
+    }
+    for (k, v) in &req.headers {
+        b = b.header(k, v);
+    }
+    let mut request = b.body(Body::from(req.body)).unwrap();
+    if let Some(peer) = req.peer {
+        request.extensions_mut().insert(ConnectInfo(peer));
+    }
+    let res = router.oneshot(request).await.unwrap();
+    let status = res.status();
+    let headers = res.headers().clone();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    Resp {
+        status,
+        headers,
+        text,
+        body,
+    }
+}
+

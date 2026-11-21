@@ -56,7 +56,48 @@ async fn secure_flag_when_configured() {
     let app = TestApp::with_config(|c| c.cookie_secure = true).await;
     app.user("ae@agency.test", PASSWORD, false).await;
     let r = app.login_resp("ae@agency.test", PASSWORD).await;
-    assert!(r.set_cookie().unwrap().contains("Secure"));
+    let sc = r.set_cookie().unwrap();
+    // __Host- 접두사: Secure + Path=/ + Domain 없음을 브라우저가 강제한다 (하위 도메인이 덮어쓰지 못함).
+    assert!(sc.starts_with("__Host-at_session="), "{sc}");
+    assert!(sc.contains("Secure") && sc.contains("Path=/"), "{sc}");
+    assert!(!sc.to_ascii_lowercase().contains("domain="), "{sc}");
+
+    let cookie = r.session_cookie().unwrap();
+    let token = cookie.trim_start_matches("__Host-at_session=");
+    let me = app.call(Req::get("/v1/auth/me").cookie(&cookie)).await;
+    assert_eq!(me.status, StatusCode::OK, "{}", me.text);
+    // Secure 모드에서는 접두사 없는 이름(하위 도메인·http에서 심을 수 있는 쿠키)을 받지 않는다.
+    let plain = app
+        .call(Req::get("/v1/auth/me").cookie(&format!("at_session={token}")))
+        .await;
+    assert_eq!(plain.status, StatusCode::UNAUTHORIZED);
+
+    let out = app
+        .call(Req::post("/v1/auth/logout").cookie(&cookie))
+        .await;
+    let cleared = out.set_cookie().unwrap();
+    assert!(
+        cleared.starts_with("__Host-at_session=;") && cleared.contains("Max-Age=0"),
+        "{cleared}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn conflicting_duplicate_session_cookies_are_rejected() {
+    let app = TestApp::new().await;
+    let (_, a) = app.member("a@agency.test").await;
+    let (_, b) = app.member("b@agency.test").await;
+    // 같은 이름의 쿠키가 다른 값으로 두 번 오면(쿠키 심기 공격) 어느 쪽도 믿지 않는다.
+    let r = app
+        .call(Req::get("/v1/auth/me").cookie(&format!("{a}; {b}")))
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    // 같은 값이 반복되는 것은 괜찮다.
+    let r = app
+        .call(Req::get("/v1/auth/me").cookie(&format!("{a}; {a}")))
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.body["user"]["email"], "a@agency.test");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -176,6 +217,15 @@ async fn session_near_expiry_is_extended() {
         .unwrap();
     let r = app.call(Req::get("/v1/auth/me").cookie(&cookie)).await;
     assert_eq!(r.status, StatusCode::OK);
+    // DB만 연장하면 브라우저 쿠키(Max-Age)는 로그인 14일 뒤에 사라진다: 쿠키도 다시 보낸다.
+    let sc = r.set_cookie().expect("연장 시 Set-Cookie");
+    assert!(sc.starts_with(&format!("{cookie};")), "{sc}");
+    assert!(sc.contains("Max-Age=1209600"), "{sc}");
+    let again = app.call(Req::get("/v1/auth/me").cookie(&cookie)).await;
+    assert!(
+        again.set_cookie().is_none(),
+        "연장이 필요 없으면 쿠키를 다시 보내지 않는다"
+    );
     let extended: bool =
         sqlx::query_scalar("SELECT expires_at > now() + interval '13 days' FROM sessions")
             .fetch_one(&app.db.pg)
@@ -211,6 +261,51 @@ async fn login_rejects_bad_input() {
     // 매우 긴 비밀번호도 500 없이 401
     let r = app.login_resp("a@b.c", &"x".repeat(5000)).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oversized_credentials_are_rejected_without_touching_the_limiter() {
+    let app = TestApp::with_config(|c| {
+        c.trust_proxy_headers = true;
+        c.login_limit.max_per_ip = 2;
+    })
+    .await;
+    app.user("ae@agency.test", PASSWORD, false).await;
+    let normal = app
+        .login_resp("nobody@agency.test", "wrong password!")
+        .await;
+    for (email, password) in [
+        (
+            format!("{}@agency.test", "a".repeat(300)),
+            "wrong password!".to_owned(),
+        ),
+        ("ae@agency.test".to_owned(), "x".repeat(257)),
+        (
+            format!("{}@x.test", "가".repeat(100)),
+            "wrong password!".to_owned(),
+        ),
+    ] {
+        for _ in 0..5 {
+            let r = app
+                .call(
+                    Req::post("/v1/auth/login")
+                        .header("cf-connecting-ip", "203.0.113.9")
+                        .json(json!({ "email": email, "password": password })),
+                )
+                .await;
+            assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{}", r.text);
+            assert_eq!(r.text, normal.text, "일반 실패와 같은 본문");
+        }
+    }
+    // 길이 초과 요청은 IP 제한(2회)을 쓰지 않았다.
+    let r = app
+        .call(
+            Req::post("/v1/auth/login")
+                .header("cf-connecting-ip", "203.0.113.9")
+                .json(json!({ "email": "ae@agency.test", "password": PASSWORD })),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
 }
 
 // ---- 외부 공격 ------------------------------------------------------------
@@ -255,7 +350,7 @@ async fn unknown_email_and_wrong_password_look_identical() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn brute_force_on_one_email_is_rate_limited() {
-    let app = TestApp::new().await;
+    let app = TestApp::with_config(|c| c.trust_proxy_headers = true).await;
     app.user("ae@agency.test", PASSWORD, false).await;
     for i in 0..5 {
         // 매번 다른 IP: 이메일 기준 제한이 걸려야 한다.
@@ -268,11 +363,11 @@ async fn brute_force_on_one_email_is_rate_limited() {
             .await;
         assert_eq!(r.status, StatusCode::UNAUTHORIZED, "시도 {i}");
     }
-    // 6번째는 올바른 비밀번호여도 429
+    // 실패했던 IP에서는 올바른 비밀번호여도 429
     let r = app
         .call(
             Req::post("/v1/auth/login")
-                .header("x-forwarded-for", "10.0.0.99")
+                .header("x-forwarded-for", "10.0.0.3")
                 .json(json!({ "email": "AE@agency.test", "password": PASSWORD })),
         )
         .await;
@@ -280,11 +375,158 @@ async fn brute_force_on_one_email_is_rate_limited() {
     assert_eq!(r.error_code(), "too_many_requests");
     assert!(r.headers.get("retry-after").is_some());
     assert!(r.set_cookie().is_none());
+    // IP를 모르면 잠금 예외를 적용하지 않는다.
+    let r = app
+        .call(
+            Req::post("/v1/auth/login")
+                .json(json!({ "email": "ae@agency.test", "password": PASSWORD })),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.text);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn locked_account_still_lets_owner_in_from_clean_ip_within_budget() {
+    let app = TestApp::with_config(|c| {
+        c.trust_proxy_headers = true;
+        c.login_limit.max_per_email = 3;
+        c.login_limit.max_bypass_per_email = 2;
+    })
+    .await;
+    app.user("ae@agency.test", PASSWORD, false).await;
+    let attempt = |ip: &str, password: &str| {
+        Req::post("/v1/auth/login")
+            .header("cf-connecting-ip", ip)
+            .json(json!({ "email": "ae@agency.test", "password": password }))
+    };
+    // 공격자가 계정을 잠근다.
+    for i in 0..3 {
+        let r = app
+            .call(attempt(&format!("198.51.100.{i}"), "guess guess"))
+            .await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    }
+    let r = app.call(attempt("198.51.100.0", PASSWORD)).await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS);
+    // 이 계정에 실패한 적 없는 IP의 정상 사용자는 로그인된다.
+    let r = app.call(attempt("192.0.2.10", PASSWORD)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+
+    // 다시 잠근 뒤, IP를 바꿔 가며 예외를 쓰는 공격자는 계정당 예산(2회)까지만 시도한다.
+    for i in 0..3 {
+        app.call(attempt(&format!("198.51.100.{}", 10 + i), "guess guess"))
+            .await;
+    }
+    let mut statuses = vec![];
+    for i in 0..4 {
+        let r = app
+            .call(attempt(&format!("203.0.113.{}", 50 + i), "guess guess"))
+            .await;
+        statuses.push(r.status);
+    }
+    assert_eq!(
+        statuses,
+        [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::TOO_MANY_REQUESTS,
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_attempts_cannot_exceed_the_email_limit() {
+    let app = TestApp::with_config(|c| c.login_limit.max_per_email = 5).await;
+    app.user("ae@agency.test", PASSWORD, false).await;
+    // 결과가 기록되기 전에 동시에 보내도 상한 이상은 비밀번호 검증까지 가지 못한다.
+    let mut set = tokio::task::JoinSet::new();
+    for _ in 0..30 {
+        set.spawn(call_router(
+            app.router.clone(),
+            Req::post("/v1/auth/login")
+                .json(json!({ "email": "ae@agency.test", "password": "wrong password!" })),
+        ));
+    }
+    let mut unauthorized = 0;
+    while let Some(r) = set.join_next().await {
+        let r = r.unwrap();
+        match r.status {
+            StatusCode::UNAUTHORIZED => unauthorized += 1,
+            StatusCode::TOO_MANY_REQUESTS => {}
+            s => panic!("{s}: {}", r.text),
+        }
+    }
+    assert!(unauthorized <= 5, "검증까지 간 시도 {unauthorized}회");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proxy_headers_are_ignored_unless_trusted() {
+    let app = TestApp::with_config(|c| c.login_limit.max_per_ip = 3).await;
+    app.user("ae@agency.test", PASSWORD, false).await;
+    // 헤더를 매번 바꿔도 소켓 주소가 같으면 같은 클라이언트다.
+    for i in 0..3 {
+        let r = app
+            .call(
+                Req::post("/v1/auth/login")
+                    .peer("192.0.2.1")
+                    .header("cf-connecting-ip", &format!("203.0.113.{i}"))
+                    .header("x-forwarded-for", &format!("10.1.0.{i}"))
+                    .json(json!({ "email": format!("u{i}@agency.test"), "password": "x" })),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    }
+    let blocked = app
+        .call(
+            Req::post("/v1/auth/login")
+                .peer("192.0.2.1")
+                .header("cf-connecting-ip", "203.0.113.200")
+                .json(json!({ "email": "ae@agency.test", "password": PASSWORD })),
+        )
+        .await;
+    assert_eq!(blocked.status, StatusCode::TOO_MANY_REQUESTS);
+    let ok = app
+        .call(
+            Req::post("/v1/auth/login")
+                .peer("192.0.2.2")
+                .header("cf-connecting-ip", "203.0.113.7")
+                .json(json!({ "email": "ae@agency.test", "password": PASSWORD })),
+        )
+        .await;
+    assert_eq!(ok.status, StatusCode::OK, "{}", ok.text);
+    // 감사 로그에는 실제로 쓴 값과 그 출처를 남긴다 (헤더 값을 IP로 기록하지 않는다).
+    let p = app.audit_payloads("auth.login").await;
+    assert_eq!(p.last().unwrap(), &json!({ "peer_ip": "192.0.2.2" }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn trusted_proxy_header_ip_is_labelled_as_client_supplied() {
+    let app = TestApp::with_config(|c| c.trust_proxy_headers = true).await;
+    app.user("ae@agency.test", PASSWORD, false).await;
+    let r = app
+        .call(
+            Req::post("/v1/auth/login")
+                .peer("192.0.2.1")
+                .header("cf-connecting-ip", "203.0.113.7")
+                .json(json!({ "email": "ae@agency.test", "password": PASSWORD })),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    let p = app.audit_payloads("auth.login").await;
+    assert_eq!(
+        p.last().unwrap(),
+        &json!({ "client_supplied_ip": "203.0.113.7", "peer_ip": "192.0.2.1" })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn brute_force_from_one_ip_is_rate_limited() {
-    let app = TestApp::with_config(|c| c.login_limit.max_per_ip = 3).await;
+    let app = TestApp::with_config(|c| {
+        c.trust_proxy_headers = true;
+        c.login_limit.max_per_ip = 3;
+    })
+    .await;
     app.user("ae@agency.test", PASSWORD, false).await;
     for i in 0..3 {
         let r = app
