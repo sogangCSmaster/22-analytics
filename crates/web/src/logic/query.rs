@@ -12,7 +12,15 @@ pub fn api_base() -> &'static str {
 
 /// RFC 3986 unreserved 이외의 바이트를 `%XX`로 인코딩 (UTF-8 기준).
 pub fn encode(s: &str) -> String {
-    todo!()
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// 쿼리 문자열 빌더. 값이 빈 문자열인 선택 항목은 넣지 않는다.
@@ -32,7 +40,10 @@ impl Query {
     }
 
     pub fn opt(self, k: &str, v: Option<impl ToString>) -> Self {
-        todo!()
+        match v.map(|v| v.to_string()) {
+            Some(v) if !v.trim().is_empty() => self.push(k, v.trim()),
+            _ => self,
+        }
     }
 
     /// 기간 (`from`, `to`)
@@ -42,13 +53,23 @@ impl Query {
 
     /// `?a=1&b=2` (비었으면 빈 문자열)
     pub fn build(&self) -> String {
-        todo!()
+        if self.pairs.is_empty() {
+            return String::new();
+        }
+        let body: Vec<String> = self
+            .pairs
+            .iter()
+            .map(|(k, v)| format!("{}={}", encode(k), encode(v)))
+            .collect();
+        format!("?{}", body.join("&"))
     }
 }
 
 /// `base` + `path` (중복 슬래시 없이).
 pub fn join(base: &str, path: &str) -> String {
-    todo!()
+    let b = base.trim_end_matches('/');
+    let p = path.trim_start_matches('/');
+    format!("{b}/{p}")
 }
 
 fn project(pid: i32) -> String {
@@ -89,31 +110,75 @@ pub fn realtime(pid: i32) -> String {
 }
 
 pub fn pages(pid: i32, r: DateRange, q: &str, limit: u32) -> String {
-    todo!()
+    format!(
+        "{}/reports/pages{}",
+        project(pid),
+        Query::new().range(r).opt("q", Some(q)).push("limit", limit).build()
+    )
 }
 
 pub fn events(pid: i32, r: DateRange, limit: u32) -> String {
-    todo!()
+    format!(
+        "{}/reports/events{}",
+        project(pid),
+        Query::new().range(r).push("limit", limit).build()
+    )
 }
 
 pub fn event_property(pid: i32, event: &str, prop: &str, r: DateRange, limit: u32) -> String {
-    todo!()
+    format!(
+        "{}/reports/events/{}/properties/{}{}",
+        project(pid),
+        encode(event),
+        encode(prop),
+        Query::new().range(r).push("limit", limit).build()
+    )
 }
 
 pub fn revenue(pid: i32, r: DateRange, model: Model, lookback: u8) -> String {
-    todo!()
+    format!(
+        "{}/reports/revenue{}",
+        project(pid),
+        Query::new()
+            .range(r)
+            .push("model", model.as_str())
+            .push("lookback", lookback)
+            .build()
+    )
 }
 
 pub fn overlap(pid: i32, r: DateRange, lookback: u8, limit: u32) -> String {
-    todo!()
+    format!(
+        "{}/reports/overlap{}",
+        project(pid),
+        Query::new()
+            .range(r)
+            .push("lookback", lookback)
+            .push("limit", limit)
+            .build()
+    )
 }
 
 pub fn orders(pid: i32, r: DateRange, lookback: u8, limit: u32, offset: u32) -> String {
-    todo!()
+    format!(
+        "{}/reports/orders{}",
+        project(pid),
+        Query::new()
+            .range(r)
+            .push("lookback", lookback)
+            .push("limit", limit)
+            .push("offset", offset)
+            .build()
+    )
 }
 
 pub fn order(pid: i32, order_id: &str, lookback: u8) -> String {
-    todo!()
+    format!(
+        "{}/reports/orders/{}{}",
+        project(pid),
+        encode(order_id),
+        Query::new().push("lookback", lookback).build()
+    )
 }
 
 pub fn origin(pid: i32, origin: &str) -> String {

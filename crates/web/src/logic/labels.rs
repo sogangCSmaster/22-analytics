@@ -5,12 +5,51 @@ use analytics_core::dto::admin::Role;
 
 /// 채널 id → 표시 이름. 모르는 채널(사용자 규칙)은 id를 그대로 쓴다.
 pub fn channel(id: &str) -> String {
-    todo!()
+    let known = match id {
+        "" => "(알 수 없음)",
+        "direct" => "직접 방문",
+        "organic_search" => "자연 검색",
+        "organic_social" => "자연 소셜",
+        "referral" => "외부 사이트",
+        "internal" => "내부 이동",
+        "naver_sa" => "네이버 검색광고",
+        "naver" => "네이버",
+        "naver_shopping" => "네이버 쇼핑",
+        "google_ads" => "구글 광고",
+        "google" => "구글",
+        "meta" => "메타",
+        "kakao" => "카카오",
+        "tiktok" => "틱톡",
+        "criteo" => "크리테오",
+        "youtube" => "유튜브",
+        "dfinery" => "디파이너리",
+        "email" => "이메일",
+        "unattributed" => "미귀속",
+        _ => return id.to_owned(),
+    };
+    known.to_owned()
 }
 
 /// 이벤트 이름 → 설명 (표준 이벤트만). 커스텀 이벤트는 None.
 pub fn event_hint(name: &str) -> Option<&'static str> {
-    todo!()
+    Some(match name {
+        "page_view" => "페이지 조회",
+        "outbound_click" => "외부 링크 클릭",
+        "file_download" => "파일 다운로드",
+        "scroll" => "스크롤",
+        "view_item_list" => "상품 목록 조회",
+        "select_item" => "상품 선택",
+        "view_item" => "상품 조회",
+        "add_to_cart" => "장바구니 담기",
+        "remove_from_cart" => "장바구니 빼기",
+        "view_cart" => "장바구니 조회",
+        "begin_checkout" => "결제 시작",
+        "add_shipping_info" => "배송 정보 입력",
+        "add_payment_info" => "결제 정보 입력",
+        "purchase" => "구매",
+        "refund" => "환불",
+        _ => return None,
+    })
 }
 
 pub fn model(m: Model) -> &'static str {
@@ -45,7 +84,13 @@ pub fn role(r: Role) -> &'static str {
 }
 
 pub fn order_status(s: &str) -> (&'static str, bool) {
-    todo!()
+    match s.to_ascii_uppercase().as_str() {
+        "CONFIRMED" => ("확정", false),
+        "PARTIALLY_REFUNDED" => ("부분 환불", false),
+        "CANCELLED" => ("취소", true),
+        "PENDING" => ("대기", false),
+        _ => ("기타", false),
+    }
 }
 
 #[cfg(test)]

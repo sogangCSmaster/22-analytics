@@ -23,12 +23,38 @@ pub struct ApiKeyDto {
 
 /// `GET /v1/projects/{id}/api-keys`: 배열 또는 `{items: [...]}`/`{keys: [...]}`
 pub fn parse_list(v: &serde_json::Value) -> Vec<ApiKeyDto> {
-    todo!()
+    let arr = match v {
+        serde_json::Value::Array(a) => a,
+        serde_json::Value::Object(m) => match m.get("items").or_else(|| m.get("keys")) {
+            Some(serde_json::Value::Array(a)) => a,
+            _ => return vec![],
+        },
+        _ => return vec![],
+    };
+    arr.iter()
+        .filter_map(|x| serde_json::from_value(x.clone()).ok())
+        .collect()
 }
 
 /// `POST` 응답에서 한 번만 내려오는 평문 키와 메타데이터.
 pub fn parse_created(v: &serde_json::Value) -> Option<(String, ApiKeyDto)> {
-    todo!()
+    fn find_secret(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::String(s) if s.starts_with("sk_live_") && s.len() > 24 => {
+                Some(s.clone())
+            }
+            serde_json::Value::Object(m) => m.values().find_map(find_secret),
+            _ => None,
+        }
+    }
+    let secret = find_secret(v)?;
+    let meta = v
+        .get("key")
+        .or_else(|| v.get("api_key"))
+        .filter(|k| k.is_object())
+        .unwrap_or(v);
+    let dto = serde_json::from_value(meta.clone()).unwrap_or_default();
+    Some((secret, dto))
 }
 
 /// 화면 표시: `sk_live_AbCdEfGh••••••••`

@@ -31,11 +31,47 @@ pub enum ApiError {
 impl ApiError {
     /// 상태 코드와 응답 본문으로 분류한다.
     pub fn from_response(status: u16, body: &str) -> ApiError {
-        todo!()
+        let parsed = parse_body(body);
+        let code = parsed.as_ref().map(|b| b.error.as_str()).unwrap_or("");
+        let server_msg = || {
+            parsed
+                .as_ref()
+                .map(|b| b.message.trim())
+                .filter(|m| !m.is_empty())
+                .map(|m| crate::format::truncate(m, 200))
+                .unwrap_or_default()
+        };
+        match (status, code) {
+            (401, "invalid_credentials") => ApiError::InvalidCredentials,
+            (401, _) => ApiError::Unauthorized,
+            (403, "csrf_rejected") => ApiError::Csrf,
+            (403, _) => ApiError::Forbidden,
+            (404, _) => ApiError::NotFound,
+            (409, _) => ApiError::Conflict(server_msg()),
+            (413, _) => ApiError::TooLarge,
+            (429, _) => ApiError::RateLimited,
+            (400..=499, _) => ApiError::Invalid(server_msg()),
+            _ => ApiError::Server,
+        }
     }
 
     pub fn message(&self) -> String {
-        todo!()
+        match self {
+            ApiError::Network => "서버에 연결할 수 없습니다. 네트워크를 확인해 주세요".into(),
+            ApiError::Unauthorized => "로그인이 필요합니다".into(),
+            ApiError::InvalidCredentials => "이메일 또는 비밀번호가 올바르지 않습니다".into(),
+            ApiError::Forbidden => "이 작업을 할 권한이 없습니다".into(),
+            ApiError::NotFound => "요청한 데이터를 찾을 수 없습니다".into(),
+            ApiError::Invalid(m) if !m.is_empty() => m.clone(),
+            ApiError::Invalid(_) => "입력값을 확인해 주세요".into(),
+            ApiError::Conflict(m) if !m.is_empty() => m.clone(),
+            ApiError::Conflict(_) => "이미 같은 항목이 있습니다".into(),
+            ApiError::Csrf => "보안 확인에 실패했습니다. 페이지를 새로 고친 뒤 다시 시도해 주세요".into(),
+            ApiError::RateLimited => "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요".into(),
+            ApiError::TooLarge => "파일이 너무 큽니다 (최대 5MB)".into(),
+            ApiError::Server => "일시적인 서버 오류입니다. 잠시 후 다시 시도해 주세요".into(),
+            ApiError::Decode => "응답을 읽지 못했습니다. 잠시 후 다시 시도해 주세요".into(),
+        }
     }
 
     /// 다시 시도하면 나아질 수 있는 오류인지 (재시도 버튼 노출).

@@ -50,27 +50,66 @@ pub fn pct(v: f64, digits: usize) -> String {
 
 /// 증감률: (현재 − 이전) / 이전. 이전이 0이면 정의하지 않는다(None).
 pub fn delta(cur: f64, prev: f64) -> Option<f64> {
-    todo!()
+    if prev == 0.0 || !prev.is_finite() || !cur.is_finite() {
+        None
+    } else {
+        Some((cur - prev) / prev)
+    }
 }
 
 /// 증감 표시: `▲ 12.3%`, `▼ 4%`, 변화 없음·정의 안 됨은 `–`. 반환 (문구, 방향: 1/0/-1)
 pub fn delta_label(d: Option<f64>) -> (String, i8) {
-    todo!()
+    match d {
+        Some(v) if v.is_finite() && (v * 1000.0).abs() >= 0.5 => {
+            let p = v.abs() * 100.0;
+            let s = if p >= 1000.0 {
+                int(p.round() as i64)
+            } else {
+                trim_float(p, 1)
+            };
+            if v > 0.0 {
+                (format!("▲ {s}%"), 1)
+            } else {
+                (format!("▼ {s}%"), -1)
+            }
+        }
+        _ => ("–".into(), 0),
+    }
 }
 
 /// ROAS: 3.25 → `325%`, None → `–`
 pub fn roas(v: Option<f64>) -> String {
-    todo!()
+    match v {
+        Some(r) if r.is_finite() => format!("{}%", int((r * 100.0).round() as i64)),
+        _ => "–".into(),
+    }
 }
 
 /// 큰 수 축약: 12,345 → `1.2만`, 9,999 → `9,999`, 1.5억
 pub fn compact(n: u64) -> String {
-    todo!()
+    if n >= 100_000_000 {
+        let v = n as f64 / 100_000_000.0;
+        if v >= 1000.0 {
+            format!("{}억", int(v.round() as i64))
+        } else {
+            format!("{}억", trim_float(v, 1))
+        }
+    } else if n >= 10_000 {
+        format!("{}만", trim_float(n as f64 / 10_000.0, 1))
+    } else {
+        count(n)
+    }
 }
 
 /// 유니코드 글자 기준 자르기 (넘치면 `…`).
 pub fn truncate(s: &str, max_chars: usize) -> String {
-    todo!()
+    let mut it = s.chars();
+    let head: String = it.by_ref().take(max_chars).collect();
+    if it.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
 }
 
 pub(crate) fn trim_float(v: f64, digits: usize) -> String {

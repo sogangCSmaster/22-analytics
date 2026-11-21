@@ -21,28 +21,53 @@ impl<K: PartialEq + Copy> Sort<K> {
 
     /// 같은 열을 누르면 방향을 바꾸고, 다른 열이면 내림차순부터.
     pub fn toggle(self, key: K) -> Self {
-        todo!()
+        if self.key == key {
+            Sort {
+                key,
+                dir: match self.dir {
+                    Dir::Asc => Dir::Desc,
+                    Dir::Desc => Dir::Asc,
+                },
+            }
+        } else {
+            Sort::desc(key)
+        }
     }
 
     /// 머리글 표시: ▼ / ▲ / 빈 문자열
     pub fn arrow(&self, key: K) -> &'static str {
-        todo!()
+        match (self.key == key, self.dir) {
+            (false, _) => "",
+            (true, Dir::Desc) => "▼",
+            (true, Dir::Asc) => "▲",
+        }
     }
 
     /// `aria-sort` 값
     pub fn aria(&self, key: K) -> &'static str {
-        todo!()
+        match (self.key == key, self.dir) {
+            (false, _) => "none",
+            (true, Dir::Desc) => "descending",
+            (true, Dir::Asc) => "ascending",
+        }
     }
 }
 
 /// 안정 정렬. `cmp`는 오름차순 기준 비교 함수.
 pub fn sort_rows<T, K: Copy>(rows: &mut [T], s: Sort<K>, cmp: impl Fn(&T, &T, K) -> Ordering) {
-    todo!()
+    rows.sort_by(|a, b| {
+        let o = cmp(a, b, s.key);
+        match s.dir {
+            Dir::Asc => o,
+            Dir::Desc => o.reverse(),
+        }
+    });
 }
 
 /// 대소문자 무시 부분 일치 (유니코드). 빈 검색어는 모두 일치.
 pub fn contains_ci(hay: &str, needle: &str) -> bool {
-    todo!()
+    let n = needle.trim();
+    n.is_empty() || hay.to_lowercase().contains(&n.to_lowercase())
 }
 
 /// 문자열 비교 (대소문자 무시, 같으면 원문 순).
@@ -53,7 +78,31 @@ pub fn cmp_text(a: &str, b: &str) -> Ordering {
 /// CSV (RFC 4180). 스프레드시트 수식 주입을 막기 위해 `= + - @`로 시작하는 문자열 칸 앞에 `'`를 붙인다
 /// (숫자 칸은 그대로).
 pub fn to_csv(headers: &[&str], rows: &[Vec<String>]) -> String {
-    todo!()
+    fn is_number(s: &str) -> bool {
+        let t = s.strip_prefix('-').unwrap_or(s);
+        !t.is_empty()
+            && t.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b',')
+            && t.bytes().next().is_some_and(|b| b.is_ascii_digit())
+    }
+    fn cell(s: &str) -> String {
+        let guarded = if !is_number(s) && s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+            format!("'{s}")
+        } else {
+            s.to_owned()
+        };
+        if guarded.contains([',', '"', '\n', '\r']) {
+            format!("\"{}\"", guarded.replace('"', "\"\""))
+        } else {
+            guarded
+        }
+    }
+    let mut out = String::new();
+    let line = |cells: Vec<String>| cells.join(",") + "\r\n";
+    out.push_str(&line(headers.iter().map(|h| cell(h)).collect()));
+    for r in rows {
+        out.push_str(&line(r.iter().map(|c| cell(c)).collect()));
+    }
+    out
 }
 
 #[cfg(test)]

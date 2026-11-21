@@ -21,7 +21,24 @@ pub struct Prefs {
 
 impl Prefs {
     pub fn decode(raw: Option<&str>) -> Prefs {
-        todo!()
+        let Some(serde_json::Value::Object(m)) = raw.and_then(|r| serde_json::from_str(r).ok())
+        else {
+            return Prefs::default();
+        };
+        // 필드마다 따로 읽어 하나가 깨져도 나머지는 살린다.
+        fn field<T: serde::de::DeserializeOwned>(
+            m: &serde_json::Map<String, serde_json::Value>,
+            k: &str,
+        ) -> Option<T> {
+            m.get(k).and_then(|v| serde_json::from_value(v.clone()).ok())
+        }
+        Prefs {
+            project_id: field(&m, "project_id"),
+            preset: field(&m, "preset").unwrap_or_default(),
+            custom_from: field(&m, "custom_from"),
+            custom_to: field(&m, "custom_to"),
+            compare: field(&m, "compare").unwrap_or(false),
+        }
     }
 
     pub fn encode(&self) -> String {
@@ -30,7 +47,14 @@ impl Prefs {
 
     /// 현재 기간. 직접 선택 값이 잘못됐으면 최근 7일.
     pub fn range(&self, today: Day) -> DateRange {
-        todo!()
+        let fallback = || preset_range(Preset::Days7, today).expect("7일 프리셋");
+        match self.preset {
+            Preset::Custom => match (&self.custom_from, &self.custom_to) {
+                (Some(f), Some(t)) => custom_range(f, t, today).unwrap_or_else(|_| fallback()),
+                _ => fallback(),
+            },
+            p => preset_range(p, today).unwrap_or_else(fallback),
+        }
     }
 }
 
@@ -46,7 +70,21 @@ pub struct Selection {
 
 /// 원하는 프로젝트가 접근 가능하면 그것, 아니면 첫 번째 운영 중 프로젝트, 없으면 아무 프로젝트.
 pub fn resolve(me: &MeResponse, wanted: Option<i32>) -> Option<Selection> {
-    todo!()
+    let pick = |want: &dyn Fn(&analytics_core::dto::admin::ProjectSummary) -> bool| {
+        me.orgs.iter().find_map(|o| {
+            o.projects.iter().find(|p| want(p)).map(|p| Selection {
+                org_id: o.id,
+                org_name: o.name.clone(),
+                project_id: p.id,
+                project_name: p.name.clone(),
+                role: o.role,
+            })
+        })
+    };
+    wanted
+        .and_then(|id| pick(&|p| p.id == id))
+        .or_else(|| pick(&|p| p.status == ProjectStatus::Active))
+        .or_else(|| pick(&|_| true))
 }
 
 /// 사이드바 전환기용: (광고주, [(프로젝트 id, 이름, 일시정지 여부)])

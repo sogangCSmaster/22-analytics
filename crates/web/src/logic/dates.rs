@@ -18,20 +18,52 @@ const WEEKDAYS: [&str; 7] = ["월", "화", "수", "목", "금", "토", "일"];
 
 impl Day {
     pub fn from_ymd(y: i32, m: u32, d: u32) -> Option<Day> {
-        todo!()
+        if !(1..=12).contains(&m) || d == 0 || d > days_in_month(y, m) {
+            return None;
+        }
+        // Howard Hinnant, days_from_civil
+        let y = if m <= 2 { y - 1 } else { y } as i64;
+        let era = y.div_euclid(400);
+        let yoe = y.rem_euclid(400);
+        let mp = (m as i64 + 9) % 12;
+        let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        Some(Day((era * 146_097 + doe - 719_468) as i32))
     }
 
     pub fn ymd(self) -> (i32, u32, u32) {
-        todo!()
+        let z = self.0 as i64 + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+        let y = (yoe + era * 400 + if m <= 2 { 1 } else { 0 }) as i32;
+        (y, m, d)
     }
 
     /// 엄격한 `YYYY-MM-DD`.
     pub fn parse(s: &str) -> Option<Day> {
-        todo!()
+        let b = s.as_bytes();
+        if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+            return None;
+        }
+        let num = |r: std::ops::Range<usize>| -> Option<u32> {
+            let part = &s[r];
+            if part.bytes().all(|c| c.is_ascii_digit()) {
+                part.parse().ok()
+            } else {
+                None
+            }
+        };
+        Day::from_ymd(num(0..4)? as i32, num(5..7)?, num(8..10)?)
     }
 
     pub fn iso(self) -> String {
-        todo!()
+        let (y, m, d) = self.ymd();
+        format!("{y:04}-{m:02}-{d:02}")
     }
 
     pub fn add(self, n: i32) -> Day {
@@ -40,22 +72,25 @@ impl Day {
 
     /// 서울 기준 오늘.
     pub fn seoul_today(now_ms: i64) -> Day {
-        todo!()
+        Day((now_ms + SEOUL_OFFSET_MS).div_euclid(DAY_MS) as i32)
     }
 
     /// 0 = 월요일
     pub fn weekday(self) -> usize {
-        todo!()
+        // 1970-01-01은 목요일(3)
+        (self.0 as i64 + 3).rem_euclid(7) as usize
     }
 
     /// 축 라벨: `11.21`
     pub fn short(self) -> String {
-        todo!()
+        let (_, m, d) = self.ymd();
+        format!("{m}.{d:02}")
     }
 
     /// `11월 21일 (토)`
     pub fn long_kr(self) -> String {
-        todo!()
+        let (_, m, d) = self.ymd();
+        format!("{m}월 {d}일 ({})", WEEKDAYS[self.weekday()])
     }
 }
 
@@ -100,37 +135,94 @@ pub struct DateRange {
 
 impl DateRange {
     pub fn days(self) -> i32 {
-        todo!()
+        self.to.0 - self.from.0 + 1
     }
 
     /// 바로 앞의 같은 길이 기간.
     pub fn previous(self) -> DateRange {
-        todo!()
+        let to = self.from.add(-1);
+        DateRange {
+            from: to.add(-(self.days() - 1)),
+            to,
+        }
     }
 
     pub fn each_day(self) -> Vec<Day> {
-        todo!()
+        (self.from.0..=self.to.0).map(Day).collect()
     }
 
     /// `2026.11.15 – 11.21`, 하루면 `2026.11.21`, 해가 바뀌면 둘 다 연도 표기.
     pub fn label(self) -> String {
-        todo!()
+        let (fy, fm, fd) = self.from.ymd();
+        let (ty, tm, td) = self.to.ymd();
+        if self.from == self.to {
+            format!("{fy}.{fm:02}.{fd:02}")
+        } else if fy == ty {
+            format!("{fy}.{fm:02}.{fd:02} – {tm:02}.{td:02}")
+        } else {
+            format!("{fy}.{fm:02}.{fd:02} – {ty}.{tm:02}.{td:02}")
+        }
     }
 }
 
 /// 프리셋 기간. 7일 = 오늘 포함 최근 7일.
 pub fn preset_range(p: Preset, today: Day) -> Option<DateRange> {
-    todo!()
+    let n = match p {
+        Preset::Today => 1,
+        Preset::Days7 => 7,
+        Preset::Days30 => 30,
+        Preset::Days90 => 90,
+        Preset::Custom => return None,
+    };
+    Some(DateRange {
+        from: today.add(-(n - 1)),
+        to: today,
+    })
 }
 
 /// 직접 선택 입력 검증.
 pub fn custom_range(from: &str, to: &str, today: Day) -> Result<DateRange, &'static str> {
-    todo!()
+    let (Some(f), Some(t)) = (Day::parse(from.trim()), Day::parse(to.trim())) else {
+        return Err("날짜 형식이 올바르지 않습니다");
+    };
+    if f > t {
+        return Err("시작일이 종료일보다 늦습니다");
+    }
+    if t > today {
+        return Err("미래 날짜는 선택할 수 없습니다");
+    }
+    let r = DateRange { from: f, to: t };
+    if r.days() > MAX_RANGE_DAYS {
+        return Err("기간은 최대 366일까지 선택할 수 있습니다");
+    }
+    Ok(r)
 }
 
 /// `2026-11-21T14:03:00+09:00` → `11월 21일 14:03`. 형식이 다르면 입력을 그대로 돌려준다.
 pub fn datetime_kr(s: &str) -> String {
-    todo!()
+    let b = s.as_bytes();
+    let ok = b.len() >= 16
+        && s.is_char_boundary(10)
+        && s.is_char_boundary(16)
+        && b[10] == b'T'
+        && b[13] == b':'
+        && [11, 12, 14, 15].iter().all(|&i| b[i].is_ascii_digit());
+    match ok.then(|| Day::parse(&s[..10])).flatten() {
+        Some(d) => {
+            let (_, m, dd) = d.ymd();
+            format!("{m}월 {dd}일 {}", &s[11..16])
+        }
+        None => s.to_owned(),
+    }
+}
+
+fn days_in_month(y: i32, m: u32) -> u32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        _ if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
+        _ => 28,
+    }
 }
 
 #[cfg(test)]
