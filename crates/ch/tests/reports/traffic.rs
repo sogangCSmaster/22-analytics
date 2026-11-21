@@ -97,6 +97,8 @@ async fn overview_happy_with_previous_period_and_revenue() {
                 "2026-11-21 11:00:00",
                 1,
             ),
+            // 환불만 들어온 PENDING 주문(확정 전)은 매출·주문 수 모두 제외
+            order(P, "P1", "PENDING", 0, 0, "2026-11-21 12:00:00", 1),
             // 직전 기간
             order(P, "D", "CONFIRMED", 7_000, 0, "2026-11-18 09:00:00", 1),
             // 기간 밖
