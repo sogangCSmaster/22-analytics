@@ -65,7 +65,13 @@
 | 대시보드 `cargo test -p analytics-web --no-default-features` | 87 통과 |
 | 트래커 `npm test` / 크기 | 9 통과 / gzip 2,447 B (예산 3,072 B) |
 | E2E `make e2e` | 16 통과: 매뉴얼 1.A 7개 + 대시보드 9개 (P0 프로젝트 전환 저장, P1 실시간·페이지·드로어 초기화, 멤버 추가 403 안내, 관리자 자기 권한 변경 반영, 키보드·Esc, 콘솔 오류 없음). 대시보드 P0·P1 7개는 수정 전 커밋(f092bc9)에서 실패함을 확인 |
-| 대시보드 릴리스 최적화(wasm-opt) | 미적용: 이 환경의 권한 정책이 binaryen 설치를 막음. 동작·테스트와 무관한 크기 최적화(현재 gzip 596KB). 배포 서버에서 설치 예정 |
+| 대시보드 릴리스 최적화(wasm-opt) | 사용자 결정(2026-11-21): 배포 단계에서 설치. 개발 환경 권한 정책이 binaryen 설치를 막음. 동작·테스트와 무관한 크기 최적화(현재 gzip 596KB) |
 | fmt · clippy (native, web wasm, edge wasm) | 경고 0 |
 
 배포 단계로 넘긴 항목: S3 아카이브 업로더, ClickHouse 콜드 티어, 보존 기간 13개월 전환, Savings Plan, 대시보드 릴리스 빌드의 wasm-opt 설치(이 환경에서는 바이너리 다운로드가 막혀 있음).
+
+### MVP 완료 (2026-11-21)
+
+사용자 확인으로 MVP를 완료 처리했다. 최종 검증 커밋 `5314bab`(main 동일): Rust 533 · 대시보드 87 · 트래커 9 · E2E 16 통과, fmt·clippy 경고 0.
+
+다음 단계 (배포, 대행사 계정·도메인 수령 후): Terraform 구성, Cloudflare Worker·KV·Queue·Pages·Tunnel, S3 아카이브 업로더, ClickHouse 콜드 티어, 보존 기간 13개월 전환, `make web-release` 전 wasm-opt(binaryen) 설치.
