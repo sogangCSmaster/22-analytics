@@ -291,8 +291,12 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
     let sem = Arc::new(Semaphore::new(BATCH_CONCURRENCY));
     let mut set = tokio::task::JoinSet::new();
     let mut results: Vec<Value> = vec![Value::Null; items.len()];
+    let order_ids: Vec<Value> = items
+        .iter()
+        .map(|item| item.get("order_id").cloned().unwrap_or(Value::Null))
+        .collect();
     for (i, item) in items.into_iter().enumerate() {
-        let order_id = item.get("order_id").cloned().unwrap_or(Value::Null);
+        let order_id = order_ids[i].clone();
         let validated = core_orders::validate(&order_project(project), &item, None, now);
         let v = match validated {
             Ok(v) => v,
@@ -332,6 +336,10 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
             }
         };
     }
+    // 작업이 패닉한 항목(JoinError)은 결과가 비어 있다: order_id를 담은 internal 오류로 채운다.
+    if fill_missing_results(&mut results, &order_ids) {
+        storage_failed = true;
+    }
     // 일부라도 저장에 실패하면 5xx: 고객사는 같은 배치를 다시 보내면 된다 (멱등).
     let status = if storage_failed {
         StatusCode::SERVICE_UNAVAILABLE
@@ -339,6 +347,22 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
         StatusCode::ACCEPTED
     };
     (status, Json(json!({ "results": results }))).into_response()
+}
+
+const INTERNAL_MESSAGE: &str = "내부 오류입니다. 같은 요청을 다시 보내 주세요";
+
+/// 결과가 비어 있는(`null`) 항목을 `{order_id, accepted:false, error:"internal"}`로 채운다.
+/// 하나라도 채웠으면 `true`.
+fn fill_missing_results(results: &mut [Value], order_ids: &[Value]) -> bool {
+    let mut filled = false;
+    for (r, order_id) in results.iter_mut().zip(order_ids) {
+        if r.is_null() {
+            *r = json!({ "order_id": order_id, "accepted": false, "error": "internal",
+                "message": INTERNAL_MESSAGE });
+            filled = true;
+        }
+    }
+    filled
 }
 
 #[cfg(test)]
