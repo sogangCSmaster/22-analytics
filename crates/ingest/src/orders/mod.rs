@@ -292,12 +292,9 @@ impl OrderService {
     /// 백그라운드에서 [`Self::client_purchases`]를 실행한다 (수집 응답을 늦추지 않기 위해).
     /// 동시 작업은 [`CLIENT_CONCURRENCY`]개까지이고, 넘치면 버리고 `client_dropped`로 센다
     /// (클라이언트 주문은 원래 "유실 가능" 기준이다, §5.3).
-    pub fn spawn_client_purchases(self: &Arc<Self>, events: &[Event]) {
-        let purchases: Vec<Event> = events
-            .iter()
-            .filter(|e| e.event_name == analytics_core::orders::PURCHASE_EVENT)
-            .cloned()
-            .collect();
+    /// `events`는 [`purchases_of`]로 고른 purchase 이벤트다 (다른 이벤트는 무시한다).
+    pub fn spawn_client_purchases(self: &Arc<Self>, mut purchases: Vec<Event>) {
+        purchases.retain(is_purchase);
         if purchases.is_empty() {
             return;
         }
@@ -317,4 +314,13 @@ impl OrderService {
             svc.client_purchases(&purchases).await;
         });
     }
+}
+
+fn is_purchase(e: &Event) -> bool {
+    e.event_name == analytics_core::orders::PURCHASE_EVENT
+}
+
+/// 배치에서 purchase 이벤트만 복사한다 (파이프라인에 배치를 넘기기 전에 한 번만 호출).
+pub fn purchases_of(events: &[Event]) -> Vec<Event> {
+    events.iter().filter(|e| is_purchase(e)).cloned().collect()
 }

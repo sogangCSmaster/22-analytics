@@ -8,7 +8,7 @@ pub mod cookie;
 use crate::channel::{self, ChannelInput, ChannelRule};
 use crate::event::{self, Ecommerce, Event, Item, WireBatch, WireEvent, WireLanding, names};
 use crate::settings::TrackingSettings;
-use crate::urlx::{self, Campaign, clip};
+use crate::urlx::{self, Campaign, clip, clip_owned};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -143,6 +143,12 @@ pub fn process(
         .unwrap_or_default();
 
     let session_source = batch.l.as_ref().and_then(|l| session_source(cfg, l));
+    // 지역 정보는 배치 단위로 같으므로 한 번만 자른다.
+    let geo = Geo {
+        country: clip(ctx.country, 2),
+        region: clip(ctx.region, 64),
+        city: clip(ctx.city, 64),
+    };
 
     let mut events = Vec::with_capacity(batch.e.len());
     let mut dropped = 0;
@@ -151,6 +157,7 @@ pub fn process(
             visitor_id,
             session_id,
             member_hash: &member_hash,
+            geo: &geo,
         };
         match build_event(
             ctx,
@@ -177,6 +184,13 @@ struct Ids<'a> {
     visitor_id: Uuid,
     session_id: Uuid,
     member_hash: &'a str,
+    geo: &'a Geo,
+}
+
+struct Geo {
+    country: String,
+    region: String,
+    city: String,
 }
 
 /// 세션 범위 유입 정보: 랜딩 페이지의 캠페인과 채널.
@@ -263,7 +277,7 @@ fn build_event(
         Some(src) if !is_session_start => (src.campaign.clone(), src.channel.clone()),
         _ => {
             let ch = classify_campaign(&page.campaign, &referrer_host, &page.host, cfg);
-            (page.campaign.clone(), ch)
+            (page.campaign, ch)
         }
     };
 
@@ -273,21 +287,20 @@ fn build_event(
         we.t
     };
     let ec = we.ec.map(|ec| Ecommerce {
-        order_id: clip(ec.order_id.as_deref().unwrap_or(""), 128),
+        order_id: clip_owned(ec.order_id.unwrap_or_default(), 128),
         value: money(ec.value.unwrap_or(0.0)),
-        currency: clip(
-            &ec.currency
-                .unwrap_or_else(|| "KRW".into())
-                .to_ascii_uppercase(),
-            3,
-        ),
+        currency: {
+            let mut c = clip_owned(ec.currency.unwrap_or_else(|| "KRW".into()), 3);
+            c.make_ascii_uppercase();
+            c
+        },
         items: ec
             .items
             .into_iter()
             .take(event::MAX_ITEMS)
             .map(|i| Item {
-                id: clip(&i.id, 128),
-                name: clip(&i.name, 256),
+                id: clip_owned(i.id, 128),
+                name: clip_owned(i.name, 256),
                 price: money(i.price),
                 qty: i.qty,
             })
@@ -310,8 +323,8 @@ fn build_event(
         member_hash: ids.member_hash.to_owned(),
         url: page.url,
         host: page.host,
-        path: clip(&page.path, 1024),
-        title: clip(we.ti.as_deref().unwrap_or(""), 300),
+        path: clip_owned(page.path, 1024),
+        title: clip_owned(we.ti.unwrap_or_default(), 300),
         referrer,
         referrer_host,
         utm_source: campaign.utm_source,
@@ -322,9 +335,9 @@ fn build_event(
         click_id: campaign.click_id,
         click_id_type: campaign.click_id_type,
         channel,
-        country: clip(ctx.country, 2),
-        region: clip(ctx.region, 64),
-        city: clip(ctx.city, 64),
+        country: ids.geo.country.clone(),
+        region: ids.geo.region.clone(),
+        city: ids.geo.city.clone(),
         device_type: ua.device_type.to_owned(),
         browser: ua.browser.clone(),
         os: ua.os.clone(),
@@ -349,7 +362,7 @@ fn props(
                 serde_json::Value::Number(n) => n.to_string(),
                 other => other.to_string(),
             };
-            Some((k, clip(&v, event::MAX_PROP_VALUE_LEN)))
+            Some((k, clip_owned(v, event::MAX_PROP_VALUE_LEN)))
         })
         .collect()
 }

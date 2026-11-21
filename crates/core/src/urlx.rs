@@ -130,6 +130,13 @@ pub fn clip(s: &str, max: usize) -> String {
     clip_str(s, max).to_owned()
 }
 
+/// [`clip`]의 소유 버전: 새로 할당하지 않고 그 자리에서 자른다.
+pub fn clip_owned(mut s: String, max: usize) -> String {
+    let n = clip_str(&s, max).len();
+    s.truncate(n);
+    s
+}
+
 /// [`clip`]의 빌림 버전: 앞 `max`바이트 이내의 가장 긴 UTF-8 접두사.
 pub fn clip_str(s: &str, max: usize) -> &str {
     if s.len() <= max {
@@ -189,5 +196,9 @@ mod tests {
     #[test]
     fn clip_respects_char_boundary() {
         assert_eq!(clip("가나다", 4), "가");
+        assert_eq!(clip_owned("가나다".into(), 4), "가");
+        assert_eq!(clip_owned("abc".into(), 3), "abc");
+        assert_eq!(clip_owned("abcd".into(), 0), "");
+        assert_eq!(clip_str("가나다", 6), "가나");
     }
 }

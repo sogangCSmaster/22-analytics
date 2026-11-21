@@ -36,15 +36,10 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
     };
     let n = fwd.events.len() as u64;
     // 프로젝트 설정(client_purchase_as_order)은 주문 서비스가 확인한다.
-    let purchases: Vec<Event> = fwd
-        .events
-        .iter()
-        .filter(|e| e.event_name == analytics_core::orders::PURCHASE_EVENT)
-        .cloned()
-        .collect();
+    let purchases = crate::orders::purchases_of(&fwd.events);
     match s.pipeline.try_send(fwd.events) {
         Ok(()) => {
-            s.orders.spawn_client_purchases(&purchases);
+            s.orders.spawn_client_purchases(purchases);
             s.metrics.events_received.fetch_add(n, Relaxed);
             StatusCode::NO_CONTENT
         }

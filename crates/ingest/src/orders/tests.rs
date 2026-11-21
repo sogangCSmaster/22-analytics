@@ -1347,7 +1347,10 @@ async fn background_client_projection_is_bounded() {
         db.ch.clone(),
         0,
     ));
-    svc.spawn_client_purchases(&[purchase(project, "B1", 1, 1), purchase(project, "B2", 1, 2)]);
+    svc.spawn_client_purchases(vec![
+        purchase(project, "B1", 1, 1),
+        purchase(project, "B2", 1, 2),
+    ]);
     assert_eq!(svc.metrics.client_dropped.load(Relaxed), 2);
     // 한도 안이면 백그라운드에서 반영된다
     let svc = Arc::new(OrderService::with_client_concurrency(
@@ -1355,7 +1358,7 @@ async fn background_client_projection_is_bounded() {
         db.ch.clone(),
         1,
     ));
-    svc.spawn_client_purchases(&[purchase(project, "B3", 1, 3)]);
+    svc.spawn_client_purchases(vec![purchase(project, "B3", 1, 3)]);
     let scope = ProjectScope::authorized(project as u32);
     let mut found = false;
     for _ in 0..100 {
