@@ -2,6 +2,9 @@ use anyhow::Context;
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// ClickHouse 배치 플러시 주기 기본값. 길수록 INSERT(파트) 수가 줄어든다.
+pub const DEFAULT_FLUSH_INTERVAL_MS: &str = "1000";
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind: String,
@@ -42,7 +45,7 @@ impl Config {
                     .context("ARCHIVE_ROTATE_SECS")?,
             ),
             flush_interval: Duration::from_millis(
-                get("FLUSH_INTERVAL_MS", "1000")
+                get("FLUSH_INTERVAL_MS", DEFAULT_FLUSH_INTERVAL_MS)
                     .parse()
                     .context("FLUSH_INTERVAL_MS")?,
             ),
@@ -69,5 +72,14 @@ impl Config {
             tracker_dist: "./tracker/dist".into(),
             dev_site_dir: "./dev/site".into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_flush_interval_is_3s() {
+        // C6: 초당 INSERT를 1/3로 줄인다 (작은 파트·머지 비용 감소). 지연은 수 초로 충분하다.
+        assert_eq!(super::DEFAULT_FLUSH_INTERVAL_MS, "3000");
     }
 }
