@@ -122,8 +122,8 @@ struct Attribution {
     lookback_days: u8,
 }
 
-/// `model`은 매출 보존 모델만 (없으면 프로젝트 기본 모델), `lookback`은 프로젝트에 설정된 값만
-/// (없으면 가장 짧은 값) 허용한다. 설정에 없는 lookback은 연산 결과가 없으므로 거부한다.
+/// 매출 리포트: `model`은 매출 보존 모델만 (없으면 프로젝트 기본 모델), `lookback`은 [`lookback`]과
+/// 같은 규칙.
 async fn attribution(
     state: &AppState,
     access: &ProjectAccess,
@@ -140,7 +140,30 @@ async fn attribution(
             }
         },
     };
-    let settings = analytics_pg::attribution::get(&state.pg, access.id()).await?;
+    // 읽기 경로라 설정 행을 만들지 않는다 (없으면 기본값).
+    let settings = analytics_pg::attribution::get_or_default(&state.pg, access.id()).await?;
+    let lookback_days = resolve_lookback(&settings, q)?;
+    let model = requested_model
+        .or_else(|| parse_model(&settings.default_model).filter(|m| m.conserves_revenue()))
+        .unwrap_or(Model::LastClick);
+    Ok(Attribution {
+        model,
+        lookback_days,
+    })
+}
+
+/// 모델과 무관한 리포트(중복 경로·주문): `lookback`만 읽고 `model`은 보지 않는다.
+async fn lookback(state: &AppState, access: &ProjectAccess, q: &ReportQuery) -> ApiResult<u8> {
+    let settings = analytics_pg::attribution::get_or_default(&state.pg, access.id()).await?;
+    resolve_lookback(&settings, q)
+}
+
+/// `lookback`은 프로젝트에 설정된 값만 (없으면 가장 짧은 값) 허용한다. 설정에 없는 lookback은
+/// 연산 결과가 없으므로 거부한다.
+fn resolve_lookback(
+    settings: &analytics_pg::attribution::AttributionSettings,
+    q: &ReportQuery,
+) -> ApiResult<u8> {
     let lookback = match q.lookback {
         None => settings.lookback_days.first().copied(),
         Some(d) => settings
@@ -160,15 +183,8 @@ async fn attribution(
             list.join(", ")
         )));
     };
-    let lookback_days = u8::try_from(lookback)
-        .map_err(|_| ApiError::internal(anyhow::anyhow!("잘못 저장된 lookback: {lookback}")))?;
-    let model = requested_model
-        .or_else(|| parse_model(&settings.default_model).filter(|m| m.conserves_revenue()))
-        .unwrap_or(Model::LastClick);
-    Ok(Attribution {
-        model,
-        lookback_days,
-    })
+    u8::try_from(lookback)
+        .map_err(|_| ApiError::internal(anyhow::anyhow!("잘못 저장된 lookback: {lookback}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -313,8 +329,8 @@ pub async fn overlap(
 ) -> ApiResult<Response> {
     let r = range(&state, &q)?;
     let n = limit(q.limit, DEFAULT_OVERLAP_LIMIT)?;
-    let a = attribution(&state, &access, &q).await?;
-    let body = storage(ch::overlap_paths(&state.ch, access.scope, r, a.lookback_days, n).await)?;
+    let lookback_days = lookback(&state, &access, &q).await?;
+    let body = storage(ch::overlap_paths(&state.ch, access.scope, r, lookback_days, n).await)?;
     Ok(ranged(&state, r, body))
 }
 
@@ -326,9 +342,8 @@ pub async fn orders(
     let r = range(&state, &q)?;
     let n = limit(q.limit, DEFAULT_TOP_LIMIT)?;
     let off = offset(q.offset)?;
-    let a = attribution(&state, &access, &q).await?;
-    let body =
-        storage(ch::recent_orders(&state.ch, access.scope, r, a.lookback_days, n, off).await)?;
+    let lookback_days = lookback(&state, &access, &q).await?;
+    let body = storage(ch::recent_orders(&state.ch, access.scope, r, lookback_days, n, off).await)?;
     Ok(ranged(&state, r, body))
 }
 
@@ -344,9 +359,8 @@ pub async fn order_detail(
         path_param(&params, "order_id"),
         MAX_ORDER_ID_CHARS,
     )?;
-    let a = attribution(&state, &access, &q).await?;
-    let detail =
-        storage(ch::order_detail(&state.ch, access.scope, order_id, a.lookback_days).await)?;
+    let lookback_days = lookback(&state, &access, &q).await?;
+    let detail = storage(ch::order_detail(&state.ch, access.scope, order_id, lookback_days).await)?;
     match detail {
         Some(d) => Ok(Json(d).into_response()),
         None => Err(ApiError::not_found()),

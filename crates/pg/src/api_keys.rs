@@ -6,7 +6,7 @@
 //! 해시 비교는 상수 시간으로 한다.
 
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{Acquire, PgExecutor, PgPool, Postgres};
 use time::OffsetDateTime;
 
 pub const KEY_SCHEME: &str = "sk_live_";
@@ -104,11 +104,12 @@ fn to_key(r: KeyRow) -> ApiKey {
 }
 
 /// 키를 발급한다. 평문 키는 반환값으로 한 번만 돌려준다.
-pub async fn create(
-    pool: &PgPool,
+pub async fn create<'c>(
+    conn: impl Acquire<'c, Database = Postgres>,
     project_id: i32,
     created_by: Option<i64>,
 ) -> anyhow::Result<(String, ApiKey)> {
+    let mut tx = conn.begin().await?;
     // prefix가 우연히 겹치면(UNIQUE 위반) 새로 만든다.
     for _ in 0..5 {
         let plain = generate();
@@ -121,9 +122,10 @@ pub async fn create(
         .bind(prefix)
         .bind(hash_key(&plain))
         .bind(created_by)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await?;
         if let Some(row) = res {
+            tx.commit().await?;
             return Ok((plain, to_key(row)));
         }
     }
@@ -152,14 +154,18 @@ pub async fn count_active(pool: &PgPool, project_id: i32) -> anyhow::Result<i64>
 }
 
 /// 키를 폐기한다. 다른 프로젝트의 키이거나 이미 폐기됐으면 false.
-pub async fn revoke(pool: &PgPool, project_id: i32, key_id: i64) -> anyhow::Result<bool> {
+pub async fn revoke<'e>(
+    ex: impl PgExecutor<'e>,
+    project_id: i32,
+    key_id: i64,
+) -> anyhow::Result<bool> {
     let n = sqlx::query(
         "UPDATE api_keys SET revoked_at = now() \
          WHERE id = $1 AND project_id = $2 AND revoked_at IS NULL",
     )
     .bind(key_id)
     .bind(project_id)
-    .execute(pool)
+    .execute(ex)
     .await?
     .rows_affected();
     Ok(n == 1)

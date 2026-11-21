@@ -1,7 +1,7 @@
 use analytics_core::channel::{ChannelRule, RuleMatch};
 use analytics_core::collect::ProjectConfig;
 use analytics_core::settings::TrackingSettings;
-use sqlx::{PgPool, Row};
+use sqlx::{Acquire, PgExecutor, PgPool, Postgres, Row};
 
 /// 공개 키로 수집 설정을 읽는다. Worker KV에 올라가는 것과 같은 구조다.
 pub async fn config_by_public_key(
@@ -89,14 +89,15 @@ const PROJECT_COLS: &str = "p.id, p.org_id, p.name, p.public_key, p.timezone, p.
                             p.status, p.settings_version, p.created_at";
 
 /// 프로젝트를 만든다: 공개 키·salt 생성, 기본 수집 설정, `attribution_settings` 기본 행.
-pub async fn create(
-    pool: &PgPool,
+pub async fn create<'c>(
+    conn: impl Acquire<'c, Database = Postgres>,
     org_id: i64,
     name: &str,
     timezone: &str,
     currency: &str,
 ) -> anyhow::Result<Project> {
-    let mut tx = pool.begin().await?;
+    // 호출자의 트랜잭션 안이면 savepoint가 된다.
+    let mut tx = conn.begin().await?;
     let settings = serde_json::to_value(TrackingSettings::default())?;
     let sql = format!(
         "INSERT INTO projects AS p (org_id, name, public_key, salt, timezone, currency, settings) \
@@ -171,8 +172,8 @@ pub async fn list_by_orgs(pool: &PgPool, org_ids: &[i64]) -> anyhow::Result<Vec<
 }
 
 /// `None` 필드는 그대로 둔다. 상태 값 검증은 호출자 몫이다 (DB CHECK 제약이 최후 방어선).
-pub async fn update(
-    pool: &PgPool,
+pub async fn update<'e>(
+    ex: impl PgExecutor<'e>,
     id: i32,
     name: Option<&str>,
     status: Option<&str>,
@@ -188,7 +189,7 @@ pub async fn update(
         .bind(name)
         .bind(status)
         .bind(timezone)
-        .fetch_optional(pool)
+        .fetch_optional(ex)
         .await?)
 }
 
@@ -215,12 +216,12 @@ pub async fn settings(pool: &PgPool, id: i32) -> anyhow::Result<Option<(Tracking
 
 /// 수집 설정 교체. 값이 실제로 바뀐 경우에만 `settings_version`을 1 올린다.
 /// 돌려주는 값: (저장된 설정, 버전, 바뀌었는지).
-pub async fn put_settings(
-    pool: &PgPool,
+pub async fn put_settings<'c>(
+    conn: impl Acquire<'c, Database = Postgres>,
     id: i32,
     new: &TrackingSettings,
 ) -> anyhow::Result<Option<(TrackingSettings, i32, bool)>> {
-    let mut tx = pool.begin().await?;
+    let mut tx = conn.begin().await?;
     let Some((current, version)) = sqlx::query_as::<_, (serde_json::Value, i32)>(
         "SELECT settings, settings_version FROM projects WHERE id = $1 FOR UPDATE",
     )
@@ -257,24 +258,32 @@ pub async fn origins(pool: &PgPool, id: i32) -> anyhow::Result<Vec<String>> {
 }
 
 /// 허용 도메인 추가. 새로 추가됐으면 `true`, 이미 있었으면 `false` (멱등).
-pub async fn add_origin(pool: &PgPool, id: i32, origin: &str) -> anyhow::Result<bool> {
+pub async fn add_origin<'e>(
+    ex: impl PgExecutor<'e>,
+    id: i32,
+    origin: &str,
+) -> anyhow::Result<bool> {
     let n = sqlx::query(
         "INSERT INTO project_origins (project_id, origin) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
     .bind(id)
     .bind(origin)
-    .execute(pool)
+    .execute(ex)
     .await?
     .rows_affected();
     Ok(n > 0)
 }
 
 /// 허용 도메인 제거. 실제로 지웠으면 `true` (멱등).
-pub async fn remove_origin(pool: &PgPool, id: i32, origin: &str) -> anyhow::Result<bool> {
+pub async fn remove_origin<'e>(
+    ex: impl PgExecutor<'e>,
+    id: i32,
+    origin: &str,
+) -> anyhow::Result<bool> {
     let n = sqlx::query("DELETE FROM project_origins WHERE project_id = $1 AND origin = $2")
         .bind(id)
         .bind(origin)
-        .execute(pool)
+        .execute(ex)
         .await?
         .rows_affected();
     Ok(n > 0)

@@ -110,6 +110,13 @@ impl From<anyhow::Error> for ApiError {
     }
 }
 
+/// 트랜잭션 시작·커밋 오류.
+impl From<sqlx::Error> for ApiError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::internal(e.into())
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let body = ApiErrorBody {

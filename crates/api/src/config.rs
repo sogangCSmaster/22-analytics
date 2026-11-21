@@ -10,8 +10,12 @@ pub struct ApiConfig {
     pub database_url: String,
     /// `DASHBOARD_ORIGINS` (쉼표 구분). CORS와 CSRF Origin 검사에 쓴다.
     pub dashboard_origins: Vec<String>,
-    /// `COOKIE_SECURE=true`면 세션 쿠키에 `Secure`를 붙인다.
+    /// `COOKIE_SECURE=true`면 세션 쿠키를 `__Host-at_session`(Secure, Path=/, Domain 없음)으로
+    /// 발급한다. false(http 개발)면 `at_session`.
     pub cookie_secure: bool,
+    /// `TRUST_PROXY_HEADERS=true`일 때만 `cf-connecting-ip`·`x-forwarded-for`를 클라이언트 IP로
+    /// 믿는다 (Cloudflare·리버스 프록시 뒤 배포). 기본 false: 소켓 상대 주소를 쓴다.
+    pub trust_proxy_headers: bool,
     /// `TRACKER_HOST`: 스니펫의 `t.js` 호스트
     pub tracker_host: String,
     pub login_limit: LoginLimitConfig,
@@ -22,7 +26,12 @@ pub struct ApiConfig {
 pub struct LoginLimitConfig {
     pub max_per_email: u32,
     pub max_per_ip: u32,
+    /// 이메일이 잠긴 뒤에도 그 계정에 실패한 적 없는 IP에 허용하는 시도 수 (창 단위, 계정당).
+    /// 공격자가 계정을 잠가 정상 사용자를 막는 DoS를 완화한다 ([`crate::ratelimit`] 참고).
+    pub max_bypass_per_email: u32,
     pub window: Duration,
+    /// 제한기에 들고 있는 키(이메일 해시·IP·조합) 수 상한.
+    pub max_keys: usize,
 }
 
 impl Default for LoginLimitConfig {
@@ -30,7 +39,9 @@ impl Default for LoginLimitConfig {
         Self {
             max_per_email: 5,
             max_per_ip: 20,
+            max_bypass_per_email: 5,
             window: Duration::from_secs(15 * 60),
+            max_keys: 20_000,
         }
     }
 }
@@ -44,6 +55,7 @@ impl Default for ApiConfig {
             database_url: "postgres://analytics:analytics@localhost:5432/analytics".into(),
             dashboard_origins: parse_origins(DEFAULT_DASHBOARD_ORIGINS),
             cookie_secure: false,
+            trust_proxy_headers: false,
             tracker_host: "http://localhost:8081".into(),
             login_limit: LoginLimitConfig::default(),
         }
@@ -61,6 +73,7 @@ impl ApiConfig {
                 .map(|v| parse_origins(&v))
                 .unwrap_or(d.dashboard_origins),
             cookie_secure: get("COOKIE_SECURE").is_some_and(|v| parse_bool(&v)),
+            trust_proxy_headers: get("TRUST_PROXY_HEADERS").is_some_and(|v| parse_bool(&v)),
             tracker_host: get("TRACKER_HOST").unwrap_or(d.tracker_host),
             login_limit: d.login_limit,
         }
@@ -102,6 +115,11 @@ mod tests {
     fn default_bind_does_not_clash_with_dashboard_dev_server() {
         // 대시보드 개발 서버가 8080을 쓴다
         assert_eq!(ApiConfig::default().bind, "0.0.0.0:8082");
+    }
+
+    #[test]
+    fn proxy_headers_are_untrusted_by_default() {
+        assert!(!ApiConfig::default().trust_proxy_headers);
     }
 
     #[test]

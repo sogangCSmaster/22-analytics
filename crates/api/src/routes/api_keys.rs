@@ -53,11 +53,12 @@ pub async fn create(
             ),
         ));
     }
+    let mut tx = state.pg.begin().await?;
     let (secret, key) =
-        analytics_pg::api_keys::create(&state.pg, access.id(), Some(access.user.id())).await?;
+        analytics_pg::api_keys::create(&mut *tx, access.id(), Some(access.user.id())).await?;
     // 감사 로그에는 prefix만 남긴다 (평문 키 금지).
     audit(
-        &state,
+        &mut *tx,
         Some(access.project.org_id),
         access.user.id(),
         "api_key.create",
@@ -65,6 +66,7 @@ pub async fn create(
         json!({ "project_id": access.id(), "prefix": key.prefix }),
     )
     .await?;
+    tx.commit().await?;
     Ok((
         StatusCode::CREATED,
         Json(CreatedApiKeyResponse {
@@ -81,9 +83,10 @@ pub async fn revoke(
 ) -> ApiResult<StatusCode> {
     access.require(Role::Admin)?;
     let id: i64 = parse_id(params.get("key_id").map(String::as_str).unwrap_or(""))?;
-    if analytics_pg::api_keys::revoke(&state.pg, access.id(), id).await? {
+    let mut tx = state.pg.begin().await?;
+    if analytics_pg::api_keys::revoke(&mut *tx, access.id(), id).await? {
         audit(
-            &state,
+            &mut *tx,
             Some(access.project.org_id),
             access.user.id(),
             "api_key.revoke",
@@ -92,5 +95,6 @@ pub async fn revoke(
         )
         .await?;
     }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -1019,3 +1019,148 @@ async fn missing_table_is_503_and_other_reports_still_work() {
     let r = get(&s.app, &s.f.viewer, &url(s.f.project_id, "pages")).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
 }
+
+// ---------------------------------------------------------------------------
+// 광고비 합계 넘침·채널 이름 대소문자
+// ---------------------------------------------------------------------------
+
+async fn insert_spend(app: &TestApp, p: i32, channel: &str, campaign: &str, amount: i64) {
+    sqlx::query(
+        "INSERT INTO ad_spend (project_id, day, channel, campaign, amount) \
+         VALUES ($1, '2026-11-20', $2, $3, $4)",
+    )
+    .bind(p)
+    .bind(channel)
+    .bind(campaign)
+    .bind(amount)
+    .execute(&app.db.pg)
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn huge_ad_spend_saturates_instead_of_failing() {
+    let s = setup_with_data().await;
+    let (app, p) = (&s.app, s.f.project_id);
+    // 업로드 상한 이전에 들어간 값처럼, 채널 합계와 전체 합계가 i64를 넘는 데이터
+    for (channel, campaign) in [
+        ("meta", "a"),
+        ("meta", "b"),
+        ("naver_sa", "a"),
+        ("kakao", "a"),
+    ] {
+        insert_spend(app, p, channel, campaign, i64::MAX - 1).await;
+    }
+    let v = ok(
+        app,
+        &s.f.viewer,
+        &url(p, "revenue?from=2026-11-20&to=2026-11-20"),
+    )
+    .await;
+    assert_eq!(v["spend_total"], i64::MAX, "{v}");
+    for c in v["channels"].as_array().unwrap() {
+        assert!(c["spend"].as_i64().unwrap() > 0, "{c}");
+    }
+    let meta = v["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["channel"] == "meta")
+        .unwrap()
+        .clone();
+    assert_eq!(meta["spend"], i64::MAX);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn spend_joins_channels_case_insensitively() {
+    let s = setup_with_data().await;
+    let (app, p) = (&s.app, s.f.project_id);
+    // 대소문자만 다른 옛 행(규칙 이름을 그대로 쓰던 시절)도 같은 채널로 합친다.
+    insert_spend(app, p, "Meta", "a", 1_000).await;
+    insert_spend(app, p, "meta", "b", 49_000).await;
+    insert_spend(app, p, "KAKAO", "", 5_000).await;
+    let v = ok(
+        app,
+        &s.f.viewer,
+        &url(p, "revenue?from=2026-11-20&to=2026-11-20"),
+    )
+    .await;
+    let channels = v["channels"].as_array().unwrap();
+    let names: Vec<&str> = channels
+        .iter()
+        .map(|c| c["channel"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names
+            .iter()
+            .filter(|n| n.eq_ignore_ascii_case("meta"))
+            .count(),
+        1,
+        "{names:?}"
+    );
+    let meta = channels.iter().find(|c| c["channel"] == "meta").unwrap();
+    assert_eq!(meta["spend"], 50_000);
+    assert_eq!(meta["roas"], 2.0);
+    let kakao = channels
+        .iter()
+        .find(|c| c["channel"].as_str().unwrap().eq_ignore_ascii_case("kakao"))
+        .unwrap();
+    assert_eq!(kakao["spend"], 5_000);
+    assert_eq!(v["spend_total"], 55_000);
+}
+
+// ---------------------------------------------------------------------------
+// 기여 설정 읽기
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reports_ignore_model_where_it_does_not_apply() {
+    let s = setup_with_data().await;
+    let (app, p) = (&s.app, s.f.project_id);
+    // 주문·중복 경로는 모델과 무관하다: 잘못된 model 값 때문에 실패하지 않는다.
+    for path in [
+        "overlap?from=2026-11-20&to=2026-11-20&model=bogus",
+        "orders?from=2026-11-20&to=2026-11-20&model=raw_sum",
+        "orders/ORD-9901?model=nope",
+    ] {
+        ok(app, &s.f.viewer, &url(p, path)).await;
+    }
+    let r = get(app, &s.f.viewer, &url(p, "revenue?model=bogus")).await;
+    assert_eq!(
+        r.status,
+        StatusCode::BAD_REQUEST,
+        "매출 리포트는 여전히 검사"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reading_reports_does_not_write_attribution_settings() {
+    let s = setup_with_data().await;
+    let (app, p) = (&s.app, s.f.project_id);
+    sqlx::query("DELETE FROM attribution_settings WHERE project_id = $1")
+        .bind(p)
+        .execute(&app.db.pg)
+        .await
+        .unwrap();
+    let v = ok(
+        app,
+        &s.f.viewer,
+        &url(p, "revenue?from=2026-11-20&to=2026-11-20"),
+    )
+    .await;
+    assert_eq!(v["model"], "last_click");
+    assert_eq!(v["lookback_days"], 7);
+    ok(
+        app,
+        &s.f.viewer,
+        &url(p, "orders?from=2026-11-20&to=2026-11-20"),
+    )
+    .await;
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM attribution_settings WHERE project_id = $1")
+            .bind(p)
+            .fetch_one(&app.db.pg)
+            .await
+            .unwrap();
+    assert_eq!(n, 0, "읽기 경로(viewer)가 설정 행을 만들지 않는다");
+}

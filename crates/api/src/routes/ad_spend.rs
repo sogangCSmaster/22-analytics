@@ -1,8 +1,9 @@
 //! 광고비 CSV 업로드·조회.
 //!
 //! - `POST /v1/projects/{project_id}/ad-spend` (analyst 이상, `Content-Type: text/csv`, 최대 5MB)
-//!   형식: `day,channel,campaign,amount` (머리글 행은 선택). 같은 (day, channel, campaign)은
-//!   덮어쓴다(upsert). 한 행이라도 잘못되면 아무것도 저장하지 않는다.
+//!   형식: `day,channel,campaign,amount` (머리글 행은 선택, 비어 있지 않은 첫 줄). 같은
+//!   (day, channel, campaign)은 덮어쓴다(upsert). 한 행이라도 잘못되면 아무것도 저장하지 않는다.
+//!   amount는 0..=[`MAX_AMOUNT`] 정수, channel은 소문자로 저장한다 (채널 규칙 이름과 같게).
 //! - `GET /v1/projects/{project_id}/ad-spend?from=YYYY-MM-DD&to=YYYY-MM-DD` (멤버, 최대 366일)
 
 use super::audit;
@@ -27,6 +28,9 @@ pub const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
 pub const MAX_ROWS: usize = 200_000;
 pub const MAX_RANGE_DAYS: i64 = 366;
 const MAX_CAMPAIGN_CHARS: usize = 200;
+/// 행당 광고비 상한 (통화 최소단위). 원화로 1천조: 현실적인 값은 모두 들어가고,
+/// 행을 많이 합쳐도 집계가 BIGINT 근처에 가기 어렵다 (합계는 그래도 포화 처리한다).
+pub const MAX_AMOUNT: i64 = 1_000_000_000_000_000;
 
 pub fn parse_day(s: &str) -> Option<Date> {
     Date::parse(s.trim(), format_description!("[year]-[month]-[day]")).ok()
@@ -46,6 +50,8 @@ pub fn parse_csv(body: &[u8]) -> ApiResult<Vec<Spend>> {
         .from_reader(body);
     let mut rows: BTreeMap<(Date, String, String), i64> = BTreeMap::new();
     let mut seen = 0usize;
+    // 머리글은 비어 있지 않은 첫 줄에서만 알아본다 (앞에 빈 줄·공백 줄이 있어도).
+    let mut first = true;
     for (i, rec) in rdr.records().enumerate() {
         let line = i + 1;
         let err = |msg: &str| ApiError::invalid(format!("{line}행: {msg}"));
@@ -53,7 +59,7 @@ pub fn parse_csv(body: &[u8]) -> ApiResult<Vec<Spend>> {
         if rec.len() == 1 && rec.get(0).is_some_and(str::is_empty) {
             continue; // 빈 줄
         }
-        if i == 0 && rec.get(0).is_some_and(|c| c.eq_ignore_ascii_case("day")) {
+        if std::mem::take(&mut first) && rec.get(0).is_some_and(|c| c.eq_ignore_ascii_case("day")) {
             continue; // 머리글
         }
         if rec.len() != 4 {
@@ -69,7 +75,11 @@ pub fn parse_csv(body: &[u8]) -> ApiResult<Vec<Spend>> {
         if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
             return Err(err("amount는 0 이상의 정수 (통화 최소단위)"));
         }
-        let amount: i64 = raw.parse().map_err(|_| err("amount가 너무 큽니다"))?;
+        let amount: i64 = raw
+            .parse()
+            .ok()
+            .filter(|a| *a <= MAX_AMOUNT)
+            .ok_or_else(|| err("amount가 너무 큽니다 (최대 1,000,000,000,000,000)"))?;
         seen += 1;
         if seen > MAX_ROWS {
             return Err(ApiError::invalid(format!("최대 {MAX_ROWS}행")));
@@ -104,13 +114,14 @@ pub async fn upload(
         }
     })?;
     let rows = parse_csv(&body)?;
-    analytics_pg::ad_spend::upsert(&state.pg, access.id(), &rows).await?;
+    let mut tx = state.pg.begin().await?;
+    analytics_pg::ad_spend::upsert(&mut *tx, access.id(), &rows).await?;
     let (from, to) = (
         rows.iter().map(|r| r.day).min(),
         rows.iter().map(|r| r.day).max(),
     );
     audit(
-        &state,
+        &mut *tx,
         Some(access.project.org_id),
         access.user.id(),
         "ad_spend.upload",
@@ -118,6 +129,7 @@ pub async fn upload(
         json!({ "rows": rows.len(), "from": from.map(fmt_day), "to": to.map(fmt_day) }),
     )
     .await?;
+    tx.commit().await?;
     Ok(Json(AdSpendUploadResponse { rows: rows.len() }))
 }
 

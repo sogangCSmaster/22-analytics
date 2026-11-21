@@ -166,3 +166,41 @@ async fn ad_spend_range_validation() {
         .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn amount_has_an_upper_bound() {
+    let app = TestApp::new().await;
+    let f = app.fixture().await;
+    let p = f.project_id;
+    // 행당 1e15(통화 최소단위)까지. 그보다 크면 합계가 BIGINT를 넘을 수 있어 거부한다.
+    let r = app
+        .call(upload(p, "2026-11-01,meta,,1000000000000000\n").cookie(&f.analyst))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    for big in ["1000000000000001", "9223372036854775807"] {
+        let r = app
+            .call(upload(p, &format!("2026-11-02,meta,,{big}\n")).cookie(&f.analyst))
+            .await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{big}: {}", r.text);
+        assert!(
+            r.body["message"].as_str().unwrap().starts_with("1행"),
+            "{}",
+            r.text
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn header_is_detected_after_leading_blank_lines() {
+    let app = TestApp::new().await;
+    let f = app.fixture().await;
+    let p = f.project_id;
+    let csv = "\n  \r\n\t\nDay,channel,campaign,amount\n2026-11-01,meta,,100\n";
+    let r = app.call(upload(p, csv).cookie(&f.analyst)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.body["rows"], 1);
+    // 데이터 중간의 머리글 모양 행은 여전히 오류
+    let csv = "2026-11-01,meta,,100\nday,channel,campaign,amount\n";
+    let r = app.call(upload(p, csv).cookie(&f.analyst)).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+}

@@ -1,7 +1,10 @@
 //! api: 대시보드(Dioxus)와 관리·리포팅 API 서버.
 //!
 //! ## 인증·권한 요약
-//! - 인증: `at_session` 쿠키(세션). 없거나 만료면 401.
+//! - 인증: 세션 쿠키(`COOKIE_SECURE=true`면 `__Host-at_session`, 아니면 `at_session`).
+//!   없거나 만료면 401. 슬라이딩 연장 시 쿠키도 다시 보낸다.
+//! - 클라이언트 IP: 소켓 주소. `TRUST_PROXY_HEADERS=true`일 때만 프록시 헤더를 믿는다
+//!   (서버는 `into_make_service_with_connect_info`로 띄워야 한다, `main.rs`).
 //! - 전역: 슈퍼 관리자(대행사 관리자)는 모든 광고주·프로젝트에 `admin`으로 접근한다.
 //! - 광고주 역할: `viewer`(읽기) < `analyst`(프로젝트 설정 편집) < `admin`(광고주·멤버·프로젝트 관리).
 //! - 접근할 수 없는 광고주·프로젝트는 404, 역할이 부족하면 403.
@@ -181,6 +184,10 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/v1", v1)
         .fallback(|| async { error::ApiError::not_found() })
         .layer(DefaultBodyLimit::max(MAX_JSON_BYTES))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            extract::session_refresh,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             security::csrf_guard,

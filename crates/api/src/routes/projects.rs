@@ -50,9 +50,10 @@ pub async fn create(
     let name = validate::name("name", &req.name, validate::MAX_NAME_CHARS)?;
     let tz = timezone(&state, req.timezone.as_deref().unwrap_or(DEFAULT_TIMEZONE)).await?;
     let currency = validate::currency(req.currency.as_deref().unwrap_or(DEFAULT_CURRENCY))?;
-    let p = analytics_pg::projects::create(&state.pg, access.id(), &name, &tz, &currency).await?;
+    let mut tx = state.pg.begin().await?;
+    let p = analytics_pg::projects::create(&mut *tx, access.id(), &name, &tz, &currency).await?;
     audit(
-        &state,
+        &mut *tx,
         Some(access.id()),
         access.user.id(),
         "project.create",
@@ -60,6 +61,7 @@ pub async fn create(
         json!({ "name": p.name, "timezone": p.timezone, "currency": p.currency }),
     )
     .await?;
+    tx.commit().await?;
     Ok((StatusCode::CREATED, Json(project_dto(&p, access.role))))
 }
 
@@ -83,8 +85,9 @@ pub async fn update(
         None => None,
     };
     let status = req.status.map(|s| s.as_str());
+    let mut tx = state.pg.begin().await?;
     let p = analytics_pg::projects::update(
-        &state.pg,
+        &mut *tx,
         access.id(),
         name.as_deref(),
         status,
@@ -93,7 +96,7 @@ pub async fn update(
     .await?
     .ok_or_else(ApiError::not_found)?;
     audit(
-        &state,
+        &mut *tx,
         Some(p.org_id),
         access.user.id(),
         "project.update",
@@ -101,6 +104,7 @@ pub async fn update(
         json!({ "name": name, "status": status, "timezone": tz }),
     )
     .await?;
+    tx.commit().await?;
     Ok(Json(project_dto(&p, access.role)))
 }
 

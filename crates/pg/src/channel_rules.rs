@@ -2,7 +2,7 @@
 //! 전역 기본 규칙(project_id NULL)은 관리 API로 바꾸지 않는다.
 
 use analytics_core::channel::RuleMatch;
-use sqlx::PgPool;
+use sqlx::{PgExecutor, PgPool};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rule {
@@ -49,8 +49,8 @@ pub async fn get(pool: &PgPool, project_id: i32, id: i64) -> anyhow::Result<Opti
     Ok(row.map(from_row))
 }
 
-pub async fn create(
-    pool: &PgPool,
+pub async fn create<'e>(
+    ex: impl PgExecutor<'e>,
     project_id: i32,
     priority: i32,
     channel: &str,
@@ -66,13 +66,17 @@ pub async fn create(
     .bind(channel)
     .bind(serde_json::to_value(when)?)
     .bind(label)
-    .fetch_one(pool)
+    .fetch_one(ex)
     .await?;
     Ok(from_row(row))
 }
 
 /// 규칙 전체를 덮어쓴다 (호출자가 기존 값과 병합한 결과를 넘긴다).
-pub async fn update(pool: &PgPool, project_id: i32, rule: &Rule) -> anyhow::Result<Option<Rule>> {
+pub async fn update<'e>(
+    ex: impl PgExecutor<'e>,
+    project_id: i32,
+    rule: &Rule,
+) -> anyhow::Result<Option<Rule>> {
     let row = sqlx::query_as::<_, RuleRow>(
         "UPDATE channel_rules SET priority = $3, channel = $4, match = $5, label = $6 \
          WHERE project_id = $1 AND id = $2 RETURNING id, priority, channel, match, label",
@@ -83,17 +87,17 @@ pub async fn update(pool: &PgPool, project_id: i32, rule: &Rule) -> anyhow::Resu
     .bind(&rule.channel)
     .bind(serde_json::to_value(&rule.when)?)
     .bind(&rule.label)
-    .fetch_optional(pool)
+    .fetch_optional(ex)
     .await?;
     Ok(row.map(from_row))
 }
 
 /// 실제로 지웠으면 `true` (멱등).
-pub async fn delete(pool: &PgPool, project_id: i32, id: i64) -> anyhow::Result<bool> {
+pub async fn delete<'e>(ex: impl PgExecutor<'e>, project_id: i32, id: i64) -> anyhow::Result<bool> {
     let n = sqlx::query("DELETE FROM channel_rules WHERE project_id = $1 AND id = $2")
         .bind(project_id)
         .bind(id)
-        .execute(pool)
+        .execute(ex)
         .await?
         .rows_affected();
     Ok(n > 0)
