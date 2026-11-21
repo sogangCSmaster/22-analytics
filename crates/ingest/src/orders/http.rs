@@ -10,7 +10,8 @@
 //!   - 본문은 클라이언트 원문. 응답 상태·본문은 Worker가 그대로 클라이언트에 돌려준다.
 //!
 //! 응답: 단건 `202 {"accepted":true,"warnings":[...]}`, 일괄 `202 {"results":[...]}`,
-//! 오류 `{"error":"code","message":"..."}` (400/401/403/404/413/422/503).
+//! 오류 `{"error":"code","message":"..."}` (400/401/403/404/409/413/422/503).
+//! 409 `idempotency_key_reused`: 같은 (이벤트 유형, 멱등 키)로 금액·시각이 다른 요청이 이미 있다.
 
 use super::{OrderService, ProjectCtx};
 use crate::internal::now_ms;
@@ -129,6 +130,13 @@ fn error(status: StatusCode, code: &str, message: &str) -> Response {
     (status, Json(json!({ "error": code, "message": message }))).into_response()
 }
 
+const KEY_REUSED: &str = "idempotency_key_reused";
+const KEY_REUSED_MESSAGE: &str = "같은 멱등 키로 내용이 다른 요청이 이미 처리되었습니다";
+
+fn key_reused() -> Response {
+    error(StatusCode::CONFLICT, KEY_REUSED, KEY_REUSED_MESSAGE)
+}
+
 fn storage_unavailable(e: &anyhow::Error) -> Response {
     tracing::error!(error = %e, "주문 저장소 오류");
     error(
@@ -233,6 +241,7 @@ async fn single(
         Err(e) => return error(StatusCode::UNPROCESSABLE_ENTITY, e.code(), &e.to_string()),
     };
     match st.svc.apply(v.event).await {
+        Ok(a) if a.conflict => key_reused(),
         Ok(_) => (
             StatusCode::ACCEPTED,
             Json(json!({ "accepted": true, "warnings": v.warnings })),
@@ -312,6 +321,8 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
             }
         };
         results[i] = match r {
+            Ok(a) if a.conflict => json!({ "order_id": order_id, "accepted": false,
+                "error": KEY_REUSED, "message": KEY_REUSED_MESSAGE }),
             Ok(_) => json!({ "order_id": order_id, "accepted": true, "warnings": warnings }),
             Err(e) => {
                 tracing::error!(error = %e, "주문 저장 실패");

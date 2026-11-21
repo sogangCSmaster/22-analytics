@@ -166,6 +166,24 @@ pub struct OrderEvent {
     pub raw: String,
 }
 
+impl OrderEvent {
+    /// 같은 멱등 키의 두 이벤트가 같은 요청(재전송)인지. 수신 시각·원문·식별자는 비교하지 않고
+    /// 금액과 발생 시각만 본다 (기본 멱등 키는 이 값들로 만들므로 기본 키끼리는 항상 같다).
+    pub fn same_payload(&self, other: &OrderEvent) -> bool {
+        (
+            self.event_type,
+            self.net_amount,
+            self.refund_amount,
+            self.occurred_at_ms,
+        ) == (
+            other.event_type,
+            other.net_amount,
+            other.refund_amount,
+            other.occurred_at_ms,
+        )
+    }
+}
+
 /// 주문 현재 상태. ClickHouse `orders` 행과 대응한다 (`version` 제외).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderState {
@@ -334,7 +352,9 @@ pub fn validate(
     }
 
     let idempotency_key = match idempotency_key.or(w.idempotency_key.as_deref()) {
-        Some(k) if valid_idempotency_key(k) => k.to_owned(),
+        // 명시 키는 이벤트 유형으로 네임스페이스를 붙인다: 가맹점이 확정·환불에 같은 키
+        // (예: order_id)를 보내도 서로를 중복으로 판정하지 않는다. 기본 키는 이미 유형을 포함한다.
+        Some(k) if valid_idempotency_key(k) => format!("{}:{k}", event_type.as_str()),
         Some(_) => return Err(OrderError::InvalidIdempotencyKey),
         None => {
             let amt = match event_type {

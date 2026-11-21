@@ -45,6 +45,8 @@ pub struct Applied {
     pub duplicate: bool,
     /// `orders`에 새 행을 썼다.
     pub projected: bool,
+    /// 같은 멱등 키 이벤트가 있는데 내용(금액·시각)이 다르다. 아무것도 쓰지 않았다.
+    pub conflict: bool,
 }
 
 pub struct OrderService {
@@ -109,9 +111,20 @@ impl OrderService {
         let _guard = self.lock_for(ev.project_id, &ev.order_id).lock().await;
         let scope = ProjectScope::authorized(ev.project_id);
         let mut events = ch_orders::order_events(&self.ch, scope, &ev.order_id).await?;
-        let duplicate = events
+        let same_key = events
             .iter()
-            .any(|e| e.idempotency_key == ev.idempotency_key);
+            .find(|e| e.idempotency_key == ev.idempotency_key);
+        if let Some(prev) = same_key
+            && !prev.same_payload(&ev)
+        {
+            // 같은 키로 다른 내용: 조용히 버리지 않고 호출자에게 알린다 (409)
+            return Ok(Applied {
+                duplicate: true,
+                projected: false,
+                conflict: true,
+            });
+        }
+        let duplicate = same_key.is_some();
         let order_id = ev.order_id.clone();
         if !duplicate {
             ch_orders::insert_order_event(&self.ch, &ev).await?;
@@ -123,6 +136,7 @@ impl OrderService {
             return Ok(Applied {
                 duplicate,
                 projected: false,
+                conflict: false,
             });
         }
         let version =
@@ -131,6 +145,7 @@ impl OrderService {
         Ok(Applied {
             duplicate,
             projected: true,
+            conflict: false,
         })
     }
 
