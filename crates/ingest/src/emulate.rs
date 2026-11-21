@@ -3,6 +3,8 @@
 
 use crate::AppState;
 use crate::config::Config;
+use crate::lock;
+use analytics_core::cache::TtlCache;
 use analytics_core::collect::cookie::{VISITOR_COOKIE, visitor_id};
 use analytics_core::collect::{self, ProjectConfig, RequestCtx};
 use analytics_core::event::{MAX_BATCH_BYTES, WireBatch};
@@ -17,21 +19,20 @@ use axum::{
 };
 use serde::Deserialize;
 use sqlx::PgPool;
-use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::atomic::Ordering::Relaxed;
-use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
-const CONFIG_TTL: Duration = Duration::from_secs(60);
+const CONFIG_TTL_MS: i64 = 60_000;
+const CONFIG_CACHE_MAX: usize = 10_000;
 
 pub struct Emulator {
     pool: PgPool,
     tracker_dist: PathBuf,
-    cache: RwLock<HashMap<String, (Instant, Option<ProjectConfig>)>>,
+    cache: Mutex<TtlCache<String, ProjectConfig>>,
 }
 
 impl Emulator {
@@ -39,22 +40,17 @@ impl Emulator {
         Self {
             pool,
             tracker_dist,
-            cache: RwLock::new(HashMap::new()),
+            cache: Mutex::new(TtlCache::new(CONFIG_TTL_MS, CONFIG_CACHE_MAX)),
         }
     }
 
     /// Worker의 KV 조회 + 메모리 캐시와 같은 역할.
     async fn project(&self, key: &str) -> anyhow::Result<Option<ProjectConfig>> {
-        if let Some((at, cfg)) = self.cache.read().await.get(key)
-            && at.elapsed() < CONFIG_TTL
-        {
-            return Ok(cfg.clone());
+        if let Some(cfg) = lock(&self.cache).get(key, now_ms()) {
+            return Ok(cfg);
         }
         let cfg = analytics_pg::projects::config_by_public_key(&self.pool, key).await?;
-        self.cache
-            .write()
-            .await
-            .insert(key.to_owned(), (Instant::now(), cfg.clone()));
+        lock(&self.cache).put(key.to_owned(), cfg.clone(), now_ms());
         Ok(cfg)
     }
 }

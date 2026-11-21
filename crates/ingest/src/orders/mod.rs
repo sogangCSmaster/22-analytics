@@ -22,19 +22,20 @@ mod tests;
 use analytics_ch::ProjectScope;
 use analytics_ch::orders::{self as ch_orders, OrderRow};
 use analytics_core::Event;
+use analytics_core::cache::TtlCache;
 use analytics_core::orders::{OrderEvent, OrderSource, client_purchase_event, project};
 use analytics_core::settings::TrackingSettings;
+use analytics_core::timeutil::now_ms;
 use sqlx::{PgPool, Row};
-use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, RwLock, Semaphore};
+use tokio::sync::{Mutex, Semaphore};
 
 /// 같은 주문 처리를 직렬화하는 잠금 개수. 서로 다른 주문이 같은 잠금을 공유해도 정확성에는 문제없다.
 const LOCK_STRIPES: usize = 1024;
-const PROJECT_TTL: Duration = Duration::from_secs(60);
+const PROJECT_TTL_MS: i64 = 60_000;
+const PROJECT_CACHE_MAX: usize = 10_000;
 /// 클라이언트 purchase 투영을 동시에 돌리는 백그라운드 작업 수. 넘치면 버리고 지표로 센다.
 pub const CLIENT_CONCURRENCY: usize = 64;
 /// 주문 하나에 받는 클라이언트 이벤트 상한. 넘는 이벤트는 무시한다
@@ -91,7 +92,7 @@ pub struct OrderService {
     pg: PgPool,
     ch: analytics_ch::Client,
     locks: Vec<Mutex<()>>,
-    projects: RwLock<HashMap<u32, (Instant, Option<ProjectCtx>)>>,
+    projects: std::sync::Mutex<TtlCache<u32, ProjectCtx>>,
     client_permits: Arc<Semaphore>,
     pub metrics: OrderMetrics,
 }
@@ -107,7 +108,7 @@ impl OrderService {
             pg,
             ch,
             locks: (0..LOCK_STRIPES).map(|_| Mutex::new(())).collect(),
-            projects: RwLock::new(HashMap::new()),
+            projects: std::sync::Mutex::new(TtlCache::new(PROJECT_TTL_MS, PROJECT_CACHE_MAX)),
             client_permits: Arc::new(Semaphore::new(n)),
             metrics: OrderMetrics::default(),
         }
@@ -119,10 +120,8 @@ impl OrderService {
 
     /// 프로젝트 정보 (60초 메모리 캐시).
     pub async fn project(&self, project_id: u32) -> anyhow::Result<Option<ProjectCtx>> {
-        if let Some((at, ctx)) = self.projects.read().await.get(&project_id)
-            && at.elapsed() < PROJECT_TTL
-        {
-            return Ok(ctx.clone());
+        if let Some(ctx) = crate::lock(&self.projects).get(&project_id, now_ms()) {
+            return Ok(ctx);
         }
         let row =
             sqlx::query("SELECT status, currency, salt, settings FROM projects WHERE id = $1")
@@ -140,10 +139,7 @@ impl OrderService {
                 client_purchase_as_order: settings.client_purchase_as_order,
             }
         });
-        self.projects
-            .write()
-            .await
-            .insert(project_id, (Instant::now(), ctx.clone()));
+        crate::lock(&self.projects).put(project_id, ctx.clone(), now_ms());
         Ok(ctx)
     }
 

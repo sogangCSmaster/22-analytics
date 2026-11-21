@@ -36,7 +36,7 @@ const QUEUE_FORWARD_TIMEOUT: Duration = Duration::from_secs(15);
 
 thread_local! {
     /// isolate 단위 메모리 캐시 (ARCHITECTURE §4.1: 60초)
-    static CACHE: RefCell<ConfigCache> = RefCell::new(ConfigCache::default());
+    static CACHE: RefCell<ConfigCache> = RefCell::new(config::new_cache());
 }
 
 #[wasm_bindgen]
@@ -121,7 +121,7 @@ async fn project(env: &Env, key: &PublicKey) -> worker::Result<Option<ProjectCon
         .get(&config::kv_key(key))
         .json::<ProjectConfig>()
         .await?;
-    CACHE.with(|c| c.borrow_mut().put(key.as_str(), cfg.clone(), now));
+    CACHE.with(|c| c.borrow_mut().put(key.to_string(), cfg.clone(), now));
     Ok(cfg)
 }
 
