@@ -250,8 +250,15 @@ pub fn default_idempotency_key(
     amount: i64,
     occurred_at_ms: i64,
 ) -> String {
-    let _ = (order_id, event_type, amount, occurred_at_ms, Sha256::new());
-    todo!()
+    let mut h = Sha256::new();
+    h.update(order_id.as_bytes());
+    h.update(b"|");
+    h.update(event_type.as_str().as_bytes());
+    h.update(b"|");
+    h.update(amount.to_string().as_bytes());
+    h.update(b"|");
+    h.update(occurred_at_ms.to_string().as_bytes());
+    hex::encode(h.finalize())
 }
 
 /// S2S 주문 이벤트 1건을 검증한다. `raw`는 원본 JSON 값이다.
@@ -261,16 +268,138 @@ pub fn validate(
     idempotency_key: Option<&str>,
     now_ms: i64,
 ) -> Result<Validated, OrderError> {
-    let _ = (project, raw, idempotency_key, now_ms, rehash_member);
-    todo!()
+    let obj = raw
+        .as_object()
+        .ok_or_else(|| OrderError::InvalidPayload("JSON 객체가 아닙니다".into()))?;
+    // visitor_id는 형식이 틀려도 주문을 거부하지 않는다 (경고만). 타입과 무관하게 따로 읽는다.
+    let mut warnings = Vec::new();
+    let visitor_id = match obj.get("visitor_id") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) if s.is_empty() => None,
+        Some(v) => {
+            let parsed = v
+                .as_str()
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .filter(|u| !u.is_nil());
+            if parsed.is_none() {
+                warnings.push(WARN_INVALID_VISITOR_ID);
+            }
+            parsed
+        }
+    };
+    let mut fields = obj.clone();
+    fields.remove("visitor_id");
+    let w: WireOrder = serde_json::from_value(serde_json::Value::Object(fields))
+        .map_err(|e| OrderError::InvalidPayload(e.to_string()))?;
+
+    let event_type = OrderEventType::parse(&w.event_type).ok_or(OrderError::UnknownEventType)?;
+    if !valid_order_id(&w.order_id) {
+        return Err(OrderError::InvalidOrderId);
+    }
+
+    let currency = match w.currency.as_deref() {
+        None | Some("") => project.currency.to_ascii_uppercase(),
+        Some(c) if c.eq_ignore_ascii_case(project.currency) => c.to_ascii_uppercase(),
+        Some(_) => return Err(OrderError::CurrencyMismatch),
+    };
+
+    let member_hash = match w.member_id_hash.as_deref() {
+        None | Some("") => String::new(),
+        Some(m) if is_sha256_hex(m) => rehash_member(project.salt_hex, m),
+        // 이메일·전화번호 같은 평문으로 보이는 값을 포함해 모두 거부한다 (§9).
+        Some(_) => return Err(OrderError::InvalidMemberHash),
+    };
+
+    let (gross_amount, net_amount, refund_amount, at_field, at) = match event_type {
+        OrderEventType::PurchaseConfirmed => {
+            let net = amount(w.net_amount, "net_amount")?
+                .ok_or(OrderError::MissingField("net_amount"))?;
+            let gross = amount(w.gross_amount, "gross_amount")?.unwrap_or(net);
+            (gross, net, 0, "ordered_at", w.ordered_at)
+        }
+        OrderEventType::OrderCancelled => {
+            let refund = amount(w.refund_amount, "refund_amount")?.unwrap_or(0);
+            (0, 0, refund, "cancelled_at", w.cancelled_at)
+        }
+        OrderEventType::OrderRefunded => {
+            let refund = amount(w.refund_amount, "refund_amount")?
+                .ok_or(OrderError::MissingField("refund_amount"))?;
+            (0, 0, refund, "refunded_at", w.refunded_at)
+        }
+    };
+    let at = at.ok_or(OrderError::MissingField(at_field))?;
+    let occurred_at_ms = parse_rfc3339_ms(&at).ok_or(OrderError::InvalidTimestamp(at_field))?;
+    if !(MIN_OCCURRED_AT_MS..=now_ms.saturating_add(MAX_FUTURE_MS)).contains(&occurred_at_ms) {
+        return Err(OrderError::TimestampOutOfRange(at_field));
+    }
+
+    let idempotency_key = match idempotency_key.or(w.idempotency_key.as_deref()) {
+        Some(k) if valid_idempotency_key(k) => k.to_owned(),
+        Some(_) => return Err(OrderError::InvalidIdempotencyKey),
+        None => {
+            let amt = match event_type {
+                OrderEventType::PurchaseConfirmed => net_amount,
+                _ => refund_amount,
+            };
+            default_idempotency_key(&w.order_id, event_type, amt, occurred_at_ms)
+        }
+    };
+
+    Ok(Validated {
+        event: OrderEvent {
+            project_id: project.project_id,
+            order_id: w.order_id,
+            event_type,
+            source: OrderSource::S2s,
+            idempotency_key,
+            visitor_id,
+            member_hash,
+            currency,
+            gross_amount,
+            net_amount,
+            refund_amount,
+            occurred_at_ms,
+            received_at_ms: now_ms,
+            raw: raw.to_string(),
+        },
+        warnings,
+    })
 }
 
 /// 트래커 `purchase` 이벤트 → `source='client'` 확정 이벤트.
 /// `order_id`가 없거나, 통화가 프로젝트와 다르거나, 금액이 범위를 벗어나면 `None`.
 pub fn client_purchase_event(project_currency: &str, e: &Event) -> Option<OrderEvent> {
-    let _ = (project_currency, e);
-    todo!()
+    if e.event_name != PURCHASE_EVENT {
+        return None;
+    }
+    let ec = e.ec.as_ref()?;
+    if !valid_order_id(&ec.order_id)
+        || !(0..=MAX_AMOUNT).contains(&ec.value)
+        || !ec.currency.eq_ignore_ascii_case(project_currency)
+    {
+        return None;
+    }
+    Some(OrderEvent {
+        project_id: e.project_id,
+        order_id: ec.order_id.clone(),
+        event_type: OrderEventType::PurchaseConfirmed,
+        source: OrderSource::Client,
+        // 트래커 재전송은 같은 event_id를 쓰므로 한 번만 반영된다.
+        idempotency_key: format!("client:{}", e.event_id),
+        visitor_id: Some(e.visitor_id).filter(|v| !v.is_nil()),
+        member_hash: e.member_hash.clone(),
+        currency: ec.currency.to_ascii_uppercase(),
+        gross_amount: ec.value,
+        net_amount: ec.value,
+        refund_amount: 0,
+        occurred_at_ms: e.ts_ms,
+        received_at_ms: e.received_at_ms,
+        raw: serde_json::to_string(ec).unwrap_or_default(),
+    })
 }
+
+/// 트래커 구매 이벤트 이름.
+pub const PURCHASE_EVENT: &str = "purchase";
 
 /// 한 주문의 이벤트 전부 → 현재 상태. 이벤트가 없으면 `None`.
 ///
@@ -282,8 +411,113 @@ pub fn client_purchase_event(project_currency: &str, e: &Event) -> Option<OrderE
 /// - 취소가 있으면 도착 순서와 관계없이 CANCELLED (effective 0).
 /// - 환불은 모두 합산한다. 합계가 net 이상이면 CANCELLED와 같게 취급한다.
 pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
-    let _ = events;
-    todo!()
+    let has_s2s = events.iter().any(|e| e.source == OrderSource::S2s);
+    let mut evs: Vec<&OrderEvent> = events
+        .iter()
+        .filter(|e| !has_s2s || e.source == OrderSource::S2s)
+        .collect();
+    // 멱등 키 중복 제거: 먼저 받은 것 하나 (동률이면 내용 순으로 결정적으로).
+    evs.sort_by(|a, b| {
+        (&a.idempotency_key, a.received_at_ms, a.occurred_at_ms, &a.raw).cmp(&(
+            &b.idempotency_key,
+            b.received_at_ms,
+            b.occurred_at_ms,
+            &b.raw,
+        ))
+    });
+    evs.dedup_by(|b, a| a.idempotency_key == b.idempotency_key);
+    evs.sort_by(|a, b| {
+        (a.occurred_at_ms, a.received_at_ms, &a.idempotency_key).cmp(&(
+            b.occurred_at_ms,
+            b.received_at_ms,
+            &b.idempotency_key,
+        ))
+    });
+    let first = *evs.first()?;
+
+    let is_confirm = |e: &&&OrderEvent| e.event_type == OrderEventType::PurchaseConfirmed;
+    let last_confirm = evs.iter().rev().find(is_confirm).copied();
+    let cancelled = evs
+        .iter()
+        .any(|e| e.event_type == OrderEventType::OrderCancelled);
+    let refunds = evs
+        .iter()
+        .filter(|e| e.event_type == OrderEventType::OrderRefunded)
+        .fold(0i64, |acc, e| acc.saturating_add(e.refund_amount));
+
+    // 식별자: 늦은 확정 이벤트 우선, 없으면 다른 이벤트 중 가장 늦은 값.
+    let mut by_priority = evs
+        .iter()
+        .rev()
+        .filter(is_confirm)
+        .chain(evs.iter().rev());
+    let visitor_id = by_priority.clone().find_map(|e| e.visitor_id);
+    let member_hash = by_priority
+        .find(|e| !e.member_hash.is_empty())
+        .map(|e| e.member_hash.clone())
+        .unwrap_or_default();
+
+    let (net_amount, gross_amount, ordered_at_ms, currency) = match last_confirm {
+        Some(c) => (
+            c.net_amount,
+            c.gross_amount,
+            c.occurred_at_ms,
+            c.currency.clone(),
+        ),
+        None => (0, 0, first.occurred_at_ms, first.currency.clone()),
+    };
+    let (status, refunded_amount, effective_amount) = if cancelled {
+        (OrderStatus::Cancelled, refunds.max(net_amount), 0)
+    } else if last_confirm.is_none() {
+        (OrderStatus::Pending, refunds, 0)
+    } else if net_amount > 0 && refunds >= net_amount {
+        (OrderStatus::Cancelled, refunds, 0)
+    } else if refunds > 0 {
+        (OrderStatus::PartiallyRefunded, refunds, net_amount - refunds)
+    } else {
+        (OrderStatus::Confirmed, 0, net_amount)
+    };
+
+    Some(OrderState {
+        project_id: first.project_id,
+        order_id: first.order_id.clone(),
+        source: first.source,
+        status,
+        visitor_id,
+        member_hash,
+        currency,
+        gross_amount,
+        net_amount,
+        refunded_amount,
+        effective_amount,
+        ordered_at_ms,
+    })
+}
+
+fn amount(v: Option<i64>, field: &'static str) -> Result<Option<i64>, OrderError> {
+    match v {
+        Some(a) if !(0..=MAX_AMOUNT).contains(&a) => Err(OrderError::AmountOutOfRange(field)),
+        other => Ok(other),
+    }
+}
+
+/// 1~128자, 제어 문자 없음.
+pub fn valid_order_id(s: &str) -> bool {
+    let n = s.chars().count();
+    (1..=MAX_ORDER_ID_CHARS).contains(&n) && !s.chars().any(char::is_control)
+}
+
+fn valid_idempotency_key(k: &str) -> bool {
+    (1..=MAX_IDEMPOTENCY_KEY_LEN).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_graphic())
+}
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn parse_rfc3339_ms(s: &str) -> Option<i64> {
+    let t = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()?;
+    i64::try_from(t.unix_timestamp_nanos() / 1_000_000).ok()
 }
 
 #[cfg(test)]
@@ -294,9 +528,9 @@ mod tests {
     const SALT: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
     const MEMBER: &str = "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92";
     /// 2026-11-20T09:45:12Z
-    const ORDERED_MS: i64 = 1_763_631_912_000;
+    const ORDERED_MS: i64 = 1_795_167_912_000;
     /// 2026-11-21T00:00:00Z
-    const NOW: i64 = 1_763_683_200_000;
+    const NOW: i64 = 1_795_219_200_000;
 
     fn project() -> OrderProject<'static> {
         OrderProject {
