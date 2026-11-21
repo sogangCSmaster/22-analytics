@@ -107,15 +107,15 @@ impl Drop for TestDb {
         let name = self.name.clone();
         let admin_url = self.admin_url.clone();
         let ch_config = self.ch_config.clone();
-        let pg = self.pg.clone();
         // 비동기 정리를 별도 스레드의 런타임에서 실행한다 (Drop은 동기).
+        // 테스트 풀은 테스트 런타임 소속이라 여기서 close()하면 교착될 수 있다.
+        // 대신 WITH (FORCE)로 남은 연결을 끊고 지운다.
         let _ = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build();
             let Ok(rt) = rt else { return };
             rt.block_on(async move {
-                pg.close().await;
                 if let Ok(admin) = PgPoolOptions::new()
                     .max_connections(1)
                     .connect(&admin_url)

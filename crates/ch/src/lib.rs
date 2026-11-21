@@ -3,6 +3,7 @@
 //! 모든 조회는 [`ProjectScope`]를 받아 `project_id` 조건을 빠뜨릴 수 없게 한다 (테넌트 격리).
 
 pub mod migrate;
+pub mod orders;
 pub mod reports;
 pub mod rows;
 

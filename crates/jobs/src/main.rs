@@ -20,6 +20,11 @@ enum Cmd {
     Migrate,
     /// 로컬 개발용 광고주·프로젝트 생성 (공개 키 pk_devlocal...)
     SeedDev,
+    /// S2S 주문 API 비밀 키(sk_live_...) 발급. 키는 이때 한 번만 출력된다.
+    CreateKey {
+        #[arg(long)]
+        project: i32,
+    },
 }
 
 #[tokio::main]
@@ -44,6 +49,14 @@ async fn main() -> anyhow::Result<()> {
             println!("프로젝트 id    : {}", seed.project_id);
             println!("공개 키        : {}", seed.public_key);
             println!("테스트 페이지  : http://localhost:8081/dev/");
+        }
+        Cmd::CreateKey { project } => {
+            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let (plain, row) = analytics_pg::api_keys::create(&pool, project, None).await?;
+            println!("키 id   : {}", row.id);
+            println!("prefix  : {}", row.prefix);
+            println!("비밀 키 : {plain}");
+            println!("※ 비밀 키는 다시 볼 수 없습니다. 안전한 곳에 보관하세요.");
         }
     }
     Ok(())

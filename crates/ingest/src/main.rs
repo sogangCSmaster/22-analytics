@@ -9,6 +9,7 @@ mod config;
 mod emulate;
 mod internal;
 mod metrics;
+mod orders;
 mod pipeline;
 
 use axum::{Router, routing::get};
@@ -22,6 +23,7 @@ pub struct AppState {
     pub pipeline: pipeline::Pipeline,
     pub metrics: Arc<metrics::Metrics>,
     pub emulator: Option<Arc<emulate::Emulator>>,
+    pub orders: Arc<orders::OrderService>,
 }
 
 #[tokio::main]
@@ -36,10 +38,13 @@ async fn main() -> anyhow::Result<()> {
     analytics_ch::ping(&client).await?;
 
     let metrics = Arc::new(metrics::Metrics::default());
-    let (pipeline, writer) = pipeline::start(client, cfg.clone(), metrics.clone()).await?;
+    let (pipeline, writer) = pipeline::start(client.clone(), cfg.clone(), metrics.clone()).await?;
+
+    // 주문 API(비밀 키 검증)는 운영·로컬 모두 Postgres가 필요하다.
+    let pool = analytics_pg::connect(&cfg.database_url).await?;
+    let orders = Arc::new(orders::OrderService::new(pool.clone(), client));
 
     let emulator = if cfg.edge_emulation {
-        let pool = analytics_pg::connect(&cfg.database_url).await?;
         tracing::warn!("엣지 에뮬레이션 모드: 로컬 개발 전용");
         Some(Arc::new(emulate::Emulator::new(
             pool,
@@ -54,12 +59,18 @@ async fn main() -> anyhow::Result<()> {
         pipeline: pipeline.clone(),
         metrics,
         emulator: emulator.clone(),
+        orders: orders.clone(),
     };
 
     let mut app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/metrics", get(metrics::handler))
-        .merge(internal::router());
+        .merge(internal::router())
+        .merge(orders::http::router(orders::http::OrdersHttp {
+            svc: orders,
+            edge_secret: Arc::new(cfg.edge_secret.clone()),
+            emulation: cfg.edge_emulation,
+        }));
     if emulator.is_some() {
         app = app.merge(emulate::router(&cfg));
     }

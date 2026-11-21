@@ -23,3 +23,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 zstd.workspace = true
+
+[dev-dependencies]
+analytics-testkit.workspace = true
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }

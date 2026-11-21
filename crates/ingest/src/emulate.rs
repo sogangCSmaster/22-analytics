@@ -158,9 +158,21 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
     s.metrics
         .events_dropped
         .fetch_add(processed.dropped as u64, Relaxed);
+    // client_purchase_as_order: purchase 이벤트를 클라이언트 주문으로도 투영한다 (§5.3).
+    let purchases: Vec<_> = if project.settings.client_purchase_as_order {
+        processed
+            .events
+            .iter()
+            .filter(|e| e.event_name == analytics_core::orders::PURCHASE_EVENT)
+            .cloned()
+            .collect()
+    } else {
+        vec![]
+    };
     if s.pipeline.try_send(processed.events).is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    s.orders.spawn_client_purchases(&purchases);
     s.metrics.events_received.fetch_add(n, Relaxed);
 
     let mut resp = StatusCode::NO_CONTENT.into_response();
