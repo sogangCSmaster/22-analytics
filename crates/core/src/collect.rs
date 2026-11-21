@@ -554,6 +554,30 @@ mod tests {
     }
 
     #[test]
+    fn present_but_invalid_origin_does_not_fall_back_to_referer() {
+        // `Origin: null`(sandbox iframe, file:// 등)이나 해석할 수 없는 Origin은 거부한다.
+        // Referer로 대신하는 것은 Origin 헤더가 아예 없을 때뿐이다.
+        let b = batch(vec![ev("page_view", "https://client.com/")]);
+        for bad in ["null", "", "not a url", "https://"] {
+            let mut c = ctx(CHROME);
+            c.origin = Some(bad);
+            c.referer = Some("https://www.client.com/p/1");
+            assert_eq!(
+                process(&c, &cfg(), b.clone(), counter()),
+                Err(Reject::OriginNotAllowed),
+                "{bad:?}"
+            );
+        }
+        let mut c = ctx(CHROME);
+        c.origin = None;
+        c.referer = Some("https://www.client.com/p/1");
+        assert!(
+            process(&c, &cfg(), b, counter()).is_ok(),
+            "Origin이 없으면 Referer"
+        );
+    }
+
+    #[test]
     fn drops_disabled_and_invalid_events() {
         let b = batch(vec![
             ev("page_view", "https://client.com/"),
