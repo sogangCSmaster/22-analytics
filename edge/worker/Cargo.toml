@@ -1,8 +1,25 @@
 [package]
-name="analytics-edge"
-version.workspace=true
-edition.workspace=true
-publish.workspace=true
+name = "analytics-edge"
+description = "Cloudflare Worker 엣지: 수집·설정·주문 요청을 검증해 원점(ingest)으로 서명 전달 (workers-rs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
 [lib]
-path="src/lib.rs"
+path = "src/lib.rs"
+# cdylib: worker-build(wasm-bindgen)용, rlib: 호스트 네이티브 단위 테스트용
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
+analytics-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+# v4 생성 기능은 켜지 않는다. wasm에서는 crypto.randomUUID()를 쓰므로 getrandom이 필요 없다.
+uuid = { version = "1", features = ["serde"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+worker = { version = "0.9", features = ["queue"] }
+wasm-bindgen = "0.2"
+futures-util = { version = "0.3", default-features = false }

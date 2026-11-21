@@ -1,0 +1,48 @@
+# Cloudflare Worker "edge" (ARCHITECTURE §1, §4). 아직 배포하지 않는다 (대행사 계정 수령 후).
+# 바인딩 ID·도메인은 계정 생성 뒤 채운다. 자세한 절차는 README.md.
+
+name = "analytics-edge"
+# worker-build 산출물 (workers-rs 템플릿 규약)
+main = "build/index.js"
+compatibility_date = "2026-11-01"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# /t.js 등 정적 파일. 경로가 파일과 일치하면 Worker를 거치지 않고 바로 응답한다.
+# tracker/dist는 `npm run build --prefix tracker`로 만든다.
+[assets]
+directory = "../../tracker/dist"
+
+# 원점(ingest)으로 가는 Tunnel 주소. 비밀이 아니므로 vars에 둔다.
+[vars]
+ORIGIN_URL = "https://ingest.internal.example.invalid"
+
+# 비밀값 (wrangler.toml에 쓰지 않는다):
+#   EDGE_SHARED_SECRET  Worker↔ingest HMAC 키. ingest의 EDGE_SHARED_SECRET과 같은 값, 32자 이상.
+#   등록: npx wrangler secret put EDGE_SHARED_SECRET
+
+# 프로젝트 설정: key = "project:{public_key}", value = analytics_core::collect::ProjectConfig JSON
+[[kv_namespaces]]
+binding = "PROJECTS"
+id = "00000000000000000000000000000000"          # TODO: wrangler kv namespace create PROJECTS
+
+# 원점 장애 시 수집 배치 버퍼 (같은 Worker가 생산·소비)
+[[queues.producers]]
+binding = "RETRY_QUEUE"
+queue = "analytics-edge-retry"
+
+[[queues.consumers]]
+queue = "analytics-edge-retry"
+max_batch_size = 10
+max_batch_timeout = 5
+# 재시도 판단은 Worker 코드(forward::RetryPolicy, 최대 10회)가 한다. 플랫폼 한도는 그보다 크게 둔다.
+max_retries = 20
+
+[observability]
+enabled = true
+
+# 운영 라우트 예시 (D2): 공용 수집 도메인과 광고주별 커스텀 호스트명(Cloudflare for SaaS)
+# routes = [
+#   { pattern = "collect.<agency-domain>", custom_domain = true },
+# ]
