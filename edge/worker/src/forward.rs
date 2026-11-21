@@ -14,6 +14,13 @@ pub const ORDERS_PATH: &str = "/internal/orders";
 /// Cloudflare Queue 메시지 한도는 128KB. JSON 래핑 여유를 두고 본문을 이 크기 이하로 나눈다.
 pub const MAX_QUEUE_BODY: usize = 100 * 1024;
 
+/// ingest와 같은 기준: 운영 비밀값은 32자 이상.
+pub const MIN_SECRET_LEN: usize = 32;
+
+pub fn valid_secret(secret: &str) -> bool {
+    secret.len() >= MIN_SECRET_LEN
+}
+
 /// 원점으로 보낼 요청. wasm 계층이 `fetch`로 옮긴다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardRequest {
@@ -33,8 +40,7 @@ impl ForwardRequest {
 
 /// `{origin}{path}`. ORIGIN_URL 끝의 `/`는 무시한다.
 pub fn join_url(origin_url: &str, path: &str) -> String {
-    let _ = (origin_url, path);
-    todo!()
+    format!("{}{path}", origin_url.trim_end_matches('/'))
 }
 
 /// 서명 헤더를 붙인 원점 요청. 본문은 바이트 그대로 서명한다.
@@ -45,15 +51,28 @@ pub fn signed(
     body: Vec<u8>,
     now_ms: i64,
 ) -> ForwardRequest {
-    let _ = (origin_url, path, secret, body, now_ms, edge_auth::sign);
-    let _ = (HEADER_SIGNATURE, HEADER_TIMESTAMP);
-    todo!()
+    let signature = edge_auth::sign(secret, now_ms, &body);
+    ForwardRequest {
+        url: join_url(origin_url, path),
+        headers: vec![
+            ("content-type".into(), "application/json".into()),
+            (HEADER_TIMESTAMP.into(), now_ms.to_string()),
+            (HEADER_SIGNATURE.into(), signature),
+        ],
+        body,
+    }
 }
+
+const EMPTY_BODY: &str = r#"{"events":[]}"#;
 
 /// `/internal/collect` 본문 `{"events":[...]}`.
 pub fn collect_body(events: &[Event]) -> String {
-    let _ = events;
-    todo!()
+    #[derive(Serialize)]
+    struct Body<'a> {
+        events: &'a [Event],
+    }
+    // Event는 문자열·숫자·UUID뿐이라 직렬화가 실패하지 않는다.
+    serde_json::to_string(&Body { events }).unwrap_or_else(|_| EMPTY_BODY.to_owned())
 }
 
 /// 원점 응답 분류. `None`은 네트워크 오류·타임아웃.
@@ -67,8 +86,12 @@ pub enum Delivery {
 }
 
 pub fn classify(status: Option<u16>) -> Delivery {
-    let _ = status;
-    todo!()
+    match status {
+        Some(200..=299) => Delivery::Delivered,
+        Some(408 | 429) | None => Delivery::Retry,
+        Some(s @ 400..=499) => Delivery::Rejected(s),
+        Some(_) => Delivery::Retry,
+    }
 }
 
 /// Queue에 넣는 메시지. 서명은 넣지 않는다: 타임스탬프 허용 오차(5분)보다 오래 머물 수 있으므로
@@ -85,16 +108,45 @@ pub const QUEUE_MESSAGE_VERSION: u8 = 1;
 
 impl QueuedForward {
     pub fn to_request(&self, origin_url: &str, secret: &[u8], now_ms: i64) -> ForwardRequest {
-        let _ = (origin_url, secret, now_ms);
-        todo!()
+        signed(
+            origin_url,
+            COLLECT_PATH,
+            secret,
+            self.body.as_bytes().to_vec(),
+            now_ms,
+        )
     }
 }
 
 /// 이벤트를 Queue 메시지들로 나눈다. 각 메시지 본문은 `MAX_QUEUE_BODY` 이하
 /// (이벤트 1건이 한도를 넘는 경우는 그 1건만 담는다). 이벤트 순서와 내용은 그대로다.
 pub fn queue_messages(events: &[Event]) -> Vec<QueuedForward> {
-    let _ = events;
-    todo!()
+    let mut out = Vec::new();
+    let mut start = 0;
+    // 압축 JSON 본문 길이 = 래퍼 + Σ이벤트 + 쉼표(n-1)
+    let mut len = EMPTY_BODY.len();
+    for (i, e) in events.iter().enumerate() {
+        let size = serde_json::to_string(e).map_or(0, |s| s.len());
+        let add = size + usize::from(i > start);
+        if i > start && len + add > MAX_QUEUE_BODY {
+            out.push(message(&events[start..i]));
+            start = i;
+            len = EMPTY_BODY.len() + size;
+        } else {
+            len += add;
+        }
+    }
+    if start < events.len() {
+        out.push(message(&events[start..]));
+    }
+    out
+}
+
+fn message(events: &[Event]) -> QueuedForward {
+    QueuedForward {
+        v: QUEUE_MESSAGE_VERSION,
+        body: collect_body(events),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,7 +176,7 @@ pub struct RetryPolicy {
 }
 
 impl Default for RetryPolicy {
-    /// 30초부터 2배씩, 최대 1시간 간격, 10회 (약 4.5시간 동안 원점 장애를 버틴다).
+    /// 30초부터 2배씩, 최대 1시간 간격, 10회 (대기 합계 약 3시간 동안 원점 장애를 버틴다).
     fn default() -> Self {
         Self {
             max_attempts: 10,
@@ -137,14 +189,24 @@ impl Default for RetryPolicy {
 impl RetryPolicy {
     /// `attempts`: 이번 전달이 몇 번째 시도인지 (Queue 규약대로 1부터).
     pub fn decide(&self, delivery: Delivery, attempts: u32) -> QueueAction {
-        let _ = (delivery, attempts);
-        todo!()
+        match delivery {
+            Delivery::Delivered => QueueAction::Ack,
+            Delivery::Rejected(s) => QueueAction::Drop(DropReason::Rejected(s)),
+            Delivery::Retry if attempts >= self.max_attempts => {
+                QueueAction::Drop(DropReason::Exhausted)
+            }
+            Delivery::Retry => QueueAction::Retry {
+                delay_secs: self.delay_after(attempts),
+            },
+        }
     }
 
     /// `attempts`번째 시도가 실패한 뒤 기다릴 시간.
     pub fn delay_after(&self, attempts: u32) -> u32 {
-        let _ = attempts;
-        todo!()
+        let exp = attempts.saturating_sub(1).min(31);
+        self.base_delay_secs
+            .saturating_mul(1u32 << exp)
+            .min(self.max_delay_secs)
     }
 }
 
@@ -367,6 +429,13 @@ pub(crate) mod tests {
         assert_eq!(classify(Some(530)), Delivery::Retry, "Tunnel 오류");
         assert_eq!(classify(Some(302)), Delivery::Retry);
         assert_eq!(classify(None), Delivery::Retry, "네트워크 오류·타임아웃");
+    }
+
+    #[test]
+    fn secret_length_matches_ingest_rule() {
+        assert!(!valid_secret(""));
+        assert!(!valid_secret(&"s".repeat(31)));
+        assert!(valid_secret(&"s".repeat(32)));
     }
 
     // ── 희귀: 재시도 정책 ──

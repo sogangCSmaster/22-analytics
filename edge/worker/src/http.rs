@@ -81,14 +81,31 @@ pub enum Route {
 
 /// 메서드·경로로 처리기를 고른다. `/t.js` 등 정적 파일은 wrangler `[assets]`가 Worker 앞에서 처리한다.
 pub fn route(method: &str, path: &str) -> Route {
-    let _ = (method, path);
-    todo!()
+    let m = method.to_ascii_uppercase();
+    match (path, m.as_str()) {
+        ("/v1/collect", "POST") => Route::Collect,
+        ("/v1/config", "GET") => Route::Config,
+        ("/v1/orders", "POST") => Route::Orders(OrdersKind::Single),
+        ("/v1/orders:batch", "POST") => Route::Orders(OrdersKind::Batch),
+        ("/v1/collect" | "/v1/config", "OPTIONS") => Route::Preflight,
+        ("/v1/collect" | "/v1/config" | "/v1/orders" | "/v1/orders:batch", _) => {
+            Route::MethodNotAllowed
+        }
+        _ => Route::NotFound,
+    }
 }
 
 /// `Content-Length`가 한도를 넘는지 (본문을 읽기 전에 거른다).
+/// 해석할 수 없는 값은 통과시키고, 본문을 읽은 뒤 실제 길이로 다시 검사한다.
 pub fn declared_too_large(content_length: Option<&str>, limit: usize) -> bool {
-    let _ = (content_length, limit);
-    todo!()
+    let Some(v) = content_length.map(str::trim) else {
+        return false;
+    };
+    if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    // 자릿수가 u64를 넘는 값도 초과로 본다
+    v.parse::<u64>().map_or(true, |n| n > limit as u64)
 }
 
 #[cfg(test)]

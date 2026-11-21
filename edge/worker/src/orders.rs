@@ -36,8 +36,54 @@ pub fn build_forward(
     secret: &[u8],
     now_ms: i64,
 ) -> Result<ForwardRequest, EdgeResponse> {
-    let _ = (req, origin_url, secret, now_ms, forward::ORDERS_PATH);
-    todo!()
+    if req.body.len() > req.kind.body_limit() {
+        return Err(EdgeResponse::error(413, "payload_too_large"));
+    }
+    let Some(authorization) = req.authorization.and_then(valid_authorization) else {
+        return Err(EdgeResponse::error(401, "unauthorized"));
+    };
+    if req.body.is_empty() {
+        return Err(EdgeResponse::error(400, "empty_body"));
+    }
+    let mut f = forward::signed(
+        origin_url,
+        forward::ORDERS_PATH,
+        secret,
+        req.body.to_vec(),
+        now_ms,
+    );
+    f.headers.extend([
+        (
+            HEADER_FORWARDED_AUTHORIZATION.into(),
+            authorization.to_owned(),
+        ),
+        (HEADER_FORWARDED_PATH.into(), req.kind.public_path().into()),
+    ]);
+    if let Some(k) = req.idempotency_key.filter(|k| valid_idempotency_key(k)) {
+        f.headers
+            .push((HEADER_IDEMPOTENCY_KEY.into(), k.to_owned()));
+    }
+    Ok(f)
+}
+
+fn is_header_text(s: &str) -> bool {
+    s.bytes().all(|b| (0x20..0x7f).contains(&b))
+}
+
+/// `Bearer <token>` 형식만 받는다 (scheme은 대소문자 무시). 원점으로 넘길 값을 돌려준다.
+fn valid_authorization(v: &str) -> Option<&str> {
+    let v = v.trim();
+    if v.len() > MAX_AUTHORIZATION_LEN || !is_header_text(v) {
+        return None;
+    }
+    let (scheme, token) = v.split_once(' ')?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty() && !token.contains(' '))
+        .then_some(v)
+}
+
+fn valid_idempotency_key(k: &str) -> bool {
+    !k.is_empty() && k.len() <= MAX_IDEMPOTENCY_KEY_LEN && is_header_text(k)
 }
 
 /// 원점 응답 (wasm 계층이 채운다).
@@ -50,8 +96,20 @@ pub struct OriginReply {
 
 /// 원점 응답을 클라이언트 응답으로. `None`(네트워크 오류·타임아웃)이면 `503` + `Retry-After`.
 pub fn map_response(reply: Option<OriginReply>) -> EdgeResponse {
-    let _ = reply;
-    todo!()
+    let Some(reply) = reply else {
+        return EdgeResponse::error(503, "origin_unavailable")
+            .with_header("retry-after", RETRY_AFTER_SECS.to_string());
+    };
+    // 원점 응답 헤더는 content-type만 옮긴다 (내부 헤더 유출 방지)
+    let content_type = reply
+        .content_type
+        .filter(|c| c.len() <= 256 && is_header_text(c))
+        .unwrap_or_else(|| "application/json".into());
+    EdgeResponse {
+        status: reply.status,
+        headers: vec![("content-type".into(), content_type)],
+        body: reply.body,
+    }
 }
 
 #[cfg(test)]

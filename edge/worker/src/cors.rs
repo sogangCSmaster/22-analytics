@@ -4,6 +4,7 @@
 //! Origin만 그대로 되돌려준다. `/v1/config`는 공개 정보라 `*`로 답한다.
 
 use crate::http::EdgeResponse;
+use analytics_core::urlx::host_allowed;
 
 /// Origin 헤더 최대 길이. 더 길면 정상 브라우저 값이 아니다.
 pub const MAX_ORIGIN_LEN: usize = 2048;
@@ -21,27 +22,62 @@ pub enum OriginCheck {
 /// 브라우저가 보내는 직렬화된 origin(`scheme://host[:port]`)인지 확인하고 정규형을 돌려준다.
 /// 경로·쿼리·사용자 정보·제어 문자가 있거나 정규형과 다르면 `None`.
 pub fn normalized_origin(origin: &str) -> Option<String> {
-    let _ = origin;
-    todo!()
+    if origin.is_empty()
+        || origin.len() > MAX_ORIGIN_LEN
+        || !origin.bytes().all(|b| b.is_ascii_graphic())
+    {
+        return None;
+    }
+    let url = url::Url::parse(origin).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let serialized = url.origin().ascii_serialization();
+    (serialized == origin).then_some(serialized)
 }
 
 /// 수집 요청의 Origin을 프로젝트 허용 도메인과 대조한다.
 pub fn check_origin(origin: Option<&str>, allowed: &[String]) -> OriginCheck {
-    let _ = (origin, allowed);
-    todo!()
+    let Some(origin) = origin else {
+        return OriginCheck::Absent;
+    };
+    let Some(origin) = normalized_origin(origin) else {
+        return OriginCheck::Denied;
+    };
+    let host = url::Url::parse(&origin)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned));
+    match host {
+        Some(h) if host_allowed(&h, allowed) => OriginCheck::Allowed(origin),
+        _ => OriginCheck::Denied,
+    }
 }
 
 /// 허용된 Origin에 붙이는 응답 헤더.
 pub fn credentialed_headers(origin: &str) -> Vec<(String, String)> {
-    let _ = origin;
-    todo!()
+    vec![
+        ("access-control-allow-origin".into(), origin.to_owned()),
+        ("access-control-allow-credentials".into(), "true".into()),
+        ("vary".into(), "Origin".into()),
+    ]
 }
 
 /// preflight 응답. 공개 키가 본문에 있어 이 단계에서는 프로젝트를 알 수 없으므로, 형식이 올바른
 /// origin이면 허용하고 실제 POST에서 허용 목록을 강제한다 (`null`·형식 오류는 CORS 헤더 없음).
 pub fn preflight(origin: Option<&str>) -> EdgeResponse {
-    let _ = origin;
-    todo!()
+    let mut r = EdgeResponse::empty(204);
+    if let Some(origin) = origin.and_then(normalized_origin) {
+        r.headers = credentialed_headers(&origin);
+        r.headers.extend([
+            (
+                "access-control-allow-methods".into(),
+                "GET, POST, OPTIONS".into(),
+            ),
+            ("access-control-allow-headers".into(), "content-type".into()),
+            ("access-control-max-age".into(), "86400".into()),
+        ]);
+    }
+    r
 }
 
 #[cfg(test)]

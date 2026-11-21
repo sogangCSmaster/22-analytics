@@ -4,8 +4,9 @@
 use crate::cookie;
 use crate::cors::{self, OriginCheck};
 use crate::http::EdgeResponse;
-use analytics_core::collect::ProjectConfig;
+use analytics_core::collect::{self, ProjectConfig, RequestCtx};
 use analytics_core::event::{MAX_BATCH_BYTES, MAX_URL_LEN, WireBatch};
+use analytics_core::urlx::clip;
 use analytics_core::{Event, PublicKey};
 use uuid::Uuid;
 
@@ -32,8 +33,13 @@ pub struct CollectRequest<'a> {
 
 /// 본문을 배치로 해석한다. 크기 초과는 `413`, 그 밖의 오류는 사유 없는 `204`.
 pub fn parse_body(body: &[u8]) -> Result<(PublicKey, WireBatch), EdgeResponse> {
-    let _ = (body, MAX_BATCH_BYTES);
-    todo!()
+    if body.len() > MAX_BATCH_BYTES {
+        return Err(EdgeResponse::empty(413));
+    }
+    let silent = || EdgeResponse::empty(204);
+    let batch: WireBatch = serde_json::from_slice(body).map_err(|_| silent())?;
+    let key = PublicKey::parse(&batch.k).map_err(|_| silent())?;
+    Ok((key, batch))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,9 +58,57 @@ pub fn handle(
     batch: WireBatch,
     new_uuid: impl FnMut() -> Uuid,
 ) -> CollectOutcome {
-    let _ = (req, cfg, batch, new_uuid, MAX_UA_LEN, MAX_REFERER_LEN);
-    let _ = (cookie::set_cookie, cors::check_origin, OriginCheck::Absent);
-    todo!()
+    let silent = || CollectOutcome {
+        response: EdgeResponse::empty(204),
+        events: vec![],
+        dropped: 0,
+    };
+    let Some(cfg) = cfg.filter(|c| c.public_key == batch.k) else {
+        return silent();
+    };
+    // Origin이 있으면 Origin만 본다: `null`이나 허용 목록 밖이면 Referer로 우회하지 못한다.
+    let (origin, mut response) = match cors::check_origin(req.origin, &cfg.allowed_origins) {
+        OriginCheck::Denied => return silent(),
+        OriginCheck::Absent => (None, EdgeResponse::empty(204)),
+        OriginCheck::Allowed(o) => {
+            let mut r = EdgeResponse::empty(204);
+            r.headers = cors::credentialed_headers(&o);
+            (Some(o), r)
+        }
+    };
+
+    let user_agent = clip(req.user_agent, MAX_UA_LEN);
+    let ctx = RequestCtx {
+        origin: origin.as_deref(),
+        referer: req.referer.filter(|r| r.len() <= MAX_REFERER_LEN),
+        user_agent: &user_agent,
+        country: req.country,
+        region: req.region,
+        city: req.city,
+        cookie_vid: cookie::visitor_id(req.cookie),
+        dnt: req.dnt,
+        now_ms: req.now_ms,
+    };
+    match collect::process(&ctx, cfg, batch, new_uuid) {
+        Ok(p) => {
+            if p.issue_cookie {
+                response.headers.push((
+                    "set-cookie".into(),
+                    cookie::set_cookie(p.visitor_id, req.host),
+                ));
+            }
+            CollectOutcome {
+                response,
+                events: p.events,
+                dropped: p.dropped,
+            }
+        }
+        Err(_) => CollectOutcome {
+            response,
+            events: vec![],
+            dropped: 0,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -237,7 +291,7 @@ mod tests {
         let pad = MAX_BATCH_BYTES - exact.len();
         // JSON 끝 `}` 앞에 공백을 채워 유효한 JSON 유지
         let close = exact.pop().unwrap();
-        exact.extend(std::iter::repeat_n(b' ', pad - 1));
+        exact.extend(std::iter::repeat_n(b' ', pad));
         exact.push(close);
         assert_eq!(exact.len(), MAX_BATCH_BYTES);
         assert!(parse_body(&exact).is_ok());

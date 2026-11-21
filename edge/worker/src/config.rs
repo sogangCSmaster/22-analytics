@@ -15,14 +15,13 @@ pub const NOT_FOUND_MAX_AGE: u32 = 60;
 
 /// KV `PROJECTS`의 키: `project:{public_key}`
 pub fn kv_key(key: &PublicKey) -> String {
-    let _ = key;
-    todo!()
+    format!("project:{key}")
 }
 
-/// 쿼리 문자열에서 `k`를 꺼내 공개 키 형식인지 확인한다.
+/// 쿼리 문자열에서 첫 `k`를 꺼내 공개 키 형식인지 확인한다.
 pub fn key_from_query(query: Option<&str>) -> Option<PublicKey> {
-    let _ = query;
-    todo!()
+    let (_, k) = url::form_urlencoded::parse(query?.as_bytes()).find(|(name, _)| name == "k")?;
+    PublicKey::parse(&k).ok()
 }
 
 /// 공개 키별 `ProjectConfig` 캐시. 없는 키(`None`)도 캐시한다 (negative caching).
@@ -50,13 +49,21 @@ impl ConfigCache {
 
     /// 신선한 항목이 있으면 `Some(설정 또는 None)`, 없거나 만료됐으면 `None`.
     pub fn get(&self, key: &str, now_ms: i64) -> Option<Option<ProjectConfig>> {
-        let _ = (key, now_ms, self.ttl_ms);
-        todo!()
+        self.entries
+            .get(key)
+            .filter(|(at, _)| now_ms - at < self.ttl_ms)
+            .map(|(_, cfg)| cfg.clone())
     }
 
     pub fn put(&mut self, key: &str, cfg: Option<ProjectConfig>, now_ms: i64) {
-        let _ = (key, cfg, now_ms, self.max_entries);
-        todo!()
+        if self.entries.len() >= self.max_entries && !self.entries.contains_key(key) {
+            let ttl = self.ttl_ms;
+            self.entries.retain(|_, (at, _)| now_ms - *at < ttl);
+            if self.entries.len() >= self.max_entries {
+                self.entries.clear();
+            }
+        }
+        self.entries.insert(key.to_owned(), (now_ms, cfg));
     }
 
     pub fn len(&self) -> usize {
@@ -70,8 +77,23 @@ impl ConfigCache {
 
 /// `GET /v1/config` 응답. 비활성·없는 프로젝트는 404.
 pub fn config_response(cfg: Option<&ProjectConfig>) -> EdgeResponse {
-    let _ = cfg;
-    todo!()
+    let public = cfg
+        .filter(|p| p.active)
+        .map(|p| p.settings.public_config(p.settings_version))
+        .and_then(|pc| serde_json::to_vec(&pc).ok());
+    let (status, max_age, body) = match public {
+        Some(body) => (200, PUBLIC_CONFIG_MAX_AGE, body),
+        None => (404, NOT_FOUND_MAX_AGE, vec![]),
+    };
+    let mut r = EdgeResponse::empty(status)
+        .with_header("cache-control", format!("public, max-age={max_age}"))
+        // 공개 정보이고 credentials가 필요 없으므로 `*` (Vary 없이 엣지 캐시 가능)
+        .with_header("access-control-allow-origin", "*");
+    if status == 200 {
+        r = r.with_header("content-type", "application/json; charset=utf-8");
+    }
+    r.body = body;
+    r
 }
 
 #[cfg(test)]

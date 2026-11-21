@@ -3,6 +3,7 @@
 //! 쿠키 값으로는 항상 `Uuid`만 쓴다. 클라이언트가 보낸 문자열을 그대로 `Set-Cookie`에
 //! 반사하지 않으므로 CRLF·세미콜론 주입이 구조적으로 불가능하다.
 
+use analytics_core::urlx::registrable_domain;
 use uuid::Uuid;
 
 pub const VISITOR_COOKIE: &str = "_at_vid";
@@ -19,8 +20,18 @@ const HOSTED_SUFFIXES: &[&str] = &["workers.dev", "pages.dev"];
 ///   UUID로 해석되는 값을 쓴다.
 /// - `=`가 없는 조각, 빈 값, UUID가 아닌 값, nil UUID는 무시한다.
 pub fn visitor_id(cookie_header: Option<&str>) -> Option<Uuid> {
-    let _ = cookie_header;
-    todo!()
+    cookie_header?.split(';').find_map(|pair| {
+        let (name, value) = pair.split_once('=')?;
+        if name.trim() != VISITOR_COOKIE {
+            return None;
+        }
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .unwrap_or(value);
+        Uuid::parse_str(value).ok().filter(|u| !u.is_nil())
+    })
 }
 
 /// `Set-Cookie`의 `Domain` 값: 요청 호스트의 등록 가능 도메인.
@@ -28,14 +39,51 @@ pub fn visitor_id(cookie_header: Option<&str>) -> Option<Uuid> {
 /// IP 주소, `localhost`, 점 없는 호스트, `*.workers.dev`처럼 공개 접미사 아래 호스트,
 /// 잘못된 문자가 섞인 호스트는 `None`(호스트 전용 쿠키)이다.
 pub fn cookie_domain(host: &str) -> Option<String> {
-    let _ = (host, HOSTED_SUFFIXES);
-    todo!()
+    // IPv6 리터럴 (`[::1]`, `[::1]:8787`, 대괄호 없는 `::1`)
+    if host.starts_with('[') || host.matches(':').count() > 1 {
+        return None;
+    }
+    let host = match host.split_once(':') {
+        Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        Some(_) => return None,
+        None => host,
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let valid = !host.is_empty()
+        && host.len() <= 253
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
+        && host.split('.').all(|l| !l.is_empty());
+    if !valid || !host.contains('.') || host.parse::<std::net::Ipv4Addr>().is_ok() {
+        return None;
+    }
+    // 마지막 라벨이 숫자뿐이면 IP 표기의 변형으로 본다
+    if host.rsplit('.').next()?.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if HOSTED_SUFFIXES
+        .iter()
+        .any(|s| host == *s || host.ends_with(&format!(".{s}")))
+    {
+        return None;
+    }
+    let reg = registrable_domain(&host);
+    // `co.kr`처럼 공개 접미사 자체면 registrable_domain("x.co.kr")이 자신과 다르다
+    if registrable_domain(&format!("x.{reg}")) != reg {
+        return None;
+    }
+    Some(reg)
 }
 
 /// `_at_vid` 발급용 `Set-Cookie` 헤더 값.
 pub fn set_cookie(vid: Uuid, host: &str) -> String {
-    let _ = (vid, host);
-    todo!()
+    let domain = cookie_domain(host)
+        .map(|d| format!("; Domain={d}"))
+        .unwrap_or_default();
+    format!(
+        "{VISITOR_COOKIE}={vid}{domain}; Path=/; Max-Age={COOKIE_MAX_AGE_SECS}; HttpOnly; Secure; SameSite=Lax"
+    )
 }
 
 #[cfg(test)]
