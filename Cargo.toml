@@ -60,6 +60,12 @@ clap = { version = "4", features = ["derive", "env"] }
 zstd = "0.14"
 bytes = "1"
 
+# argon2는 디버그 빌드에서 수십 배 느리다 (로그인 테스트·로컬 개발용).
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

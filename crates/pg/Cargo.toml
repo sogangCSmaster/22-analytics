@@ -14,7 +14,9 @@ sqlx.workspace = true
 tracing.workspace = true
 rand.workspace = true
 hex.workspace = true
+argon2.workspace = true
 sha2.workspace = true
+thiserror.workspace = true
 time.workspace = true
 
 [dev-dependencies]

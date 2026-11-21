@@ -1,9 +1,16 @@
 //! PostgreSQL 메타데이터 계층.
 
+pub mod ad_spend;
 pub mod api_keys;
+pub mod attribution;
 pub mod attribution_settings;
+pub mod audit;
+pub mod channel_rules;
+pub mod orgs;
 pub mod projects;
 pub mod seed;
+pub mod sessions;
+pub mod users;
 
 use anyhow::Context;
 pub use sqlx::PgPool;
