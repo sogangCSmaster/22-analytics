@@ -100,6 +100,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pg_pool_default_is_small() {
+        // 요청 핸들러 수에 비해 PG 쿼리는 짧다: 4개면 충분하고 DB 연결 수를 아낀다
+        assert_eq!(ApiConfig::default().pg_max_connections, 4);
+    }
+
+    #[test]
     fn parses_origin_list() {
         assert_eq!(
             parse_origins(" https://a.test/, ,http://b.test:8080"),

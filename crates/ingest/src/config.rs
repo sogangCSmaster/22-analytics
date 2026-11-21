@@ -85,6 +85,13 @@ impl Config {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn pg_pool_default_is_3() {
+        // ingest의 PG 쿼리는 키 검증·프로젝트 조회뿐이고 결과를 캐시한다
+        assert_eq!(super::DEFAULT_PG_MAX_CONNECTIONS, 3);
+        assert_eq!(super::Config::for_tests(b"", true).pg_max_connections, 3);
+    }
+
+    #[test]
     fn default_flush_interval_is_3s() {
         // C6: 초당 INSERT를 1/3로 줄인다 (작은 파트·머지 비용 감소). 지연은 수 초로 충분하다.
         assert_eq!(super::DEFAULT_FLUSH_INTERVAL_MS, "3000");

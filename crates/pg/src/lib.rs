@@ -51,3 +51,18 @@ fn random_alnum(n: usize) -> String {
         .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pool_size_from_env_value() {
+        assert_eq!(max_connections(None, 4), 4);
+        assert_eq!(max_connections(Some(""), 4), 4);
+        assert_eq!(max_connections(Some("abc"), 3), 3);
+        assert_eq!(max_connections(Some("0"), 3), 3, "0이면 기본값");
+        assert_eq!(max_connections(Some(" 12 "), 3), 12);
+        assert_eq!(ENV_MAX_CONNECTIONS, "PG_MAX_CONNECTIONS");
+    }
+}

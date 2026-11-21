@@ -264,6 +264,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pg_pool_default_is_3_and_configurable() {
+        // 잡은 배치 단위로 순차 실행한다: 연결 3개면 충분하다 (PG_MAX_CONNECTIONS로 바꾼다)
+        let cli = Cli::try_parse_from(["analytics-jobs", "migrate"]).unwrap();
+        assert_eq!(cli.pg_max_connections, 3);
+        let cli = Cli::try_parse_from(["analytics-jobs", "--pg-max-connections", "8", "migrate"])
+            .unwrap();
+        assert_eq!(cli.pg_max_connections, 8);
+    }
+
+    #[test]
     fn cleanup_sessions_subcommand_parses() {
         let cli = Cli::try_parse_from(["analytics-jobs", "cleanup-sessions"]).unwrap();
         assert!(matches!(cli.cmd, Cmd::CleanupSessions));

@@ -169,6 +169,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn archive_uses_fast_zstd_level() {
+        // 레벨 9는 수집 서버 CPU를 많이 쓴다. 3이면 압축률 차이는 작고 몇 배 빠르다.
+        assert_eq!(ZSTD_LEVEL, 3);
+        let dir = std::env::temp_dir().join(format!("archive-zstd-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("seg.ndjson");
+        fs::write(&path, b"{\"a\":1}\n{\"a\":2}\n").unwrap();
+        compress(&path).unwrap();
+        assert!(!path.exists());
+        let out = zstd::decode_all(File::open(dir.join("seg.ndjson.zst")).unwrap()).unwrap();
+        assert_eq!(out, b"{\"a\":1}\n{\"a\":2}\n");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn counting_writer_counts_bytes() {
         let mut w = Counting {
             inner: Vec::new(),
