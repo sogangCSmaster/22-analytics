@@ -2,6 +2,7 @@
 
 pub mod projects;
 pub mod seed;
+pub mod users;
 
 use anyhow::Context;
 pub use sqlx::PgPool;
