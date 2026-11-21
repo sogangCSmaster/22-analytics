@@ -17,15 +17,15 @@ pub struct Config {
     pub flush_rows: usize,
     pub tracker_dist: PathBuf,
     pub dev_site_dir: PathBuf,
+    /// 주문을 쓰는 ingest가 여러 대인가 (`ORDERS_MULTI_WRITER`, 기본 false).
+    /// 켜면 주문 투영을 쓴 뒤 다시 읽어 프로세스 간 경합을 보정한다 (orders 모듈 문서 5번).
+    pub orders_multi_writer: bool,
 }
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let get = analytics_ch::env_or;
-        let edge_emulation = matches!(
-            get("EDGE_EMULATION", "false").as_str(),
-            "1" | "true" | "yes"
-        );
+        let edge_emulation = flag(&get("EDGE_EMULATION", "false"));
         let edge_secret = std::env::var("EDGE_SHARED_SECRET").unwrap_or_default();
         if !edge_emulation && edge_secret.len() < 32 {
             anyhow::bail!("EDGE_SHARED_SECRET은 32자 이상이어야 합니다 (운영 모드)");
@@ -52,8 +52,14 @@ impl Config {
             flush_rows: get("FLUSH_ROWS", "10000").parse().context("FLUSH_ROWS")?,
             tracker_dist: get("TRACKER_DIST", "./tracker/dist").into(),
             dev_site_dir: get("DEV_SITE_DIR", "./dev/site").into(),
+            orders_multi_writer: flag(&get("ORDERS_MULTI_WRITER", "false")),
         })
     }
+}
+
+/// `1`·`true`·`yes`면 켜짐.
+fn flag(v: &str) -> bool {
+    matches!(v, "1" | "true" | "yes")
 }
 
 #[cfg(test)]
@@ -71,6 +77,7 @@ impl Config {
             flush_rows: 10_000,
             tracker_dist: "./tracker/dist".into(),
             dev_site_dir: "./dev/site".into(),
+            orders_multi_writer: false,
         }
     }
 }

@@ -30,15 +30,12 @@ use axum::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
 
 pub use analytics_core::orders::api::{
     HEADER_FORWARDED_AUTHORIZATION, HEADER_FORWARDED_PATH, HEADER_IDEMPOTENCY_KEY,
 };
 pub const PATH_SINGLE: &str = Kind::Single.path();
 pub const PATH_BATCH: &str = Kind::Batch.path();
-/// 일괄 요청 안에서 동시에 처리하는 주문 수.
-const BATCH_CONCURRENCY: usize = 16;
 
 #[derive(Clone)]
 pub struct OrdersHttp {
@@ -216,43 +213,39 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
     }
 
     let now = now_ms();
-    let sem = Arc::new(Semaphore::new(BATCH_CONCURRENCY));
-    let mut set = tokio::task::JoinSet::new();
     let mut results: Vec<Value> = vec![Value::Null; items.len()];
     let order_ids: Vec<Value> = items
         .iter()
         .map(|item| item.get("order_id").cloned().unwrap_or(Value::Null))
         .collect();
+    // 검증을 통과한 항목: (입력 위치, 경고). 이벤트는 입력 순서대로 한 번에 처리한다.
+    let mut valid: Vec<(usize, Vec<&'static str>)> = Vec::with_capacity(items.len());
+    let mut events = Vec::with_capacity(items.len());
     for (i, item) in items.into_iter().enumerate() {
-        let order_id = order_ids[i].clone();
-        let validated = core_orders::validate(&order_project(project), &item, None, now);
-        let v = match validated {
-            Ok(v) => v,
+        match core_orders::validate(&order_project(project), &item, None, now) {
+            Ok(v) => {
+                valid.push((i, v.warnings));
+                events.push(v.event);
+            }
             Err(e) => {
-                results[i] = json!({ "order_id": order_id, "accepted": false,
+                results[i] = json!({ "order_id": order_ids[i], "accepted": false,
                     "error": e.code(), "message": e.to_string() });
-                continue;
             }
-        };
-        let svc = st.svc.clone();
-        let sem = sem.clone();
-        set.spawn(async move {
-            let _permit = sem.acquire_owned().await;
-            let r = svc.apply(v.event).await;
-            (i, order_id, v.warnings, r)
-        });
+        }
     }
+    let scope = analytics_ch::ProjectScope::authorized(project.project_id);
     let mut storage_failed = false;
-    while let Some(joined) = set.join_next().await {
-        let (i, order_id, warnings, r) = match joined {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::error!(error = %e, "일괄 주문 작업 실패");
-                storage_failed = true;
-                continue;
-            }
-        };
-        results[i] = match r {
+    let applied = match st.svc.apply_batch(scope, events).await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::error!(error = %e, "일괄 주문 조회 실패");
+            storage_failed = true;
+            Vec::new()
+        }
+    };
+    for ((i, warnings), r) in valid.iter().zip(applied) {
+        let order_id = order_ids[*i].clone();
+        results[*i] = match r {
             Ok(a) if a.conflict => item_error(order_id, ApiError::IdempotencyKeyReused),
             Ok(_) => json!({ "order_id": order_id, "accepted": true, "warnings": warnings }),
             Err(e) => {
@@ -262,7 +255,15 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
             }
         };
     }
-    // 작업이 패닉한 항목(JoinError)은 결과가 비어 있다: order_id를 담은 internal 오류로 채운다.
+    if storage_failed {
+        // 조회부터 실패하면 검증을 통과한 항목 모두 저장소 오류다
+        for (i, _) in &valid {
+            if results[*i].is_null() {
+                results[*i] = item_error(order_ids[*i].clone(), ApiError::StorageUnavailable);
+            }
+        }
+    }
+    // 결과가 비어 있는 항목이 남으면(있어서는 안 된다) order_id를 담은 internal 오류로 채운다.
     if fill_missing_results(&mut results, &order_ids) {
         storage_failed = true;
     }
@@ -293,8 +294,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn panicked_batch_items_get_internal_error_not_null() {
-        // 작업이 패닉(JoinError)해 결과를 못 받은 항목은 null이 아니라 order_id를 담은 오류로 채운다
+    fn missing_batch_results_get_internal_error_not_null() {
+        // 결과를 못 받은 항목은 null이 아니라 order_id를 담은 오류로 채운다
         let order_ids = vec![json!("A"), json!("B"), Value::Null];
         let mut results = vec![
             json!({"order_id": "A", "accepted": true}),

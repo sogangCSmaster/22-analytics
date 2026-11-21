@@ -47,7 +47,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 주문 API(비밀 키 검증)는 운영·로컬 모두 Postgres가 필요하다.
     let pool = analytics_pg::connect(&cfg.database_url).await?;
-    let orders = Arc::new(orders::OrderService::new(pool.clone(), client));
+    let orders = Arc::new(
+        orders::OrderService::new(pool.clone(), client).with_multi_writer(cfg.orders_multi_writer),
+    );
 
     let emulator = if cfg.edge_emulation {
         tracing::warn!("엣지 에뮬레이션 모드: 로컬 개발 전용");

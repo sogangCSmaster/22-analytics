@@ -481,7 +481,7 @@ async fn single_writer_skips_recheck_reads_and_uses_async_insert() {
                 "SELECT count() FROM system.query_log WHERE event_date >= yesterday() \
                  AND type = 'QueryFinish' AND query_kind = 'Insert' \
                  AND (has(tables, ?) OR has(tables, ?)) \
-                 AND NOT (Settings['async_insert'] = '1' AND Settings['wait_for_async_insert'] = '1')",
+                 AND Settings['async_insert'] != '1'",
             )
             .bind(format!("{}.order_events", h.db.name()))
             .bind(format!("{}.orders", h.db.name()))
@@ -617,7 +617,7 @@ async fn batch_of_100_uses_one_insert_per_table_and_matches_sequential() {
         .map(|r| outcome(r["accepted"] == true, r))
         .collect();
     assert_eq!(batched, sequential, "항목별 결과");
-    assert_eq!(batched[91], (false, "idempotency_key_reused".to_owned()));
+    assert_eq!(batched[86], (false, "idempotency_key_reused".to_owned()));
     assert_eq!(
         final_states(&h.db, h.project).await,
         final_states(&h.db, other).await,
@@ -811,12 +811,16 @@ async fn concurrent_requests_for_same_order_do_not_race() {
 #[tokio::test(flavor = "multi_thread")]
 async fn two_ingest_writers_converge_after_recheck() {
     // 줄무늬 잠금은 프로세스 안에서만 직렬화한다. ingest 두 대(서로 다른 OrderService)가 같은 주문을
-    // 동시에 처리해도, 투영 후 이벤트를 다시 읽어 확인하므로 마지막 상태는 모든 이벤트를 반영한다.
-    let h = setup().await;
-    let other = app_for(Arc::new(OrderService::new(
-        h.db.pg.clone(),
-        h.db.ch.clone(),
-    )));
+    // 동시에 처리해도, 다중 writer 모드(ORDERS_MULTI_WRITER)면 투영 후 이벤트를 다시 읽어 확인하므로
+    // 마지막 상태는 모든 이벤트를 반영한다.
+    let mut h = setup().await;
+    let multi = || {
+        Arc::new(OrderService::new(h.db.pg.clone(), h.db.ch.clone()).with_multi_writer(true))
+    };
+    let (one, two) = (multi(), multi());
+    h.app = app_for(one.clone());
+    h.svc = one;
+    let other = app_for(two);
     let ids: Vec<String> = (0..4).map(|i| format!("R{i}")).collect();
     for id in &ids {
         h.post(&confirm(id, 1_000_000)).await;
@@ -854,6 +858,85 @@ async fn two_ingest_writers_converge_after_recheck() {
         );
         assert_eq!(o.effective_amount, 992_000);
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_ingest_writers_converge_with_batches() {
+    // 다중 writer 모드의 일괄 경로: 한 프로세스는 일괄, 다른 프로세스는 단건으로 같은 주문들을 동시에 쓴다
+    let h = setup().await;
+    let multi = || {
+        Arc::new(OrderService::new(h.db.pg.clone(), h.db.ch.clone()).with_multi_writer(true))
+    };
+    let (a, b) = (app_for(multi()), app_for(multi()));
+    let ids: Vec<String> = (0..6).map(|i| format!("W{i}")).collect();
+    for id in &ids {
+        h.post(&confirm(id, 1_000_000)).await;
+    }
+    let auth = format!("Bearer {}", h.key);
+    let mut tasks = vec![];
+    for round in 0..4 {
+        let batch: Vec<Value> = ids
+            .iter()
+            .map(|id| refund(id, 1_000, &format!("2026-11-20T12:00:{round:02}Z")))
+            .collect();
+        let (app, auth2) = (a.clone(), auth.clone());
+        tasks.push(tokio::spawn(async move {
+            let body = json!({ "orders": batch }).to_string().into_bytes();
+            send(&app, "/v1/orders:batch", &[("authorization", &auth2)], body)
+                .await
+                .0
+        }));
+        for id in &ids {
+            let (app, auth2) = (b.clone(), auth.clone());
+            let body = refund(id, 1_000, &format!("2026-11-20T13:00:{round:02}Z")).to_string();
+            tasks.push(tokio::spawn(async move {
+                send(&app, "/v1/orders", &[("authorization", &auth2)], body.into_bytes())
+                    .await
+                    .0
+            }));
+        }
+    }
+    for t in tasks {
+        assert_eq!(t.await.unwrap(), StatusCode::ACCEPTED);
+    }
+    for id in &ids {
+        let o = h.order(id).await.unwrap();
+        assert_eq!(o.refunded_amount, 8_000, "{id}: 두 프로세스의 환불 모두 반영");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_write_failure_keeps_conflicts_and_retry_recovers() {
+    let h = setup().await;
+    let mut a = confirm("F1", 100);
+    a["idempotency_key"] = json!("k1");
+    h.batch(&json!([a.clone()])).await;
+    // 읽기는 되고 쓰기만 실패: order_events를 같은 내용의 (insert 불가) 뷰로 바꾼다
+    for q in [
+        "RENAME TABLE order_events TO oe_away",
+        "CREATE VIEW order_events AS SELECT * FROM oe_away",
+    ] {
+        h.db.ch.query(q).execute().await.unwrap();
+    }
+    let mut b = confirm("F1", 1);
+    b["idempotency_key"] = json!("k1");
+    let body = json!([b, confirm("F2", 2_000)]);
+    let (s, v) = h.batch(&body).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert_eq!(v["results"][0]["error"], "idempotency_key_reused");
+    assert_eq!(v["results"][1]["error"], "storage_unavailable");
+    for q in [
+        "DROP VIEW order_events",
+        "RENAME TABLE oe_away TO order_events",
+    ] {
+        h.db.ch.query(q).execute().await.unwrap();
+    }
+    assert!(h.order("F2").await.is_none());
+    let (s, v) = h.batch(&body).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    assert_eq!(v["results"][1]["accepted"], true);
+    assert_eq!(h.order("F2").await.unwrap().effective_amount, 2_000);
+    assert_eq!(h.event_count("F2").await, 1, "재전송은 이벤트를 다시 쓰지 않는다");
 }
 
 #[tokio::test(flavor = "multi_thread")]
