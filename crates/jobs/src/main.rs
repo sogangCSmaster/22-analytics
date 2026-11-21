@@ -1,3 +1,4 @@
+use analytics_jobs::attribution::{self, Mode, worker};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
@@ -25,6 +26,25 @@ enum Cmd {
         #[arg(long)]
         project: i32,
     },
+    /// 기여 연산 (기본: watermark 이후 바뀐 주문만 증분 처리)
+    Attribution {
+        /// 이 프로젝트만 (없으면 활성 프로젝트 전체)
+        #[arg(long)]
+        project: Option<u32>,
+        /// 최근 N일 주문 전체를 다시 연산 (늦은 터치포인트·identity·채널 규칙 반영)
+        #[arg(long)]
+        full: bool,
+        /// --full 기간 (일)
+        #[arg(long, default_value_t = attribution::DEFAULT_FULL_DAYS)]
+        since_days: u32,
+    },
+    /// 매출 보존 검증. 위반 주문이 있으면 출력하고 0이 아닌 코드로 끝난다.
+    ConservationCheck {
+        #[arg(long)]
+        project: Option<u32>,
+    },
+    /// 상주 워커: 증분(ATTRIBUTION_INTERVAL_SECS, 기본 300초), 전체(매일 04:00 KST), 보존 검증(매시간)
+    Worker,
 }
 
 #[tokio::main]
@@ -58,6 +78,76 @@ async fn main() -> anyhow::Result<()> {
             println!("비밀 키 : {plain}");
             println!("※ 비밀 키는 다시 볼 수 없습니다. 안전한 곳에 보관하세요.");
         }
+        Cmd::Attribution {
+            project,
+            full,
+            since_days,
+        } => {
+            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let ch = analytics_ch::ChConfig::from_env().client();
+            let mode = if full {
+                Mode::Full { since_days }
+            } else {
+                Mode::Incremental
+            };
+            let r = attribution::run(&ch, &pool, project, &mode, attribution::now_ms()).await?;
+            println!(
+                "프로젝트 {} / 주문 {} / 변경 {} / 행 {}",
+                r.projects, r.orders_seen, r.orders_written, r.rows_written
+            );
+        }
+        Cmd::ConservationCheck { project } => {
+            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let ch = analytics_ch::ChConfig::from_env().client();
+            let broken = attribution::conservation_check(&ch, &pool, project).await?;
+            if broken.is_empty() {
+                println!("매출 보존 검증 통과");
+                return Ok(());
+            }
+            println!("project_id\tmodel\tlookback_days\torder_id\tattributed\teffective_amount");
+            for (p, b) in &broken {
+                println!(
+                    "{p}\t{}\t{}\t{}\t{}\t{}",
+                    b.model, b.lookback_days, b.order_id, b.attributed, b.effective_amount
+                );
+            }
+            eprintln!("매출 보존 법칙 위반 {}건", broken.len());
+            std::process::exit(1);
+        }
+        Cmd::Worker => {
+            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let ch = analytics_ch::ChConfig::from_env().client();
+            worker::run(
+                &ch,
+                &pool,
+                &worker::WorkerConfig::from_env(),
+                shutdown_signal(),
+            )
+            .await?;
+        }
     }
     Ok(())
+}
+
+/// Ctrl-C 또는 SIGTERM.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = term => {}
+    }
+    tracing::info!("종료 신호 수신");
 }
