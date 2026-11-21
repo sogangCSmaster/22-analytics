@@ -10,7 +10,7 @@
   /* 바이너리큐브 브랜드 (binarycube.co.kr 기준)
      brand     #004B29  딥그린 — 로고 색, 브랜드 패널·핵심 지표 카드·선택 상태
      charcoal  #2E2E2E  차콜 — 본문 (사이트 본문색)
-     red       #FF264A  레드 — 사이트 포인트색, 감소·오류에만 */
+     red       #FF264A  레드 — 사이트 포인트색. 감소·오류에만 쓰고 차트 항목색으로는 쓰지 않는다 */
   --brand: #004b29;
   --brand-strong: #003820;
   --brand-tint: #e6f0eb;
@@ -61,6 +61,6 @@
   --chart-2: #3fa375;
   --chart-3: #9fd4b9;
   --chart-4: #2e2e2e;
-  --chart-5: #ff264a;
+  --chart-5: #7fa08f;
   --chart-6: #c9cdca;
 }
