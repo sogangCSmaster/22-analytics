@@ -14,6 +14,7 @@ use analytics_core::event::MAX_BATCH_BYTES;
 use analytics_core::{Event, PublicKey};
 use futures_util::future::{Either, select};
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 use uuid::Uuid;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -111,7 +112,7 @@ fn to_response(r: EdgeResponse) -> worker::Result<Response> {
     Ok(resp.with_status(r.status).with_headers(headers))
 }
 
-async fn project(env: &Env, key: &PublicKey) -> worker::Result<Option<ProjectConfig>> {
+async fn project(env: &Env, key: &PublicKey) -> worker::Result<Option<Rc<ProjectConfig>>> {
     let now = now_ms();
     if let Some(hit) = CACHE.with(|c| c.borrow().get(key.as_str(), now)) {
         return Ok(hit);
@@ -120,7 +121,8 @@ async fn project(env: &Env, key: &PublicKey) -> worker::Result<Option<ProjectCon
         .kv(KV_BINDING)?
         .get(&config::kv_key(key))
         .json::<ProjectConfig>()
-        .await?;
+        .await?
+        .map(Rc::new);
     CACHE.with(|c| c.borrow_mut().put(key.to_string(), cfg.clone(), now));
     Ok(cfg)
 }
@@ -173,7 +175,7 @@ async fn handle_collect(req: &mut Request, env: &Env, ctx: &Context) -> EdgeResp
         city: &city,
         now_ms: now_ms(),
     };
-    let out = collect::handle(&creq, cfg.as_ref(), batch, new_uuid);
+    let out = collect::handle(&creq, cfg.as_deref(), batch, new_uuid);
     if !out.events.is_empty() {
         let env = env.clone();
         let events = out.events;
@@ -256,7 +258,7 @@ async fn handle_config(req: &Request, env: &Env) -> EdgeResponse {
         return config::config_response(None);
     };
     match project(env, &key).await {
-        Ok(cfg) => config::config_response(cfg.as_ref()),
+        Ok(cfg) => config::config_response(cfg.as_deref()),
         Err(e) => {
             console_error!("프로젝트 설정 조회 실패: {e}");
             EdgeResponse::empty(503)
