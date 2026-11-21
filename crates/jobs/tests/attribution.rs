@@ -956,6 +956,51 @@ async fn conservation_check_detects_corruption_and_recompute_fixes_it() {
     assert_manual(&finals(&db, p).await, 100_000);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn recent_conservation_check_skips_old_orders() {
+    let db = TestDb::new().await;
+    let p = project(&db.pg).await;
+    manual_scenario(&db, p, Uuid::new_v4()).await;
+    job::run_project(&db.ch, &db.pg, p, &Mode::Incremental, NOW)
+        .await
+        .unwrap();
+    db.ch
+        .query(
+            "INSERT INTO attributed_revenue \
+             SELECT project_id, model, lookback_days, order_id, touch_index, channel, utm_campaign, \
+                    touch_ts, ordered_at, amount + 1, is_assist, computed_at + 1000, is_deleted \
+             FROM attributed_revenue FINAL \
+             WHERE model = 'linear' AND lookback_days = 7 AND touch_index = 1",
+        )
+        .execute()
+        .await
+        .unwrap();
+    let recent = |now_ms| job::ConservationWindow::Recent {
+        days: job::DEFAULT_CONSERVATION_DAYS,
+        now_ms,
+    };
+    let check = |w| job::conservation_check_window(&db.ch, &db.pg, Some(p), w);
+    // 주문 직후: 최근 40일 안이라 잡힌다
+    assert_eq!(check(recent(NOW)).await.unwrap().len(), 1);
+    // 41일 뒤 매시간 검증은 오래된 주문을 읽지 않는다
+    assert!(
+        check(recent(ORDER_AT + 41 * DAY_MS))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // 전체 검증(주간·CLI)은 여전히 잡는다
+    assert_eq!(check(job::ConservationWindow::Full).await.unwrap().len(), 1);
+    assert_eq!(
+        job::conservation_check(&db.ch, &db.pg, Some(p))
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "기존 함수는 전체 검증"
+    );
+}
+
 // ---------------------------------------------------------------- 장애·복구
 
 #[tokio::test(flavor = "multi_thread")]

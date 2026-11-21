@@ -155,6 +155,28 @@ async fn conservation_round(ch: &Client, pg: &PgPool) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn conservation_defaults_hourly_recent_weekly_full() {
+        let c = WorkerConfig::default();
+        assert_eq!(c.conservation_every, Duration::from_secs(3_600));
+        assert_eq!(c.conservation_days, 40);
+        assert_eq!(
+            c.conservation_full_every,
+            Duration::from_secs(7 * 24 * 3_600)
+        );
+        assert_eq!(
+            conservation_window(&c, false, 123),
+            super::super::ConservationWindow::Recent {
+                days: 40,
+                now_ms: 123
+            }
+        );
+        assert_eq!(
+            conservation_window(&c, true, 123),
+            super::super::ConservationWindow::Full
+        );
+    }
+
     const H: i64 = 60 * 60 * 1000;
     /// 2026-11-21 00:00:00 UTC = 2026-11-21 09:00 KST
     const MIDNIGHT_UTC: i64 = 1_795_219_200_000;

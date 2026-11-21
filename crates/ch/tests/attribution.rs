@@ -320,7 +320,7 @@ async fn conservation_check_finds_broken_orders_only() {
     rows.push(gone);
     a::insert_rows(&db.ch, scope(P), &rows).await.unwrap();
     assert!(
-        a::conservation_check(&db.ch, scope(P))
+        a::conservation_check(&db.ch, scope(P), None)
             .await
             .unwrap()
             .is_empty()
@@ -330,7 +330,7 @@ async fn conservation_check_finds_broken_orders_only() {
     a::insert_rows(&db.ch, scope(P), &[row("bad", "linear", 2, 41, 2)])
         .await
         .unwrap();
-    let broken = a::conservation_check(&db.ch, scope(P)).await.unwrap();
+    let broken = a::conservation_check(&db.ch, scope(P), None).await.unwrap();
     assert_eq!(
         broken,
         vec![a::BrokenOrder {
@@ -343,7 +343,52 @@ async fn conservation_check_finds_broken_orders_only() {
     );
     // 다른 프로젝트는 영향 없음
     assert!(
-        a::conservation_check(&db.ch, scope(OTHER))
+        a::conservation_check(&db.ch, scope(OTHER), None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn conservation_check_can_be_bounded_by_ordered_at() {
+    const DAY: i64 = 86_400_000;
+    let old_at = 1_700_000_000_000;
+    let new_at = old_at + 60 * DAY;
+    let db = TestDb::new().await;
+    insert_orders(
+        &db.ch,
+        &[
+            OrderFixture::confirmed(P, "old", None, 100, old_at, 1),
+            OrderFixture::confirmed(P, "new", None, 100, new_at, 1),
+        ],
+    )
+    .await
+    .unwrap();
+    // 둘 다 깨진 결과 (합계 99 ≠ 100)
+    let mut new_row = row("new", "linear", 1, 99, 1);
+    new_row.ordered_at = new_at;
+    a::insert_rows(&db.ch, scope(P), &[row("old", "linear", 1, 99, 1), new_row])
+        .await
+        .unwrap();
+
+    let ids = |b: Vec<a::BrokenOrder>| b.into_iter().map(|b| b.order_id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(a::conservation_check(&db.ch, scope(P), None).await.unwrap()),
+        vec!["new", "old"],
+        "전체 검증"
+    );
+    assert_eq!(
+        ids(
+            a::conservation_check(&db.ch, scope(P), Some(new_at - 40 * DAY))
+                .await
+                .unwrap()
+        ),
+        vec!["new"],
+        "최근 40일 주문만"
+    );
+    assert!(
+        a::conservation_check(&db.ch, scope(P), Some(new_at + 1))
             .await
             .unwrap()
             .is_empty()
