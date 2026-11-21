@@ -4,6 +4,10 @@ use analytics_api::{ApiConfig, AppState, build_router};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
+/// 전역 할당자: 요청·JSON 직렬화의 작은 할당이 많다.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()

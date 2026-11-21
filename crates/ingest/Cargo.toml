@@ -12,6 +12,7 @@ analytics-ch.workspace = true
 analytics-pg.workspace = true
 anyhow.workspace = true
 axum.workspace = true
+mimalloc.workspace = true
 bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
