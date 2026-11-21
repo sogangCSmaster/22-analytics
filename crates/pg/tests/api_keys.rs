@@ -22,7 +22,7 @@ async fn project(pool: &PgPool, name: &str) -> i32 {
     .unwrap()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn create_then_verify() {
     let db = TestDb::new().await;
     let p = project(&db.pg, "a").await;
@@ -56,10 +56,13 @@ async fn create_then_verify() {
 
     let listed = api_keys::list(&db.pg, p).await.unwrap();
     assert_eq!(listed.len(), 1);
-    assert!(listed[0].last_used_at.is_some(), "검증 성공 시 last_used_at 갱신");
+    assert!(
+        listed[0].last_used_at.is_some(),
+        "검증 성공 시 last_used_at 갱신"
+    );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn verify_twice_is_stable() {
     let db = TestDb::new().await;
     let p = project(&db.pg, "a").await;
@@ -70,7 +73,7 @@ async fn verify_twice_is_stable() {
     assert!(a.is_some());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn wrong_missing_and_tampered_keys_rejected() {
     let db = TestDb::new().await;
     let p = project(&db.pg, "a").await;
@@ -93,7 +96,7 @@ async fn wrong_missing_and_tampered_keys_rejected() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn revoked_key_rejected_and_revoke_scoped_to_project() {
     let db = TestDb::new().await;
     let a = project(&db.pg, "a").await;
@@ -114,7 +117,7 @@ async fn revoked_key_rejected_and_revoke_scoped_to_project() {
     assert!(listed[0].revoked_at.is_some());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn keys_are_bound_to_their_project() {
     let db = TestDb::new().await;
     let a = project(&db.pg, "a").await;
@@ -122,33 +125,39 @@ async fn keys_are_bound_to_their_project() {
     let (ka, _) = api_keys::create(&db.pg, a, None).await.unwrap();
     let (kb, _) = api_keys::create(&db.pg, b, None).await.unwrap();
     assert_eq!(
-        api_keys::verify(&db.pg, &ka).await.unwrap().unwrap().project_id,
+        api_keys::verify(&db.pg, &ka)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
         a as u32
     );
     assert_eq!(
-        api_keys::verify(&db.pg, &kb).await.unwrap().unwrap().project_id,
+        api_keys::verify(&db.pg, &kb)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
         b as u32
     );
     assert_eq!(api_keys::list(&db.pg, a).await.unwrap().len(), 1);
     assert_eq!(api_keys::list(&db.pg, b).await.unwrap().len(), 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn many_keys_unique() {
     let db = TestDb::new().await;
     let p = project(&db.pg, "a").await;
     let mut seen = std::collections::HashSet::new();
     for _ in 0..50 {
-        let (k, row) = api_keys::create(&db.pg, p, Some(1).filter(|_| false))
-            .await
-            .unwrap();
+        let (k, row) = api_keys::create(&db.pg, p, None).await.unwrap();
         assert!(seen.insert(row.prefix.clone()));
         assert!(api_keys::verify(&db.pg, &k).await.unwrap().is_some());
     }
     assert_eq!(api_keys::list(&db.pg, p).await.unwrap().len(), 50);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn created_by_must_be_real_user() {
     let db = TestDb::new().await;
     let p = project(&db.pg, "a").await;
@@ -166,7 +175,7 @@ async fn created_by_must_be_real_user() {
     assert_eq!(row.created_by, Some(uid));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn unknown_project_rejected() {
     let db = TestDb::new().await;
     assert!(api_keys::create(&db.pg, 424_242, None).await.is_err());

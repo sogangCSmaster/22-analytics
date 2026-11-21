@@ -418,12 +418,18 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
         .collect();
     // 멱등 키 중복 제거: 먼저 받은 것 하나 (동률이면 내용 순으로 결정적으로).
     evs.sort_by(|a, b| {
-        (&a.idempotency_key, a.received_at_ms, a.occurred_at_ms, &a.raw).cmp(&(
-            &b.idempotency_key,
-            b.received_at_ms,
-            b.occurred_at_ms,
-            &b.raw,
-        ))
+        (
+            &a.idempotency_key,
+            a.received_at_ms,
+            a.occurred_at_ms,
+            &a.raw,
+        )
+            .cmp(&(
+                &b.idempotency_key,
+                b.received_at_ms,
+                b.occurred_at_ms,
+                &b.raw,
+            ))
     });
     evs.dedup_by(|b, a| a.idempotency_key == b.idempotency_key);
     evs.sort_by(|a, b| {
@@ -446,11 +452,7 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
         .fold(0i64, |acc, e| acc.saturating_add(e.refund_amount));
 
     // 식별자: 늦은 확정 이벤트 우선, 없으면 다른 이벤트 중 가장 늦은 값.
-    let mut by_priority = evs
-        .iter()
-        .rev()
-        .filter(is_confirm)
-        .chain(evs.iter().rev());
+    let mut by_priority = evs.iter().rev().filter(is_confirm).chain(evs.iter().rev());
     let visitor_id = by_priority.clone().find_map(|e| e.visitor_id);
     let member_hash = by_priority
         .find(|e| !e.member_hash.is_empty())
@@ -473,7 +475,11 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
     } else if net_amount > 0 && refunds >= net_amount {
         (OrderStatus::Cancelled, refunds, 0)
     } else if refunds > 0 {
-        (OrderStatus::PartiallyRefunded, refunds, net_amount - refunds)
+        (
+            OrderStatus::PartiallyRefunded,
+            refunds,
+            net_amount - refunds,
+        )
     } else {
         (OrderStatus::Confirmed, 0, net_amount)
     };
@@ -653,8 +659,10 @@ mod tests {
 
     #[test]
     fn validates_cancel_and_refund() {
-        let c = ok(json!({ "event_type": "ORDER_CANCELLED", "order_id": "ORD-1",
-            "refund_amount": 100000, "cancelled_at": "2026-11-21T09:12:04+09:00" }));
+        let c = ok(
+            json!({ "event_type": "ORDER_CANCELLED", "order_id": "ORD-1",
+            "refund_amount": 100000, "cancelled_at": "2026-11-21T09:12:04+09:00" }),
+        );
         assert_eq!(c.event.event_type, OrderCancelled);
         assert_eq!(c.event.refund_amount, 100_000);
         assert_eq!(c.event.currency, "KRW", "통화가 없으면 프로젝트 통화");
@@ -810,7 +818,10 @@ mod tests {
         );
         let neg_refund = json!({ "event_type": "ORDER_REFUNDED", "order_id": "O",
             "refund_amount": -1, "refunded_at": "2026-11-20T12:00:00Z" });
-        assert_eq!(err(neg_refund), OrderError::AmountOutOfRange("refund_amount"));
+        assert_eq!(
+            err(neg_refund),
+            OrderError::AmountOutOfRange("refund_amount")
+        );
     }
 
     #[test]
@@ -854,7 +865,12 @@ mod tests {
     #[test]
     fn unicode_order_id_kept_verbatim() {
         let id = "주문-🛒-ñ-001";
-        assert_eq!(ok(with(confirm_json(), "order_id", json!(id))).event.order_id, id);
+        assert_eq!(
+            ok(with(confirm_json(), "order_id", json!(id)))
+                .event
+                .order_id,
+            id
+        );
     }
 
     #[test]
@@ -880,7 +896,11 @@ mod tests {
     #[test]
     fn unknown_event_type() {
         assert_eq!(
-            err(with(confirm_json(), "event_type", json!("purchase_confirmed"))),
+            err(with(
+                confirm_json(),
+                "event_type",
+                json!("purchase_confirmed")
+            )),
             OrderError::UnknownEventType
         );
         assert_eq!(
@@ -913,14 +933,23 @@ mod tests {
     #[test]
     fn timestamp_rules() {
         let at = |s: &str| with(confirm_json(), "ordered_at", json!(s));
-        assert_eq!(err(at("2026-11-20 18:45:12")), OrderError::InvalidTimestamp("ordered_at"));
-        assert_eq!(err(at("1763631912")), OrderError::InvalidTimestamp("ordered_at"));
+        assert_eq!(
+            err(at("2026-11-20 18:45:12")),
+            OrderError::InvalidTimestamp("ordered_at")
+        );
+        assert_eq!(
+            err(at("1763631912")),
+            OrderError::InvalidTimestamp("ordered_at")
+        );
         assert_eq!(err(at("")), OrderError::InvalidTimestamp("ordered_at"));
         assert_eq!(
             err(at("1999-12-31T23:59:59Z")),
             OrderError::TimestampOutOfRange("ordered_at")
         );
-        assert_eq!(ok(at("2000-01-01T00:00:00Z")).event.occurred_at_ms, MIN_OCCURRED_AT_MS);
+        assert_eq!(
+            ok(at("2000-01-01T00:00:00Z")).event.occurred_at_ms,
+            MIN_OCCURRED_AT_MS
+        );
         // 현재+1일까지 허용, 넘으면 거부
         assert!(validate(&project(), &at("2026-11-22T00:00:00Z"), None, NOW).is_ok());
         assert_eq!(
@@ -928,12 +957,19 @@ mod tests {
             OrderError::TimestampOutOfRange("ordered_at")
         );
         // 밀리초 보존
-        assert_eq!(ok(at("2026-11-20T09:45:12.345Z")).event.occurred_at_ms, ORDERED_MS + 345);
+        assert_eq!(
+            ok(at("2026-11-20T09:45:12.345Z")).event.occurred_at_ms,
+            ORDERED_MS + 345
+        );
     }
 
     #[test]
     fn visitor_id_invalid_is_warning() {
-        for bad in [json!("not-a-uuid"), json!("00000000-0000-0000-0000-000000000000"), json!(12)] {
+        for bad in [
+            json!("not-a-uuid"),
+            json!("00000000-0000-0000-0000-000000000000"),
+            json!(12),
+        ] {
             let v = with(confirm_json(), "visitor_id", bad.clone());
             match validate(&project(), &v, None, NOW) {
                 Ok(v) => {
@@ -959,10 +995,19 @@ mod tests {
 
     #[test]
     fn fold_refund_exceeding_net_floors_at_zero() {
-        let s = fold(&[confirm("c", 100, 1), refund("r1", 70, 2), refund("r2", 70, 3)]).unwrap();
+        let s = fold(&[
+            confirm("c", 100, 1),
+            refund("r1", 70, 2),
+            refund("r2", 70, 3),
+        ])
+        .unwrap();
         assert_eq!(s.effective_amount, 0);
         assert_eq!(s.refunded_amount, 140);
-        assert_eq!(s.status, OrderStatus::Cancelled, "전액 이상 환불 = 취소와 같음");
+        assert_eq!(
+            s.status,
+            OrderStatus::Cancelled,
+            "전액 이상 환불 = 취소와 같음"
+        );
     }
 
     #[test]
@@ -1045,7 +1090,10 @@ mod tests {
         for p in permutations(&[a, b, r]) {
             assert_eq!(fold(&p).unwrap(), expected);
         }
-        assert_eq!(expected.net_amount, 90_000, "동률이면 멱등 키 순으로 마지막 확정");
+        assert_eq!(
+            expected.net_amount, 90_000,
+            "동률이면 멱등 키 순으로 마지막 확정"
+        );
         assert_eq!(expected.effective_amount, 80_000);
     }
 
@@ -1090,7 +1138,12 @@ mod tests {
     #[test]
     fn sql_like_order_id_kept_verbatim() {
         let id = "x'; DROP TABLE orders; -- ? \\ \"";
-        assert_eq!(ok(with(confirm_json(), "order_id", json!(id))).event.order_id, id);
+        assert_eq!(
+            ok(with(confirm_json(), "order_id", json!(id)))
+                .event
+                .order_id,
+            id
+        );
     }
 
     #[test]
@@ -1110,7 +1163,11 @@ mod tests {
             );
         }
         // 대문자 hex는 허용하고 소문자로 정규화해 재해싱
-        let upper = ok(with(confirm_json(), "member_id_hash", json!(MEMBER.to_uppercase())));
+        let upper = ok(with(
+            confirm_json(),
+            "member_id_hash",
+            json!(MEMBER.to_uppercase()),
+        ));
         assert_eq!(upper.event.member_hash, rehash_member(SALT, MEMBER));
         // 빈 값은 없음
         let empty = ok(with(confirm_json(), "member_id_hash", json!("")));
@@ -1125,7 +1182,10 @@ mod tests {
             ..project()
         };
         let a = ok(confirm_json()).event.member_hash;
-        let b = validate(&p2, &confirm_json(), None, NOW).unwrap().event.member_hash;
+        let b = validate(&p2, &confirm_json(), None, NOW)
+            .unwrap()
+            .event
+            .member_hash;
         assert_ne!(a, b);
     }
 
