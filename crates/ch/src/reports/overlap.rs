@@ -4,7 +4,7 @@
 //! 경로는 `touch_index` 순서이고 연속된 같은 채널은 하나로 합친다
 //! (naver_sa, naver_sa, meta → naver_sa → meta). 서로 다른 채널이 2개 이상인 주문만 센다.
 
-use super::{DateRange, TZ, clamp_limit};
+use super::{DateRange, FINAL_SETTINGS, TZ, clamp_limit};
 use crate::{Client, ProjectScope};
 use analytics_core::dto::reports::{OverlapPath, OverlapReport};
 use clickhouse::Row;
@@ -40,7 +40,8 @@ pub async fn overlap_paths(
              )
              GROUP BY seq
              ORDER BY orders DESC, seq ASC
-             LIMIT ?"
+             LIMIT ?
+             {FINAL_SETTINGS}"
         ))
         .bind(scope.project_id())
         .bind(lookback_days)

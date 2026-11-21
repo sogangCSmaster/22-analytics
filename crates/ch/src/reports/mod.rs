@@ -2,9 +2,12 @@
 //!
 //! - 모든 함수는 [`ProjectScope`](crate::ProjectScope)를 받고 SQL에 `project_id = ?`를 넣는다.
 //! - 사용자 입력(이벤트 이름, 속성 키, 경로 필터, 주문 번호)은 항상 `?` 바인딩으로 넘긴다.
-//! - 일자는 1차 범위에서 Asia/Seoul 고정이다 (`daily_stats.day`와 같은 기준).
-//! - 과거 트래픽 집계는 `daily_stats`, 실시간·퍼널·속성은 `events`, 매출은 `orders`·`attributed_revenue`를 읽는다.
-//! - 순 방문자·세션은 ClickHouse `uniq` 근사값이다 (작은 집합에서는 정확).
+//! - 일자는 1차 범위에서 Asia/Seoul 고정이다 (롤업 `day`와 같은 기준).
+//! - 과거 트래픽 집계는 롤업(`daily_channel`·`daily_pages`·`daily_events`), 실시간·퍼널·속성은
+//!   `events`, 매출은 `orders`·`attributed_revenue`를 읽는다.
+//! - 순 방문자·세션은 `uniqCombined(14)` 근사값이다 (작은 집합에서는 정확). 롤업과 원본 조회가 같은
+//!   함수를 써서 화면마다 값이 어긋나지 않게 한다.
+//! - 서로 독립인 쿼리는 `tokio::try_join!`으로 동시에 보낸다 (리포트 하나당 최대 4개).
 
 mod channels;
 mod events;
@@ -37,8 +40,15 @@ use time::{Date, Duration, format_description::BorrowedFormatItem, macros::forma
 pub const TZ: &str = "Asia/Seoul";
 /// 한 번에 조회할 수 있는 최대 일수.
 pub const MAX_RANGE_DAYS: u32 = 400;
-/// SQL 조각: 취소되지 않은 주문 (`orders.status`).
-pub(crate) const NOT_CANCELLED: &str = "upper(status) != 'CANCELLED'";
+/// SQL 조각: 취소되지 않은 주문 (`orders.status`). 주문 writer가 상태를 대문자로 쓴다.
+pub(crate) const NOT_CANCELLED: &str = "status != 'CANCELLED'";
+/// SQL 조각: `FINAL` 조회 설정. 주문 시각(파티션 키 `toYYYYMM(ordered_at)`)은 한 행 안에서 바뀌지
+/// 않으므로 같은 키의 버전은 같은 파티션에 있다 → 파티션끼리 병합하지 않아도 된다.
+pub(crate) const FINAL_SETTINGS: &str = "SETTINGS do_not_merge_across_partitions_select_final = 1";
+/// SQL 조각: 순 방문자·세션 근사 함수 (롤업 상태와 같은 파라미터).
+pub(crate) const UNIQ: &str = "uniqCombined(14)";
+/// SQL 조각: 롤업 상태 병합.
+pub(crate) const UNIQ_MERGE: &str = "uniqCombinedMerge(14)";
 /// 상위 N 목록의 최대 행 수.
 pub const MAX_LIMIT: u32 = 1000;
 

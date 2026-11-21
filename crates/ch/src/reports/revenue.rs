@@ -2,8 +2,9 @@
 //!
 //! `attributed_revenue`는 WP2 기여 연산 잡이 쓴다. 재연산·취소는 `computed_at`이 더 큰 행으로
 //! 대체되므로 항상 `FINAL`과 `is_deleted = 0`으로 읽는다. 기간은 주문 시각(Asia/Seoul) 기준.
+//! 채널별 합계와 주문 수 두 쿼리는 동시에 보낸다.
 
-use super::{DateRange, TZ, ratio};
+use super::{DateRange, FINAL_SETTINGS, TZ, ratio};
 use crate::{Client, ProjectScope};
 use analytics_core::attribution::Model;
 use analytics_core::dto::reports::{ChannelRevenueRow, RevenueReport};
@@ -37,41 +38,49 @@ pub async fn revenue_report(
     lookback_days: u8,
     spend: &HashMap<String, i64>,
 ) -> anyhow::Result<RevenueReport> {
-    let rows: Vec<Raw> = client
-        .query(&format!(
-            "SELECT toString(channel)                                  AS channel,
-                    toInt64(sumIf(amount, model = 'raw_sum'))          AS raw_claimed,
-                    toInt64(sumIf(amount, model = ?))                  AS attributed,
-                    countIf(model = 'last_click' AND is_assist = 1)    AS assists
-             FROM attributed_revenue FINAL
-             WHERE project_id = ? AND lookback_days = ? AND is_deleted = 0
-               AND model IN ('raw_sum', 'last_click', ?)
-               AND toDate(ordered_at, '{TZ}') BETWEEN toDate(?) AND toDate(?)
-             GROUP BY channel"
-        ))
-        .bind(model.as_str())
-        .bind(scope.project_id())
-        .bind(lookback_days)
-        .bind(model.as_str())
-        .bind(range.from_ymd())
-        .bind(range.to_ymd())
-        .fetch_all()
-        .await?;
+    let rows = async {
+        client
+            .query(&format!(
+                "SELECT toString(channel)                                  AS channel,
+                        toInt64(sumIf(amount, model = 'raw_sum'))          AS raw_claimed,
+                        toInt64(sumIf(amount, model = ?))                  AS attributed,
+                        countIf(model = 'last_click' AND is_assist = 1)    AS assists
+                 FROM attributed_revenue FINAL
+                 WHERE project_id = ? AND lookback_days = ? AND is_deleted = 0
+                   AND model IN ('raw_sum', 'last_click', ?)
+                   AND toDate(ordered_at, '{TZ}') BETWEEN toDate(?) AND toDate(?)
+                 GROUP BY channel
+                 {FINAL_SETTINGS}"
+            ))
+            .bind(model.as_str())
+            .bind(scope.project_id())
+            .bind(lookback_days)
+            .bind(model.as_str())
+            .bind(range.from_ymd())
+            .bind(range.to_ymd())
+            .fetch_all::<Raw>()
+            .await
+    };
 
-    let orders: Count = client
-        .query(&format!(
-            "SELECT uniqExact(order_id) AS orders
-             FROM attributed_revenue FINAL
-             WHERE project_id = ? AND model = ? AND lookback_days = ? AND is_deleted = 0
-               AND toDate(ordered_at, '{TZ}') BETWEEN toDate(?) AND toDate(?)"
-        ))
-        .bind(scope.project_id())
-        .bind(model.as_str())
-        .bind(lookback_days)
-        .bind(range.from_ymd())
-        .bind(range.to_ymd())
-        .fetch_one()
-        .await?;
+    let orders = async {
+        client
+            .query(&format!(
+                "SELECT uniqExact(order_id) AS orders
+                 FROM attributed_revenue FINAL
+                 WHERE project_id = ? AND model = ? AND lookback_days = ? AND is_deleted = 0
+                   AND toDate(ordered_at, '{TZ}') BETWEEN toDate(?) AND toDate(?)
+                 {FINAL_SETTINGS}"
+            ))
+            .bind(scope.project_id())
+            .bind(model.as_str())
+            .bind(lookback_days)
+            .bind(range.from_ymd())
+            .bind(range.to_ymd())
+            .fetch_one::<Count>()
+            .await
+    };
+
+    let (rows, orders) = tokio::try_join!(rows, orders)?;
 
     Ok(build(
         range,

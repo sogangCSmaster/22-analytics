@@ -472,29 +472,50 @@ ORDER BY (project_id, model, lookback_days, order_id, touch_index);
 
 ### 6.2 롤업 (대시보드용)
 
-```sql
-CREATE TABLE daily_stats
-(
-    project_id  UInt32,
-    day         Date,
-    channel     LowCardinality(String),
-    host        LowCardinality(String),
-    path        String,
-    device_type LowCardinality(String),
-    country     LowCardinality(String),
-    pageviews   SimpleAggregateFunction(sum, UInt64),
-    events      SimpleAggregateFunction(sum, UInt64),
-    visitors    AggregateFunction(uniq, UUID),
-    sessions    AggregateFunction(uniq, UUID)
-)
-ENGINE = AggregatingMergeTree
-PARTITION BY toYYYYMM(day)
-ORDER BY (project_id, day, channel, host, path, device_type, country);
+용도별로 좁은 롤업을 둡니다 (`migrations/clickhouse/0004_rollups.sql`). 처음의 넓은 `daily_stats`
+(키: 채널·호스트·경로·기기·국가)는 원본과 크기가 비슷해 0004에서 이 셋으로 바꿨습니다.
 
--- mv_daily_stats: events → daily_stats (toDate(ts, 프로젝트 타임존))
+```sql
+-- 개요·추이·채널
+CREATE TABLE daily_channel
+(
+    project_id UInt32, day Date, channel LowCardinality(String),
+    pageviews SimpleAggregateFunction(sum, UInt64),
+    events    SimpleAggregateFunction(sum, UInt64),
+    entrances SimpleAggregateFunction(sum, UInt64),
+    visitors  AggregateFunction(uniqCombined(14), UUID),
+    sessions  AggregateFunction(uniqCombined(14), UUID)
+)
+ENGINE = AggregatingMergeTree PARTITION BY toYYYYMM(day)
+ORDER BY (project_id, day, channel);
+
+-- 페이지 (페이지뷰·세션 진입 이벤트만, visitors는 페이지뷰 방문자)
+CREATE TABLE daily_pages
+(
+    project_id UInt32, day Date, host LowCardinality(String), path String CODEC(ZSTD(1)),
+    pageviews SimpleAggregateFunction(sum, UInt64),
+    entrances SimpleAggregateFunction(sum, UInt64),
+    visitors  AggregateFunction(uniqCombined(14), UUID)
+)
+ENGINE = AggregatingMergeTree PARTITION BY toYYYYMM(day)
+ORDER BY (project_id, day, host, path);
+
+-- 이벤트 이름별
+CREATE TABLE daily_events
+(
+    project_id UInt32, day Date, event_name LowCardinality(String),
+    events   SimpleAggregateFunction(sum, UInt64),
+    visitors AggregateFunction(uniqCombined(14), UUID)
+)
+ENGINE = AggregatingMergeTree PARTITION BY toYYYYMM(day)
+ORDER BY (project_id, day, event_name);
+
+-- mv_daily_channel / mv_daily_pages / mv_daily_events: events → 각 롤업 (toDate(ts, 프로젝트 타임존))
 ```
 
-- 개요, 채널, 페이지, 기기, 국가 화면은 `daily_stats`를 조회합니다. 오늘 데이터만 `events`를 직접 조회합니다.
+- 개요·추이·채널은 `daily_channel`, 페이지는 `daily_pages`, 이벤트 이름별 집계는 `daily_events`를 조회합니다.
+  기기·국가 화면이 생기면 같은 방식으로 좁은 롤업을 추가합니다. 오늘 데이터만 `events`를 직접 조회합니다.
+- 순 방문자·세션은 롤업과 원본 조회 모두 `uniqCombined(14)`를 씁니다.
 - 커스텀 이벤트 탐색(속성 필터)은 `events`를 직접 조회합니다. 정렬키가 `(project_id, date, event_name)`이라 스캔 범위가 작습니다.
 - 실시간 화면(최근 30분)도 `events`를 직접 조회합니다.
 - 프로젝트 타임존은 기본 `Asia/Seoul`입니다. 다른 타임존 프로젝트는 롤업 MV에서 프로젝트 테이블을 dictionary로 조회해 처리합니다.

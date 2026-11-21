@@ -19,6 +19,7 @@ struct OrderRaw {
     refunded_amount: i64,
     effective_amount: i64,
     ordered_at: String,
+    ordered_at_ms: i64,
 }
 
 #[derive(Row, Deserialize)]
@@ -39,15 +40,23 @@ pub async fn order_detail(
     order_id: &str,
     lookback_days: u8,
 ) -> anyhow::Result<Option<OrderDetail>> {
+    // 주문 키 한 건이라 FINAL 대신 version 최대 행을 고른다 (파트 병합 없이 정렬키 범위만 읽는다).
     let order: Option<OrderRaw> = client
         .query(&format!(
-            "SELECT order_id, toString(source) AS source, toString(status) AS status,
-                    toString(currency) AS currency, gross_amount, net_amount,
-                    refunded_amount, effective_amount, {ordered_at} AS ordered_at
-             FROM orders FINAL
-             WHERE project_id = ? AND order_id = ?
-             LIMIT 1",
-            ordered_at = kst_iso("ordered_at"),
+            "SELECT order_id, toString(o.1) AS source, toString(o.2) AS status,
+                    toString(o.3) AS currency, o.4 AS gross_amount, o.5 AS net_amount,
+                    o.6 AS refunded_amount, o.7 AS effective_amount,
+                    {ordered_at} AS ordered_at,
+                    toUnixTimestamp64Milli(o.8) AS ordered_at_ms
+             FROM (
+                 SELECT order_id,
+                        argMax(tuple(source, status, currency, gross_amount, net_amount,
+                                     refunded_amount, effective_amount, ordered_at), version) AS o
+                 FROM orders
+                 WHERE project_id = ? AND order_id = ?
+                 GROUP BY order_id
+             )",
+            ordered_at = kst_iso("o.8"),
         ))
         .bind(scope.project_id())
         .bind(order_id)
@@ -57,18 +66,29 @@ pub async fn order_detail(
         return Ok(None);
     };
 
+    // 기여 결과도 argMax(computed_at)로 최신 행만 고르고 삭제 표시(t.6)를 뺀다.
+    // ordered_at 조건은 파티션(toYYYYMM(ordered_at))과 정렬키 범위를 좁힌다.
     let shares: Vec<ShareRaw> = client
         .query(&format!(
-            "SELECT toString(model) AS model, touch_index, toString(channel) AS channel,
-                    utm_campaign, {touch_ts} AS touch_ts, amount, is_assist
-             FROM attributed_revenue FINAL
-             WHERE project_id = ? AND order_id = ? AND lookback_days = ? AND is_deleted = 0
+            "SELECT model, touch_index, toString(t.1) AS channel, t.2 AS utm_campaign,
+                    {touch_ts} AS touch_ts, t.4 AS amount, t.5 AS is_assist
+             FROM (
+                 SELECT toString(model) AS model, touch_index,
+                        argMax(tuple(channel, utm_campaign, touch_ts, amount, is_assist, is_deleted),
+                               computed_at) AS t
+                 FROM attributed_revenue
+                 WHERE project_id = ? AND order_id = ? AND lookback_days = ?
+                   AND ordered_at = fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+                 GROUP BY model, touch_index
+                 HAVING t.6 = 0
+             )
              ORDER BY model, touch_index",
-            touch_ts = kst_iso("touch_ts"),
+            touch_ts = kst_iso("t.3"),
         ))
         .bind(scope.project_id())
         .bind(order_id)
         .bind(lookback_days)
+        .bind(o.ordered_at_ms)
         .fetch_all()
         .await?;
 

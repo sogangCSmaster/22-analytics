@@ -1,7 +1,7 @@
-//! 이벤트 이름별 집계와 속성 값 분포. 이벤트 이름·속성은 롤업에 없으므로 `events`를 직접 읽는다
-//! (정렬키 `(project_id, toDate(ts, 'Asia/Seoul'), event_name, ...)`라 스캔 범위가 작다).
+//! 이벤트 이름별 집계(`daily_events` 롤업)와 속성 값 분포. 속성은 롤업에 없으므로 `events`를 직접
+//! 읽는다 (정렬키 `(project_id, toDate(ts, 'Asia/Seoul'), event_name, ...)`라 스캔 범위가 작다).
 
-use super::{DateRange, TZ, clamp_limit};
+use super::{DateRange, TZ, UNIQ, UNIQ_MERGE, clamp_limit};
 use crate::{Client, ProjectScope};
 use analytics_core::dto::reports::{EventCountRow, PropertyValueRow};
 use clickhouse::Row;
@@ -30,11 +30,11 @@ pub async fn events(
 ) -> anyhow::Result<Vec<EventCountRow>> {
     let rows: Vec<NameRow> = client
         .query(&format!(
-            "SELECT toString(event_name) AS event_name,
-                    count()              AS count,
-                    uniq(visitor_id)     AS visitors
-             FROM events
-             WHERE project_id = ? AND toDate(ts, '{TZ}') BETWEEN toDate(?) AND toDate(?)
+            "SELECT toString(event_name)    AS event_name,
+                    sum(events)             AS count,
+                    {UNIQ_MERGE}(visitors)  AS visitors
+             FROM daily_events
+             WHERE project_id = ? AND day BETWEEN toDate(?) AND toDate(?)
              GROUP BY event_name
              ORDER BY count DESC, event_name ASC
              LIMIT ?"
@@ -68,7 +68,7 @@ pub async fn event_properties(
         .query(&format!(
             "SELECT `props.value`[indexOf(`props.key`, ?)] AS value,
                     count()                                AS count,
-                    uniq(visitor_id)                       AS visitors
+                    {UNIQ}(visitor_id)                     AS visitors
              FROM events
              WHERE project_id = ? AND toDate(ts, '{TZ}') BETWEEN toDate(?) AND toDate(?)
                AND event_name = ? AND has(`props.key`, ?)

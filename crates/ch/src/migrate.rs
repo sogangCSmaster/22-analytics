@@ -4,10 +4,17 @@ use crate::ChConfig;
 use anyhow::Context;
 
 /// (버전, SQL). 새 파일을 추가하면 여기에도 추가한다. 적용된 파일은 수정하지 않는다.
-pub const MIGRATIONS: &[(&str, &str)] = &[(
-    "0001_init",
-    include_str!("../../../migrations/clickhouse/0001_init.sql"),
-)];
+/// 버전 순으로 정렬해 둔다 (0002·0003은 다른 작업이 예약).
+pub const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0001_init",
+        include_str!("../../../migrations/clickhouse/0001_init.sql"),
+    ),
+    (
+        "0004_rollups",
+        include_str!("../../../migrations/clickhouse/0004_rollups.sql"),
+    ),
+];
 
 pub async fn run(cfg: &ChConfig) -> anyhow::Result<Vec<&'static str>> {
     let server = cfg.server_client();
@@ -17,7 +24,8 @@ pub async fn run(cfg: &ChConfig) -> anyhow::Result<Vec<&'static str>> {
         .await
         .context("데이터베이스 생성 실패")?;
 
-    let client = cfg.client();
+    // 백필(INSERT ... SELECT)은 리포트용 실행 시간 제한을 받지 않는다.
+    let client = cfg.client().with_setting("max_execution_time", "0");
     client
         .query(
             "CREATE TABLE IF NOT EXISTS schema_migrations \
@@ -79,5 +87,34 @@ mod tests {
         let stmts = statements(MIGRATIONS[0].1);
         assert!(stmts.len() >= 10);
         assert!(stmts.iter().all(|s| s.starts_with("CREATE")));
+    }
+
+    #[test]
+    fn migrations_are_sorted_and_unique() {
+        let versions: Vec<&str> = MIGRATIONS.iter().map(|(v, _)| *v).collect();
+        let mut sorted = versions.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(versions, sorted);
+    }
+
+    #[test]
+    fn splits_rollups_migration() {
+        let (_, sql) = MIGRATIONS
+            .iter()
+            .find(|(v, _)| *v == "0004_rollups")
+            .expect("0004");
+        let stmts = statements(sql);
+        assert!(
+            stmts
+                .iter()
+                .any(|s| s.starts_with("INSERT INTO daily_channel"))
+        );
+        assert!(
+            stmts
+                .iter()
+                .any(|s| s == "DROP TABLE IF EXISTS daily_stats")
+        );
+        assert!(stmts.iter().all(|s| !s.contains("??")));
     }
 }

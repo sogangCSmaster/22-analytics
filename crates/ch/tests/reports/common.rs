@@ -95,6 +95,11 @@ impl Ev {
         self.0.url = format!("https://shop.test{path}");
         self
     }
+    pub fn host(mut self, host: &str) -> Self {
+        self.0.host = host.into();
+        self.0.url = format!("https://{host}{}", self.0.path);
+        self
+    }
     pub fn prop(mut self, k: &str, v: &str) -> Self {
         self.0.props.push((k.into(), v.into()));
         self

@@ -3,19 +3,26 @@
 //! 채널은 last_click 결과의 귀속 접점(`is_assist = 0`, 미귀속 포함)이다. 기여 연산 전이거나
 //! 취소되어 삭제 표시된 주문은 `None`.
 
-use super::{DateRange, TZ, clamp_limit, kst_iso};
+use super::{DateRange, FINAL_SETTINGS, TZ, clamp_limit, kst_iso};
 use crate::{Client, ProjectScope};
 use analytics_core::dto::reports::{RecentOrderRow, RecentOrdersReport};
 use clickhouse::Row;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Row, Deserialize)]
-struct Raw {
+struct OrderRaw {
     order_id: String,
-    ordered_at: String,
+    ordered_kst: String,
+    ordered_at_ms: i64,
     effective_amount: i64,
     status: String,
-    channel: Option<String>,
+}
+
+#[derive(Row, Deserialize)]
+struct ChannelRaw {
+    order_id: String,
+    channel: String,
 }
 
 #[derive(Row, Deserialize)]
@@ -23,6 +30,8 @@ struct Count {
     total: u64,
 }
 
+/// 전체 건수와 주문 페이지를 동시에 읽고, 그 페이지 주문의 last_click 채널만 따로 찾는다
+/// (기간 전체 기여 결과를 조인하지 않는다).
 pub async fn recent_orders(
     client: &Client,
     scope: ProjectScope,
@@ -31,65 +40,87 @@ pub async fn recent_orders(
     limit: u32,
     offset: u64,
 ) -> anyhow::Result<RecentOrdersReport> {
-    let total: Count = client
-        .query(&format!(
-            "SELECT count() AS total
-             FROM orders FINAL
-             WHERE project_id = ? AND toDate(ordered_at, '{TZ}') BETWEEN toDate(?) AND toDate(?)"
-        ))
-        .bind(scope.project_id())
-        .bind(range.from_ymd())
-        .bind(range.to_ymd())
-        .fetch_one()
-        .await?;
-
-    let rows: Vec<Raw> = client
-        .query(&format!(
-            "SELECT o.order_id AS order_id, {ordered_at} AS ordered_at,
-                    o.effective_amount AS effective_amount, o.status AS status,
-                    a.channel AS channel
-             FROM (
-                 SELECT order_id, ordered_at, effective_amount, toString(status) AS status
+    let total = async {
+        client
+            .query(&format!(
+                "SELECT count() AS total
+                 FROM orders FINAL
+                 WHERE project_id = ? AND toDate(ordered_at, '{TZ}') BETWEEN toDate(?) AND toDate(?)
+                 {FINAL_SETTINGS}"
+            ))
+            .bind(scope.project_id())
+            .bind(range.from_ymd())
+            .bind(range.to_ymd())
+            .fetch_one::<Count>()
+            .await
+    };
+    let page = async {
+        client
+            .query(&format!(
+                "SELECT order_id, {ordered_kst} AS ordered_kst,
+                        toUnixTimestamp64Milli(ordered_at) AS ordered_at_ms,
+                        effective_amount, toString(status) AS status
                  FROM orders FINAL
                  WHERE project_id = ? AND toDate(ordered_at, '{TZ}') BETWEEN toDate(?) AND toDate(?)
                  ORDER BY ordered_at DESC, order_id ASC
                  LIMIT ? OFFSET ?
-             ) AS o
-             LEFT JOIN (
-                 SELECT order_id, argMax(toString(channel), touch_index) AS channel
-                 FROM attributed_revenue FINAL
-                 WHERE project_id = ? AND model = 'last_click' AND lookback_days = ?
-                   AND is_deleted = 0 AND is_assist = 0
-                   AND toDate(ordered_at, '{TZ}') BETWEEN toDate(?) AND toDate(?)
-                 GROUP BY order_id
-             ) AS a ON a.order_id = o.order_id
-             ORDER BY o.ordered_at DESC, o.order_id ASC
-             SETTINGS join_use_nulls = 1",
-            ordered_at = kst_iso("o.ordered_at"),
-        ))
-        .bind(scope.project_id())
-        .bind(range.from_ymd())
-        .bind(range.to_ymd())
-        .bind(clamp_limit(limit))
-        .bind(offset)
-        .bind(scope.project_id())
-        .bind(lookback_days)
-        .bind(range.from_ymd())
-        .bind(range.to_ymd())
-        .fetch_all()
-        .await?;
+                 {FINAL_SETTINGS}",
+                ordered_kst = kst_iso("ordered_at"),
+            ))
+            .bind(scope.project_id())
+            .bind(range.from_ymd())
+            .bind(range.to_ymd())
+            .bind(clamp_limit(limit))
+            .bind(offset)
+            .fetch_all::<OrderRaw>()
+            .await
+    };
+    let (total, orders) = tokio::try_join!(total, page)?;
+
+    let mut channels: HashMap<String, String> = HashMap::new();
+    if let (Some(min_ms), Some(max_ms)) = (
+        orders.iter().map(|o| o.ordered_at_ms).min(),
+        orders.iter().map(|o| o.ordered_at_ms).max(),
+    ) {
+        let ids: Vec<&str> = orders.iter().map(|o| o.order_id.as_str()).collect();
+        // (주문, 접점)마다 최신 결과를 고른 뒤 삭제·어시스트를 거른다 (거른 뒤 고르면 옛 행이 살아난다).
+        let rows: Vec<ChannelRaw> = client
+            .query(
+                "SELECT order_id, argMax(toString(t.1), touch_index) AS channel
+                 FROM (
+                     SELECT order_id, touch_index,
+                            argMax(tuple(channel, is_assist, is_deleted), computed_at) AS t
+                     FROM attributed_revenue
+                     WHERE project_id = ? AND model = 'last_click' AND lookback_days = ?
+                       AND order_id IN ?
+                       AND ordered_at BETWEEN fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+                                          AND fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+                     GROUP BY order_id, touch_index
+                     HAVING t.2 = 0 AND t.3 = 0
+                 )
+                 GROUP BY order_id",
+            )
+            .bind(scope.project_id())
+            .bind(lookback_days)
+            .bind(&ids)
+            .bind(min_ms)
+            .bind(max_ms)
+            .fetch_all()
+            .await?;
+        channels = rows.into_iter().map(|r| (r.order_id, r.channel)).collect();
+    }
 
     Ok(RecentOrdersReport {
         range: range.to_dto(),
         total: total.total,
-        rows: rows
+        rows: orders
             .into_iter()
-            .map(|r| RecentOrderRow {
-                order_id: r.order_id,
-                ordered_at: r.ordered_at,
-                effective_amount: r.effective_amount,
-                status: r.status,
-                last_click_channel: r.channel,
+            .map(|o| RecentOrderRow {
+                last_click_channel: channels.remove(&o.order_id),
+                order_id: o.order_id,
+                ordered_at: o.ordered_kst,
+                effective_amount: o.effective_amount,
+                status: o.status,
             })
             .collect(),
     })

@@ -654,3 +654,138 @@ async fn recent_orders_empty_and_tenant() {
         .unwrap();
     assert_eq!(q.total, 5);
 }
+
+/// 재연산으로 귀속 접점이 바뀐 주문: 최신 결과의 `is_assist`로 채널을 고른다.
+/// 페이지 밖 주문의 기여 결과는 채널 조회에 영향을 주지 않는다.
+#[tokio::test]
+async fn recent_orders_channel_follows_latest_computation() {
+    let db = TestDb::new().await;
+    let a = attr(P, "ORD-R", "2026-11-21 12:00:00", 7).computed("2026-11-21 12:05:00");
+    let naver = Some("2026-11-21 11:00:00");
+    let meta = Some("2026-11-21 11:30:00");
+    insert_attr(
+        &db.ch,
+        a.model(
+            "last_click",
+            &[
+                (1, "naver_sa", naver, 0, true),
+                (2, "meta", meta, 50_000, false),
+            ],
+        ),
+    )
+    .await;
+    let a2 = attr(P, "ORD-R", "2026-11-21 12:00:00", 7).computed("2026-11-22 04:00:00");
+    insert_attr(
+        &db.ch,
+        a2.model(
+            "last_click",
+            &[
+                (1, "naver_sa", naver, 50_000, false),
+                (2, "meta", meta, 0, true),
+            ],
+        ),
+    )
+    .await;
+    insert_attr(
+        &db.ch,
+        attr(P, "ORD-OTHER", "2026-11-20 09:00:00", 7).single(
+            1,
+            "kakao",
+            Some("2026-11-20 08:00:00"),
+            1_000,
+        ),
+    )
+    .await;
+    insert_orders(
+        &db.ch,
+        vec![
+            order(P, "ORD-R", "CONFIRMED", 50_000, 0, "2026-11-21 12:00:00", 1),
+            order(
+                P,
+                "ORD-OTHER",
+                "CONFIRMED",
+                1_000,
+                0,
+                "2026-11-20 09:00:00",
+                1,
+            ),
+        ],
+    )
+    .await;
+    let r = reports::recent_orders(&db.ch, scope(P), range(), 7, 1, 0)
+        .await
+        .unwrap();
+    assert_eq!(r.total, 2);
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0].order_id, "ORD-R");
+    assert_eq!(r.rows[0].last_click_channel.as_deref(), Some("naver_sa"));
+    let r = reports::recent_orders(&db.ch, scope(P), range(), 7, 1, 1)
+        .await
+        .unwrap();
+    assert_eq!(r.rows[0].order_id, "ORD-OTHER");
+    assert_eq!(r.rows[0].last_click_channel.as_deref(), Some("kakao"));
+}
+
+/// 주문 행이 여러 버전으로 쌓여도 상세는 최신 버전을 보인다.
+#[tokio::test]
+async fn order_detail_uses_latest_order_version() {
+    let db = TestDb::new().await;
+    insert_orders(
+        &db.ch,
+        vec![order(
+            P,
+            "ORD-V",
+            "CONFIRMED",
+            40_000,
+            0,
+            "2026-11-21 10:00:00",
+            1,
+        )],
+    )
+    .await;
+    insert_orders(
+        &db.ch,
+        vec![order(
+            P,
+            "ORD-V",
+            "PARTIALLY_REFUNDED",
+            40_000,
+            15_000,
+            "2026-11-21 10:00:00",
+            3,
+        )],
+    )
+    .await;
+    insert_orders(
+        &db.ch,
+        vec![order(
+            P,
+            "ORD-V",
+            "CONFIRMED",
+            40_000,
+            0,
+            "2026-11-21 10:00:00",
+            2,
+        )],
+    )
+    .await;
+    insert_attr(
+        &db.ch,
+        attr(P, "ORD-V", "2026-11-21 10:00:00", 7).single(
+            1,
+            "meta",
+            Some("2026-11-21 09:00:00"),
+            25_000,
+        ),
+    )
+    .await;
+    let d = reports::order_detail(&db.ch, scope(P), "ORD-V", 7)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(d.order.status, "PARTIALLY_REFUNDED");
+    assert_eq!(d.order.refunded_amount, 15_000);
+    assert_eq!(d.order.effective_amount, 25_000);
+    assert_eq!(d.shares.len(), 5);
+    assert_eq!(d.touches.len(), 1);
+}
