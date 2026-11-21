@@ -6,7 +6,7 @@
 use argon2::Argon2;
 use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
-use sqlx::PgPool;
+use sqlx::{PgExecutor, PgPool};
 use std::sync::LazyLock;
 use time::OffsetDateTime;
 
@@ -64,7 +64,7 @@ pub fn dummy_verify(password: &str) {
 }
 
 /// 이메일은 호출자가 정규화(trim, 소문자)해서 넘긴다.
-pub async fn create(pool: &PgPool, u: &NewUser) -> Result<User, CreateUserError> {
+pub async fn create<'e>(ex: impl PgExecutor<'e>, u: &NewUser) -> Result<User, CreateUserError> {
     let res = sqlx::query_as::<_, User>(
         "INSERT INTO users (email, password_hash, name, is_super_admin) VALUES ($1, $2, $3, $4) \
          RETURNING id, email, name, is_super_admin, created_at, last_login_at",
@@ -73,7 +73,7 @@ pub async fn create(pool: &PgPool, u: &NewUser) -> Result<User, CreateUserError>
     .bind(&u.password_hash)
     .bind(&u.name)
     .bind(u.is_super_admin)
-    .fetch_one(pool)
+    .fetch_one(ex)
     .await;
     match res {
         Ok(user) => Ok(user),
@@ -97,12 +97,12 @@ pub async fn credentials_by_email(
     .await?)
 }
 
-pub async fn by_id(pool: &PgPool, id: i64) -> anyhow::Result<Option<User>> {
+pub async fn by_id<'e>(ex: impl PgExecutor<'e>, id: i64) -> anyhow::Result<Option<User>> {
     Ok(sqlx::query_as::<_, User>(
         "SELECT id, email, name, is_super_admin, created_at, last_login_at FROM users WHERE id = $1",
     )
     .bind(id)
-    .fetch_optional(pool)
+    .fetch_optional(ex)
     .await?)
 }
 
@@ -141,10 +141,10 @@ pub async fn promote_super_admin(
     Ok(())
 }
 
-pub async fn touch_login(pool: &PgPool, id: i64) -> anyhow::Result<()> {
+pub async fn touch_login<'e>(ex: impl PgExecutor<'e>, id: i64) -> anyhow::Result<()> {
     sqlx::query("UPDATE users SET last_login_at = now() WHERE id = $1")
         .bind(id)
-        .execute(pool)
+        .execute(ex)
         .await?;
     Ok(())
 }

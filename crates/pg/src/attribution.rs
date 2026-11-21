@@ -1,6 +1,6 @@
 //! 프로젝트 기여 설정 (`attribution_settings`).
 
-use sqlx::PgPool;
+use sqlx::{PgExecutor, PgPool};
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct AttributionSettings {
@@ -37,8 +37,8 @@ pub async fn get_or_default(pool: &PgPool, project_id: i32) -> anyhow::Result<At
     .unwrap_or_default())
 }
 
-pub async fn put(
-    pool: &PgPool,
+pub async fn put<'e>(
+    ex: impl PgExecutor<'e>,
     project_id: i32,
     s: &AttributionSettings,
 ) -> anyhow::Result<AttributionSettings> {
@@ -58,6 +58,6 @@ pub async fn put(
     .bind(s.half_life_hours)
     .bind(s.include_organic)
     .bind(s.include_referral)
-    .fetch_one(pool)
+    .fetch_one(ex)
     .await?)
 }

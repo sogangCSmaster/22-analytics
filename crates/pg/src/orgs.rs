@@ -31,13 +31,13 @@ pub struct Member {
     pub role: String,
 }
 
-pub async fn create(pool: &PgPool, name: &str, memo: &str) -> anyhow::Result<Org> {
+pub async fn create<'e>(ex: impl PgExecutor<'e>, name: &str, memo: &str) -> anyhow::Result<Org> {
     Ok(sqlx::query_as::<_, Org>(
         "INSERT INTO organizations (name, memo) VALUES ($1, $2) RETURNING id, name, memo, created_at",
     )
     .bind(name)
     .bind(memo)
-    .fetch_one(pool)
+    .fetch_one(ex)
     .await?)
 }
 
@@ -51,8 +51,8 @@ pub async fn get(pool: &PgPool, id: i64) -> anyhow::Result<Option<Org>> {
 }
 
 /// `None` 필드는 그대로 둔다. 광고주가 없으면 `None`.
-pub async fn update(
-    pool: &PgPool,
+pub async fn update<'e>(
+    ex: impl PgExecutor<'e>,
     id: i64,
     name: Option<&str>,
     memo: Option<&str>,
@@ -64,7 +64,7 @@ pub async fn update(
     .bind(id)
     .bind(name)
     .bind(memo)
-    .fetch_optional(pool)
+    .fetch_optional(ex)
     .await?)
 }
 

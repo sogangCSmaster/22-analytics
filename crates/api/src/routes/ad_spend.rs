@@ -114,13 +114,14 @@ pub async fn upload(
         }
     })?;
     let rows = parse_csv(&body)?;
-    analytics_pg::ad_spend::upsert(&state.pg, access.id(), &rows).await?;
+    let mut tx = state.pg.begin().await?;
+    analytics_pg::ad_spend::upsert(&mut *tx, access.id(), &rows).await?;
     let (from, to) = (
         rows.iter().map(|r| r.day).min(),
         rows.iter().map(|r| r.day).max(),
     );
     audit(
-        &state.pg,
+        &mut *tx,
         Some(access.project.org_id),
         access.user.id(),
         "ad_spend.upload",
@@ -128,6 +129,7 @@ pub async fn upload(
         json!({ "rows": rows.len(), "from": from.map(fmt_day), "to": to.map(fmt_day) }),
     )
     .await?;
+    tx.commit().await?;
     Ok(Json(AdSpendUploadResponse { rows: rows.len() }))
 }
 

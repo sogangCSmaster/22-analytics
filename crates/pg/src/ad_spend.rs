@@ -1,6 +1,6 @@
 //! 광고비 (`ad_spend`). CSV 업로드로 채우고 ROAS 계산에 쓴다.
 
-use sqlx::PgPool;
+use sqlx::{Acquire, PgPool, Postgres};
 use time::Date;
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
@@ -16,8 +16,13 @@ const CHUNK: usize = 5_000;
 
 /// (day, channel, campaign) 기준 upsert. 한 트랜잭션이라 전부 반영되거나 전부 실패한다.
 /// 호출자는 같은 키가 중복되지 않게 넘겨야 한다 (Postgres는 한 문장에서 같은 행을 두 번 갱신하지 못한다).
-pub async fn upsert(pool: &PgPool, project_id: i32, rows: &[Spend]) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+pub async fn upsert<'c>(
+    conn: impl Acquire<'c, Database = Postgres>,
+    project_id: i32,
+    rows: &[Spend],
+) -> anyhow::Result<()> {
+    // 호출자의 트랜잭션 안이면 savepoint가 된다.
+    let mut tx = conn.begin().await?;
     for chunk in rows.chunks(CHUNK) {
         let days: Vec<Date> = chunk.iter().map(|r| r.day).collect();
         let channels: Vec<&str> = chunk.iter().map(|r| r.channel.as_str()).collect();

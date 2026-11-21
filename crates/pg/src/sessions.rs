@@ -6,7 +6,7 @@
 
 use crate::users::User;
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgExecutor, PgPool};
 
 /// 세션 유효 기간 (일)
 pub const TTL_DAYS: i64 = 14;
@@ -32,7 +32,7 @@ pub fn token_hash(token: &str) -> String {
 }
 
 /// 세션을 만들고 쿠키에 넣을 토큰을 돌려준다.
-pub async fn create(pool: &PgPool, user_id: i64) -> anyhow::Result<String> {
+pub async fn create<'e>(ex: impl PgExecutor<'e>, user_id: i64) -> anyhow::Result<String> {
     let token = new_token();
     sqlx::query(
         "INSERT INTO sessions (id, user_id, expires_at) \
@@ -41,7 +41,7 @@ pub async fn create(pool: &PgPool, user_id: i64) -> anyhow::Result<String> {
     .bind(token_hash(&token))
     .bind(user_id)
     .bind(TTL_DAYS as i32)
-    .execute(pool)
+    .execute(ex)
     .await?;
     Ok(token)
 }
@@ -108,13 +108,13 @@ pub async fn lookup_refreshing(pool: &PgPool, token: &str) -> anyhow::Result<Opt
 }
 
 /// 세션 삭제. 없어도 성공 (멱등).
-pub async fn delete(pool: &PgPool, token: &str) -> anyhow::Result<()> {
+pub async fn delete<'e>(ex: impl PgExecutor<'e>, token: &str) -> anyhow::Result<()> {
     if !is_well_formed(token) {
         return Ok(());
     }
     sqlx::query("DELETE FROM sessions WHERE id = $1")
         .bind(token_hash(token))
-        .execute(pool)
+        .execute(ex)
         .await?;
     Ok(())
 }

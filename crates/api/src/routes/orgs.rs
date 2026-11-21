@@ -47,9 +47,10 @@ pub async fn create(
     user.require_super_admin()?;
     let name = validate::name("name", &req.name, validate::MAX_NAME_CHARS)?;
     let memo = validate::memo(&req.memo)?;
-    let org = analytics_pg::orgs::create(&state.pg, &name, &memo).await?;
+    let mut tx = state.pg.begin().await?;
+    let org = analytics_pg::orgs::create(&mut *tx, &name, &memo).await?;
     audit(
-        &state.pg,
+        &mut *tx,
         Some(org.id),
         user.id(),
         "org.create",
@@ -57,6 +58,7 @@ pub async fn create(
         json!({ "name": org.name }),
     )
     .await?;
+    tx.commit().await?;
     Ok((StatusCode::CREATED, Json(org_dto(&org, Role::Admin))))
 }
 
@@ -76,11 +78,12 @@ pub async fn update(
         .map(|n| validate::name("name", n, validate::MAX_NAME_CHARS))
         .transpose()?;
     let memo = req.memo.as_deref().map(validate::memo).transpose()?;
-    let org = analytics_pg::orgs::update(&state.pg, access.id(), name.as_deref(), memo.as_deref())
+    let mut tx = state.pg.begin().await?;
+    let org = analytics_pg::orgs::update(&mut *tx, access.id(), name.as_deref(), memo.as_deref())
         .await?
         .ok_or_else(ApiError::not_found)?;
     audit(
-        &state.pg,
+        &mut *tx,
         Some(org.id),
         access.user.id(),
         "org.update",
@@ -88,6 +91,7 @@ pub async fn update(
         json!({ "name": name, "memo_changed": memo.is_some() }),
     )
     .await?;
+    tx.commit().await?;
     Ok(Json(org_dto(&org, access.role)))
 }
 

@@ -62,17 +62,18 @@ pub async fn login(
     };
     reservation.succeed();
 
+    let mut tx = state.pg.begin().await?;
     // 세션 고정 방지: 요청에 실려 온 기존 세션은 지우고 항상 새 토큰을 발급한다.
     if let Some(old) = session_token(&headers, state.config.cookie_secure) {
-        analytics_pg::sessions::delete(&state.pg, &old).await?;
+        analytics_pg::sessions::delete(&mut *tx, &old).await?;
     }
-    let token = analytics_pg::sessions::create(&state.pg, user_id).await?;
-    analytics_pg::users::touch_login(&state.pg, user_id).await?;
-    let user = analytics_pg::users::by_id(&state.pg, user_id)
+    let token = analytics_pg::sessions::create(&mut *tx, user_id).await?;
+    analytics_pg::users::touch_login(&mut *tx, user_id).await?;
+    let user = analytics_pg::users::by_id(&mut *tx, user_id)
         .await?
         .ok_or_else(ApiError::invalid_credentials)?;
     audit(
-        &state.pg,
+        &mut *tx,
         None,
         user_id,
         "auth.login",
@@ -80,6 +81,7 @@ pub async fn login(
         client.audit_fields(),
     )
     .await?;
+    tx.commit().await?;
 
     let me = me_response(&state, &AuthUser(user)).await?;
     let cookie = session_cookie(&token, state.config.cookie_secure);
@@ -94,9 +96,10 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
         None => None,
     };
     if let (Some(token), Some(user)) = (token, user) {
-        analytics_pg::sessions::delete(&state.pg, &token).await?;
+        let mut tx = state.pg.begin().await?;
+        analytics_pg::sessions::delete(&mut *tx, &token).await?;
         audit(
-            &state.pg,
+            &mut *tx,
             None,
             user.id,
             "auth.logout",
@@ -104,6 +107,7 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
             json!({}),
         )
         .await?;
+        tx.commit().await?;
     }
     let cookie = clear_session_cookie(state.config.cookie_secure);
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response())

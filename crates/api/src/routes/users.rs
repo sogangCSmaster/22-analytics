@@ -52,8 +52,9 @@ pub async fn create(
         tokio::task::spawn_blocking(move || analytics_pg::users::hash_password(&password))
             .await
             .map_err(|e| ApiError::internal(e.into()))??;
+    let mut tx = state.pg.begin().await?;
     let created = analytics_pg::users::create(
-        &state.pg,
+        &mut *tx,
         &NewUser {
             email,
             password_hash,
@@ -71,7 +72,7 @@ pub async fn create(
         CreateUserError::Other(e) => ApiError::internal(e),
     })?;
     audit(
-        &state.pg,
+        &mut *tx,
         None,
         user.id(),
         "user.create",
@@ -79,6 +80,7 @@ pub async fn create(
         json!({ "email": created.email, "is_super_admin": created.is_super_admin }),
     )
     .await?;
+    tx.commit().await?;
     Ok((StatusCode::CREATED, Json(user_dto(&created))))
 }
 
