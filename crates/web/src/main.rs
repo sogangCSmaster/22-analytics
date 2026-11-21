@@ -1,19 +1,24 @@
 //! 22-analytics 대시보드 (Dioxus Web SPA).
 //!
-//! Phase 0: 디자인 토큰, 기본 컴포넌트, 예시 데이터로 만든 화면.
-//! Phase 1부터 api 서버와 연결한다.
+//! - API: [`api`] (fetch, 쿠키 세션), 경로·쿼리는 [`logic::query`]
+//! - 상태: [`state::AppCtx`] (로그인 사용자, 기간·비교·선택 프로젝트는 localStorage에 저장)
+//! - 순수 로직은 [`logic`]에 두고 `cargo test -p analytics-web --no-default-features`로 검증한다.
 
+mod api;
 mod components;
 mod format;
 mod logic;
-mod mock;
 mod pages;
+mod platform;
+mod state;
 
 use dioxus::prelude::*;
 
-use components::shell::Shell;
+use components::shell::{AuthGate, Shell};
 use pages::{
-    gallery::Gallery, install::Install, not_found::NotFound, overview::Overview, revenue::Revenue,
+    acquisition::Acquisition, admin::Admin, events::Events, funnel::Funnel, gallery::Gallery,
+    home::Home, login::Login, not_found::NotFound, overview::Overview, page_report::Pages,
+    realtime::Realtime, revenue::Revenue, settings::Settings,
 };
 
 const TOKENS_CSS: Asset = asset!("/assets/tokens.css");
@@ -22,19 +27,84 @@ const PRETENDARD: &str = "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.
 
 #[derive(Routable, Clone, PartialEq, Debug)]
 #[rustfmt::skip]
+#[allow(clippy::enum_variant_names)]
 pub enum Route {
-    #[layout(Shell)]
+    #[route("/login?:next")]
+    Login { next: String },
+    #[layout(AuthGate)]
         #[route("/")]
-        Overview {},
-        #[route("/revenue")]
-        Revenue {},
-        #[route("/install")]
-        Install {},
-        #[route("/dev/components")]
-        Gallery {},
+        Home {},
+        #[layout(Shell)]
+            #[nest("/p/:pid")]
+                #[route("/")]
+                Overview { pid: i32 },
+                #[route("/realtime")]
+                Realtime { pid: i32 },
+                #[route("/acquisition")]
+                Acquisition { pid: i32 },
+                #[route("/pages")]
+                Pages { pid: i32 },
+                #[route("/events")]
+                Events { pid: i32 },
+                #[route("/funnel")]
+                Funnel { pid: i32 },
+                #[route("/revenue")]
+                Revenue { pid: i32 },
+                #[route("/settings?:tab")]
+                Settings { pid: i32, tab: String },
+            #[end_nest]
+            #[route("/admin")]
+            Admin {},
+            #[route("/dev/components")]
+            Gallery {},
+        #[end_layout]
     #[end_layout]
     #[route("/:..segments")]
     NotFound { segments: Vec<String> },
+}
+
+impl Route {
+    /// 현재 화면의 프로젝트 id (프로젝트 화면이 아니면 None)
+    pub fn pid(&self) -> Option<i32> {
+        match self {
+            Route::Overview { pid }
+            | Route::Realtime { pid }
+            | Route::Acquisition { pid }
+            | Route::Pages { pid }
+            | Route::Events { pid }
+            | Route::Funnel { pid }
+            | Route::Revenue { pid }
+            | Route::Settings { pid, .. } => Some(*pid),
+            _ => None,
+        }
+    }
+
+    /// 같은 화면을 다른 프로젝트로 (프로젝트 전환기)
+    pub fn with_pid(&self, pid: i32) -> Route {
+        match self {
+            Route::Realtime { .. } => Route::Realtime { pid },
+            Route::Acquisition { .. } => Route::Acquisition { pid },
+            Route::Pages { .. } => Route::Pages { pid },
+            Route::Events { .. } => Route::Events { pid },
+            Route::Funnel { .. } => Route::Funnel { pid },
+            Route::Revenue { .. } => Route::Revenue { pid },
+            Route::Settings { tab, .. } => Route::Settings { pid, tab: tab.clone() },
+            _ => Route::Overview { pid },
+        }
+    }
+
+    /// 기간 선택이 의미 있는 화면인지
+    pub fn uses_range(&self) -> bool {
+        matches!(
+            self,
+            Route::Overview { .. }
+                | Route::Acquisition { .. }
+                | Route::Pages { .. }
+                | Route::Events { .. }
+                | Route::Funnel { .. }
+                | Route::Revenue { .. }
+        )
+    }
 }
 
 fn main() {
@@ -43,11 +113,13 @@ fn main() {
 
 #[component]
 fn App() -> Element {
+    state::AppCtx::provide();
     rsx! {
         document::Title { "22 Analytics" }
         document::Link { rel: "stylesheet", href: PRETENDARD }
         document::Stylesheet { href: TOKENS_CSS }
         document::Stylesheet { href: MAIN_CSS }
         Router::<Route> {}
+        components::ui::ToastHost {}
     }
 }

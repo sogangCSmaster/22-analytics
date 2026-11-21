@@ -1,103 +1,313 @@
-//! 가벼운 SVG 차트. Phase 1에서 상호작용이 필요한 차트는 ECharts 래퍼로 바꾼다.
+//! 가벼운 SVG·HTML 차트 (외부 차트 라이브러리 없이 wasm 크기를 작게 유지).
+//!
+//! 좌표 계산은 [`crate::logic::chart_math`]. 마우스를 올리면 툴팁을 보여주는 감지 영역은 HTML로
+//! 겹쳐 놓아 SVG 좌표 변환 없이 동작한다. 모든 라벨은 텍스트 노드로만 그린다.
 
 use crate::format;
+use crate::logic::chart_math::{
+    Frame, area_path, axis_label, bars, hover_zones, label_step, line_path, ratio_pct, shares,
+    ticks, tooltip_anchor,
+};
 use dioxus::prelude::*;
 
-/// 면적 추이 차트.
-#[component]
-pub fn TrendChart(
-    values: Vec<i64>,
-    labels: Vec<String>,
-    #[props(default = 220)] height: u32,
-) -> Element {
-    const W: f64 = 800.0;
-    let h = height as f64;
-    let (pad_l, pad_r, pad_t, pad_b) = (48.0, 8.0, 12.0, 28.0);
-    let max = values.iter().copied().max().unwrap_or(1).max(1) as f64;
-    let nice_max = nice_ceil(max);
-    let n = values.len().max(2);
-    let x = |i: usize| pad_l + (W - pad_l - pad_r) * i as f64 / (n - 1) as f64;
-    let y = |v: i64| pad_t + (h - pad_t - pad_b) * (1.0 - v as f64 / nice_max);
+/// 차트 색 (primary 계열 중심, 상태색은 쓰지 않는다)
+pub const PALETTE: [&str; 6] = [
+    "var(--chart-1)",
+    "var(--chart-2)",
+    "var(--chart-3)",
+    "var(--chart-4)",
+    "var(--chart-5)",
+    "var(--chart-6)",
+];
 
-    let line: String = values
+#[derive(Clone, PartialEq, Debug)]
+pub struct Series {
+    pub name: String,
+    pub values: Vec<f64>,
+    /// 비교(이전 기간) 계열: 회색 점선
+    pub muted: bool,
+}
+
+fn fmt_value(v: f64, money: bool) -> String {
+    if money {
+        format::won(v.round() as i64)
+    } else if v.fract() != 0.0 {
+        format::trim_float(v, 2)
+    } else {
+        format::int(v as i64)
+    }
+}
+
+/// 추이 선 차트. 첫 계열이 주 계열, 나머지는 비교 계열(점선).
+#[component]
+pub fn LineChart(
+    series: Vec<Series>,
+    labels: Vec<String>,
+    /// 툴팁 제목 (라벨과 다를 때, 예: 날짜 전체 표기)
+    tooltip_titles: Option<Vec<String>>,
+    #[props(default = 240)] height: u32,
+    #[props(default)] money: bool,
+    #[props(default = "추이 차트".to_string())] aria_label: String,
+) -> Element {
+    let mut hover = use_signal(|| None::<usize>);
+    let f = Frame {
+        w: 800.0,
+        h: height as f64,
+        pad_l: 52.0,
+        pad_r: 12.0,
+        pad_t: 12.0,
+        pad_b: 30.0,
+    };
+    let n = series.first().map(|s| s.values.len()).unwrap_or(0);
+    let max = series
         .iter()
-        .enumerate()
-        .map(|(i, v)| format!("{}{:.1},{:.1}", if i == 0 { "M" } else { "L" }, x(i), y(*v)))
-        .collect();
-    let area = format!(
-        "{line}L{:.1},{:.1}L{:.1},{:.1}Z",
-        x(values.len().saturating_sub(1)),
-        h - pad_b,
-        x(0),
-        h - pad_b
-    );
-    let grid: Vec<(f64, String)> = (0..=4)
-        .map(|k| {
-            (
-                y((nice_max * k as f64 / 4.0) as i64),
-                format::int((nice_max * k as f64 / 4.0) as i64),
-            )
-        })
-        .collect();
-    let step = (labels.len() / 7).max(1);
+        .flat_map(|s| s.values.iter().copied())
+        .filter(|v| v.is_finite())
+        .fold(0.0f64, f64::max);
+    let grid = ticks(max, 4);
+    let top = *grid.last().unwrap_or(&1.0);
+    let step = label_step(n, 7);
+    let zones = hover_zones(&f, n);
+    let titles = tooltip_titles.unwrap_or_else(|| labels.clone());
+    let main_values = series.first().map(|s| s.values.clone()).unwrap_or_default();
+    let area = area_path(&main_values, &f, top);
+    let px = move |x: f64| x / f.w * 100.0;
+    let hovered = hover().filter(|i| *i < n);
 
     rsx! {
-        div { class: "chart",
-            svg { view_box: "0 0 {W} {h}", role: "img",
-                defs {
-                    linearGradient { id: "area-fill", x1: "0", y1: "0", x2: "0", y2: "1",
-                        stop { offset: "0%", stop_color: "var(--chart-1)", stop_opacity: "0.18" }
-                        stop { offset: "100%", stop_color: "var(--chart-1)", stop_opacity: "0" }
+        div { class: "chart line-chart",
+            div { class: "plot", style: "height: {height}px",
+                svg {
+                    view_box: "0 0 {f.w} {f.h}",
+                    role: "img",
+                    aria_label: "{aria_label}",
+                    preserve_aspect_ratio: "none",
+                    defs {
+                        linearGradient { id: "area-fill", x1: "0", y1: "0", x2: "0", y2: "1",
+                            stop { offset: "0%", stop_color: "var(--chart-1)", stop_opacity: "0.16" }
+                            stop { offset: "100%", stop_color: "var(--chart-1)", stop_opacity: "0" }
+                        }
+                    }
+                    for (k, t) in grid.iter().enumerate() {
+                        line { key: "g{k}", x1: "{f.pad_l}", x2: "{f.w - f.pad_r}", y1: "{f.y(*t, top)}", y2: "{f.y(*t, top)}", stroke: "var(--line)", stroke_width: "1", vector_effect: "non-scaling-stroke" }
+                    }
+                    if n > 0 {
+                        path { d: "{area}", fill: "url(#area-fill)" }
+                    }
+                    for (si, s) in series.iter().enumerate().rev() {
+                        path {
+                            key: "s{si}",
+                            d: "{line_path(&s.values, &f, top)}",
+                            fill: "none",
+                            stroke: if s.muted { "var(--text-disabled)" } else { "var(--chart-1)" },
+                            stroke_width: if s.muted { "2" } else { "2.5" },
+                            stroke_dasharray: if s.muted { "5 5" } else { "none" },
+                            stroke_linejoin: "round",
+                            stroke_linecap: "round",
+                            vector_effect: "non-scaling-stroke",
+                        }
+                    }
+                    if let Some(i) = hovered {
+                        line { x1: "{f.x(i, n)}", x2: "{f.x(i, n)}", y1: "{f.pad_t}", y2: "{f.bottom()}", stroke: "var(--text-weak)", stroke_width: "1", stroke_dasharray: "3 3", vector_effect: "non-scaling-stroke" }
                     }
                 }
-                for (gy, label) in grid {
-                    line { x1: "{pad_l}", x2: "{W - pad_r}", y1: "{gy}", y2: "{gy}", stroke: "var(--line)", stroke_width: "1" }
-                    text { class: "axis", x: "{pad_l - 8.0}", y: "{gy + 4.0}", text_anchor: "end", "{label}" }
+                div { class: "y-axis",
+                    for (k, t) in grid.iter().enumerate() {
+                        span { key: "y{k}", style: "top: {f.y(*t, top) / f.h * 100.0:.2}%", "{axis_label(*t)}" }
+                    }
                 }
-                path { d: "{area}", fill: "url(#area-fill)" }
-                path { d: "{line}", fill: "none", stroke: "var(--chart-1)", stroke_width: "2.5", stroke_linejoin: "round", stroke_linecap: "round" }
-                for (i, label) in labels.iter().enumerate().filter(|(i, _)| i % step == 0) {
-                    text { class: "axis", x: "{x(i)}", y: "{h - 6.0}", text_anchor: "middle", "{label}" }
+                div { class: "x-axis",
+                    for (i, l) in labels.iter().enumerate().filter(|(i, _)| i % step == 0) {
+                        span { key: "x{i}", style: "left: {px(f.x(i, n)):.2}%", "{l}" }
+                    }
+                }
+                if let Some(i) = hovered {
+                    for (si, s) in series.iter().enumerate() {
+                        if let Some(v) = s.values.get(i) {
+                            span {
+                                key: "d{si}",
+                                class: if s.muted { "dot muted" } else { "dot" },
+                                style: "left: {px(f.x(i, n)):.2}%; top: {f.y(*v, top) / f.h * 100.0:.2}%",
+                            }
+                        }
+                    }
+                }
+                div { class: "hover-layer",
+                    for (i, (left, width)) in zones.iter().enumerate() {
+                        div {
+                            key: "z{i}",
+                            class: "hover-zone",
+                            style: "left: {left:.3}%; width: {width:.3}%",
+                            onmouseenter: move |_| hover.set(Some(i)),
+                            onmouseleave: move |_| hover.set(None),
+                            onclick: move |_| hover.set(Some(i)),
+                        }
+                    }
+                }
+                if let Some(i) = hovered {
+                    Tooltip {
+                        x_pct: px(f.x(i, n)),
+                        title: titles.get(i).cloned().unwrap_or_default(),
+                        rows: series
+                            .iter()
+                            .map(|s| (s.name.clone(), s.values.get(i).map(|v| fmt_value(*v, money)).unwrap_or_else(|| "–".into()), s.muted))
+                            .collect::<Vec<_>>(),
+                    }
+                }
+            }
+            if series.len() > 1 {
+                div { class: "legend chart-legend",
+                    for (si, s) in series.iter().enumerate() {
+                        span { key: "l{si}",
+                            i { class: if s.muted { "swatch dashed" } else { "swatch" } }
+                            "{s.name}"
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-fn nice_ceil(v: f64) -> f64 {
-    if v <= 0.0 {
-        return 1.0;
+#[component]
+fn Tooltip(x_pct: f64, title: String, rows: Vec<(String, String, bool)>) -> Element {
+    let anchor = tooltip_anchor(x_pct);
+    rsx! {
+        div { class: "tooltip {anchor}", role: "status", style: "left: {x_pct:.2}%",
+            div { class: "tt-title", "{title}" }
+            for (k, (name, value, muted)) in rows.into_iter().enumerate() {
+                div { key: "{k}", class: "tt-row",
+                    i { class: if muted { "swatch dashed" } else { "swatch" } }
+                    span { class: "tt-name", "{name}" }
+                    span { class: "tt-value", "{value}" }
+                }
+            }
+        }
     }
-    let mag = 10f64.powf(v.log10().floor());
-    let n = v / mag;
-    let nice = if n <= 1.0 {
-        1.0
-    } else if n <= 2.0 {
-        2.0
-    } else if n <= 2.5 {
-        2.5
-    } else if n <= 5.0 {
-        5.0
-    } else {
-        10.0
-    };
-    nice * mag
 }
 
-/// 가로 막대 목록 (라벨 · 막대 · 값).
+/// 세로 막대 차트 (분당 페이지뷰 등). 마지막 막대를 강조할 수 있다.
 #[component]
-pub fn BarList(items: Vec<(String, i64)>, #[props(default)] money: bool) -> Element {
-    let max = items.iter().map(|(_, v)| *v).max().unwrap_or(1).max(1);
+pub fn ColumnChart(
+    values: Vec<f64>,
+    labels: Vec<String>,
+    #[props(default = 180)] height: u32,
+    #[props(default)] highlight_last: bool,
+    #[props(default = "값".to_string())] value_name: String,
+    #[props(default = "막대 차트".to_string())] aria_label: String,
+) -> Element {
+    let mut hover = use_signal(|| None::<usize>);
+    let f = Frame {
+        w: 800.0,
+        h: height as f64,
+        pad_l: 40.0,
+        pad_r: 4.0,
+        pad_t: 8.0,
+        pad_b: 26.0,
+    };
+    let n = values.len();
+    let max = values
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .fold(0.0f64, f64::max);
+    let grid = ticks(max, 3);
+    let top = *grid.last().unwrap_or(&1.0);
+    let geo = bars(&values, &f, top, 0.3);
+    let step = label_step(n, 6);
+    let center = |i: usize| (geo[i].0 + geo[i].2 / 2.0) / f.w * 100.0;
+    // 막대 가운데를 점으로 보는 프레임 (마우스 감지 구간 계산용)
+    let half_slot = if n > 0 { f.plot_w() / n as f64 / 2.0 } else { 0.0 };
+    let centers = Frame {
+        pad_l: f.pad_l + half_slot,
+        pad_r: f.pad_r + half_slot,
+        ..f
+    };
+    let hovered = hover().filter(|i| *i < n);
     rsx! {
-        div { class: "barlist",
-            for (label, v) in items {
-                div { class: "barlist-row", key: "{label}",
-                    div { class: "barlist-label", title: "{label}", "{label}" }
+        div { class: "chart column-chart",
+            div { class: "plot", style: "height: {height}px",
+                svg { view_box: "0 0 {f.w} {f.h}", role: "img", aria_label: "{aria_label}", preserve_aspect_ratio: "none",
+                    for (k, t) in grid.iter().enumerate() {
+                        line { key: "g{k}", x1: "{f.pad_l}", x2: "{f.w - f.pad_r}", y1: "{f.y(*t, top)}", y2: "{f.y(*t, top)}", stroke: "var(--line)", stroke_width: "1", vector_effect: "non-scaling-stroke" }
+                    }
+                    for (i, (x, y, w, h)) in geo.iter().enumerate() {
+                        rect {
+                            key: "b{i}",
+                            x: "{x}", y: "{y}", width: "{w}", height: "{h.max(0.0)}", rx: "2",
+                            fill: if hovered == Some(i) || (highlight_last && i + 1 == n) { "var(--chart-1)" } else { "var(--chart-2)" },
+                        }
+                    }
+                }
+                div { class: "y-axis",
+                    for (k, t) in grid.iter().enumerate() {
+                        span { key: "y{k}", style: "top: {f.y(*t, top) / f.h * 100.0:.2}%", "{axis_label(*t)}" }
+                    }
+                }
+                div { class: "x-axis",
+                    for (i, l) in labels.iter().enumerate().filter(|(i, _)| i % step == 0) {
+                        span { key: "x{i}", style: "left: {center(i):.2}%", "{l}" }
+                    }
+                }
+                div { class: "hover-layer",
+                    for (i, (left, width)) in hover_zones(&centers, n).into_iter().enumerate() {
+                        div {
+                            key: "z{i}",
+                            class: "hover-zone",
+                            style: "left: {left:.3}%; width: {width:.3}%",
+                            onmouseenter: move |_| hover.set(Some(i)),
+                            onmouseleave: move |_| hover.set(None),
+                            onclick: move |_| hover.set(Some(i)),
+                        }
+                    }
+                }
+                if let Some(i) = hovered {
+                    Tooltip {
+                        x_pct: center(i),
+                        title: labels.get(i).cloned().unwrap_or_default(),
+                        rows: vec![(value_name.clone(), fmt_value(values[i], false), false)],
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 가로 막대 목록 (라벨 · 막대 · 값 · 비중).
+#[component]
+pub fn BarList(
+    items: Vec<(String, i64)>,
+    #[props(default)] money: bool,
+    /// 오른쪽에 전체 대비 비중(%) 표시
+    #[props(default)]
+    show_share: bool,
+    onselect: Option<EventHandler<usize>>,
+) -> Element {
+    let max = items.iter().map(|(_, v)| *v).max().unwrap_or(0) as f64;
+    let total: i64 = items.iter().map(|(_, v)| (*v).max(0)).sum();
+    let clickable = onselect.is_some();
+    rsx! {
+        div { class: "barlist", role: "list",
+            for (i, (label, v)) in items.into_iter().enumerate() {
+                div {
+                    class: if clickable { "barlist-row clickable" } else { "barlist-row" },
+                    key: "{i}",
+                    role: "listitem",
+                    title: "{label}",
+                    onclick: move |_| {
+                        if let Some(h) = onselect {
+                            h.call(i)
+                        }
+                    },
+                    div { class: "barlist-label", "{label}" }
                     div { class: "barlist-track",
-                        div { class: "barlist-fill", style: "width: {v as f64 / max as f64 * 100.0:.1}%" }
+                        div { class: "barlist-fill", style: "width: {ratio_pct(v as f64, max):.1}%" }
                     }
                     div { class: "barlist-value",
                         if money { {format::won_short(v)} } else { {format::int(v)} }
+                        if show_share {
+                            span { class: "barlist-share", {format::pct(if total > 0 { v as f64 / total as f64 } else { 0.0 }, 1)} }
+                        }
                     }
                 }
             }
@@ -105,35 +315,105 @@ pub fn BarList(items: Vec<(String, i64)>, #[props(default)] money: bool) -> Elem
     }
 }
 
-/// 비율 막대: 하나의 합계를 여러 조각으로 나눠 보여준다.
+/// 비율 막대: 하나의 합계를 여러 조각으로 나눠 보여준다 (채널 구성 등).
 #[component]
-pub fn SplitBar(parts: Vec<(String, i64, String)>) -> Element {
-    let total: i64 = parts.iter().map(|(_, v, _)| *v).sum::<i64>().max(1);
-    rsx! {
-        div { class: "split-bar",
-            for (label, v, color) in parts.iter().cloned() {
-                div { key: "{label}", title: "{label}", style: "flex: {v as f64 / total as f64}; background: {color};" }
-            }
+pub fn ShareBar(parts: Vec<(String, i64)>, #[props(default)] money: bool) -> Element {
+    let mut hover = use_signal(|| None::<usize>);
+    let pcts = shares(&parts.iter().map(|p| p.1).collect::<Vec<_>>());
+    let fmt = move |v: i64| {
+        if money {
+            format::won_short(v)
+        } else {
+            format::int(v)
         }
-        div { class: "legend", style: "margin-top: 12px;",
-            for (label, v, color) in parts {
-                span { key: "{label}",
-                    i { style: "background: {color};" }
-                    "{label} {format::won_short(v)}"
+    };
+    rsx! {
+        div { class: "share-wrap",
+            div { class: "split-bar", role: "img", aria_label: "구성 비율",
+                for (i, ((label, v), p)) in parts.iter().zip(pcts.iter()).enumerate() {
+                    if *p > 0.0 {
+                        div {
+                            key: "{i}",
+                            class: if hover() == Some(i) { "seg on" } else { "seg" },
+                            title: "{label} {fmt(*v)} ({format::trim_float(*p, 1)}%)",
+                            style: "flex: {p}; background: {PALETTE[i % PALETTE.len()]};",
+                            onmouseenter: move |_| hover.set(Some(i)),
+                            onmouseleave: move |_| hover.set(None),
+                        }
+                    }
+                }
+            }
+            div { class: "legend", style: "margin-top: 12px;",
+                for (i, ((label, v), p)) in parts.iter().zip(pcts.iter()).enumerate() {
+                    span {
+                        key: "{i}",
+                        class: if hover() == Some(i) { "on" } else { "" },
+                        onmouseenter: move |_| hover.set(Some(i)),
+                        onmouseleave: move |_| hover.set(None),
+                        i { style: "background: {PALETTE[i % PALETTE.len()]};" }
+                        "{label} "
+                        b { "{format::trim_float(*p, 1)}%" }
+                        if hover() == Some(i) {
+                            span { class: "muted", " · {fmt(*v)}" }
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::nice_ceil;
+/// 전자상거래 퍼널: 단계별 방문자 막대와 단계 사이 전환·이탈.
+/// steps: (이름, 방문자, 이전 단계 대비, 첫 단계 대비)
+#[component]
+pub fn FunnelChart(steps: Vec<(String, u64, f64, f64)>) -> Element {
+    let first = steps.first().map(|s| s.1).unwrap_or(0) as f64;
+    rsx! {
+        div { class: "funnel", role: "list",
+            for (i, (label, visitors, rate_prev, rate_first)) in steps.into_iter().enumerate() {
+                if i > 0 {
+                    div { key: "d{i}", class: "funnel-drop",
+                        span { class: "arrow", "↓" }
+                        "다음 단계로 {format::pct(rate_prev, 1)}"
+                        span { class: "muted", " · {format::pct((1.0 - rate_prev).max(0.0), 1)} 이탈" }
+                    }
+                }
+                div { key: "s{i}", class: "funnel-step", role: "listitem",
+                    div { class: "funnel-head",
+                        span { class: "funnel-idx", "{i + 1}" }
+                        span { class: "funnel-label", "{label}" }
+                        span { class: "funnel-value", "{format::count(visitors)}명" }
+                    }
+                    div { class: "funnel-track",
+                        div { class: "funnel-fill", style: "width: {ratio_pct(visitors as f64, first).max(if visitors > 0 { 0.8 } else { 0.0 }):.1}%" }
+                    }
+                    div { class: "funnel-rate", "첫 단계 대비 {format::pct(rate_first, 1)}" }
+                }
+            }
+        }
+    }
+}
 
-    #[test]
-    fn nice_ceiling() {
-        assert_eq!(nice_ceil(12_830.0), 20_000.0);
-        assert_eq!(nice_ceil(2_400.0), 2_500.0);
-        assert_eq!(nice_ceil(0.0), 1.0);
+/// 지표 카드 안의 작은 추이선.
+#[component]
+pub fn Sparkline(values: Vec<f64>) -> Element {
+    let f = Frame {
+        w: 80.0,
+        h: 28.0,
+        pad_l: 2.0,
+        pad_r: 2.0,
+        pad_t: 3.0,
+        pad_b: 3.0,
+    };
+    let max = values
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .fold(0.0f64, f64::max);
+    let top = if max > 0.0 { max } else { 1.0 };
+    rsx! {
+        svg { class: "sparkline", view_box: "0 0 80 28", width: "80", height: "28", aria_hidden: "true",
+            path { d: "{line_path(&values, &f, top)}", fill: "none", stroke: "var(--chart-1)", stroke_width: "1.75", stroke_linejoin: "round", stroke_linecap: "round" }
+        }
     }
 }

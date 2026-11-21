@@ -123,23 +123,38 @@ pub fn StatCard(
     sub: Option<String>,
     /// 증감 비율 (예: 0.12 = +12%)
     delta: Option<f64>,
+    /// 증감을 보여줄지 (이전 값이 0이라 delta가 None이어도 `–`를 표시)
+    #[props(default)]
+    show_delta: bool,
+    /// 작은 추이선
+    spark: Option<Vec<f64>>,
     #[props(default)] style: StatStyle,
 ) -> Element {
     let (card, value_class) = match style {
-        StatStyle::Plain => ("card", "stat-value"),
-        StatStyle::Hero => ("card primary", "stat-value xl"),
-        StatStyle::Struck => ("card filled", "stat-value strike"),
+        StatStyle::Plain => ("card stat", "stat-value"),
+        StatStyle::Hero => ("card primary stat", "stat-value xl"),
+        StatStyle::Struck => ("card filled stat", "stat-value strike"),
+    };
+    let show_delta = show_delta || delta.is_some();
+    let (dtext, dir) = crate::format::delta_label(delta);
+    let dclass = match dir {
+        1 => "delta up",
+        -1 => "delta down",
+        _ => "delta flat",
     };
     rsx! {
         div { class: "{card}",
-            div { class: "stat-label", "{label}" }
+            div { class: "stat-top",
+                div { class: "stat-label", "{label}" }
+                if let Some(v) = spark {
+                    crate::components::chart::Sparkline { values: v }
+                }
+            }
             div { class: "{value_class}", "{value}" }
-            if sub.is_some() || delta.is_some() {
+            if sub.is_some() || show_delta {
                 div { class: "stat-sub",
-                    if let Some(d) = delta {
-                        span { class: if d >= 0.0 { "delta up" } else { "delta down" },
-                            {format!("{}{:.1}%", if d >= 0.0 { "▲ " } else { "▼ " }, d.abs() * 100.0)}
-                        }
+                    if show_delta {
+                        span { class: "{dclass}", aria_label: "이전 기간 대비 {dtext}", "{dtext}" }
                     }
                     if let Some(s) = sub {
                         span { "{s}" }
@@ -177,12 +192,19 @@ pub fn SegmentedControl<T: Clone + PartialEq + 'static>(
 }
 
 #[component]
-pub fn Toggle(on: bool, onchange: EventHandler<bool>) -> Element {
+pub fn Toggle(
+    on: bool,
+    onchange: EventHandler<bool>,
+    #[props(default)] disabled: bool,
+    label: Option<String>,
+) -> Element {
     rsx! {
         button {
             class: if on { "toggle on" } else { "toggle" },
             role: "switch",
+            disabled,
             aria_checked: on,
+            aria_label: label.unwrap_or_default(),
             onclick: move |_| onchange.call(!on),
         }
     }
@@ -195,6 +217,7 @@ pub fn ToggleRow(
     desc: Option<String>,
     on: bool,
     onchange: EventHandler<bool>,
+    #[props(default)] disabled: bool,
 ) -> Element {
     rsx! {
         div { class: "toggle-row",
@@ -204,7 +227,7 @@ pub fn ToggleRow(
                     div { class: "t-desc", "{d}" }
                 }
             }
-            Toggle { on, onchange }
+            Toggle { on, onchange, disabled, label: title.clone() }
         }
     }
 }
@@ -217,16 +240,27 @@ pub fn TextField(
     placeholder: Option<String>,
     hint: Option<String>,
     error: Option<String>,
+    #[props(default)] disabled: bool,
+    /// input type (text, password, email, date, number, search)
+    #[props(default = "text".to_string())]
+    kind: String,
+    autocomplete: Option<String>,
 ) -> Element {
     let invalid = if error.is_some() { "invalid" } else { "" };
     rsx! {
         div { class: "field",
-            label { "{label}" }
-            input {
-                class: "input {invalid}",
-                value: "{value}",
-                placeholder: placeholder.unwrap_or_default(),
-                oninput: move |e| oninput.call(e.value()),
+            label {
+                "{label}"
+                input {
+                    class: "input {invalid}",
+                    r#type: "{kind}",
+                    value: "{value}",
+                    disabled,
+                    autocomplete: autocomplete.unwrap_or_else(|| "off".into()),
+                    aria_invalid: error.is_some(),
+                    placeholder: placeholder.unwrap_or_default(),
+                    oninput: move |e| oninput.call(e.value()),
+                }
             }
             if let Some(e) = error {
                 div { class: "error", "{e}" }
@@ -291,7 +325,7 @@ pub fn copy_to_clipboard(text: &str) {
 }
 
 /// JS 문자열 리터럴로 안전하게 감싼다.
-fn js_string(s: &str) -> String {
+pub fn js_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
@@ -327,17 +361,223 @@ pub fn Drawer(open: bool, title: String, onclose: EventHandler<()>, children: El
     }
 }
 
-/// 브라우저 setTimeout 기반 대기.
-pub async fn sleep_ms(ms: u32) {
-    let _ = document::eval(&format!(
-        "await new Promise(r => setTimeout(r, {ms})); return true;"
-    ))
-    .await;
-}
+pub use crate::platform::sleep_ms;
 
 #[component]
 pub fn Toast(message: String) -> Element {
     rsx! { div { class: "toast", role: "status", "{message}" } }
+}
+
+// ---------------------------------------------------------------------------
+// 데이터 상태 (로딩·오류·빈 상태)
+// ---------------------------------------------------------------------------
+
+/// API 리소스 렌더링: 로딩 중이면 `skeleton`, 오류면 재시도 상자, 성공이면 `f(값)`.
+pub fn load<T: Clone + 'static>(
+    res: Resource<crate::api::ApiResult<T>>,
+    skeleton: Element,
+    f: impl FnOnce(T) -> Element,
+) -> Element {
+    let state = res.read().clone();
+    match state {
+        None => skeleton,
+        Some(Ok(v)) => f(v),
+        Some(Err(e)) => rsx! { ErrorBox { error: e, onretry: move |_| { let mut r = res; r.restart(); } } },
+    }
+}
+
+#[component]
+pub fn ErrorBox(error: crate::logic::errors::ApiError, onretry: Option<EventHandler<()>>) -> Element {
+    let retry = error.retryable() || matches!(error, crate::logic::errors::ApiError::NotFound);
+    rsx! {
+        div { class: "error-box", role: "alert",
+            div { class: "error-icon", "!" }
+            div { class: "error-text",
+                div { class: "error-title", "데이터를 불러오지 못했어요" }
+                div { class: "error-desc", "{error.message()}" }
+            }
+            if retry {
+                if let Some(h) = onretry {
+                    Button { variant: Variant::Ghost, size: Size::Sm, onclick: move |_| h.call(()), "다시 시도" }
+                }
+            }
+        }
+    }
+}
+
+/// 지표 카드 자리 표시.
+#[component]
+pub fn SkeletonCards(#[props(default = 4)] n: usize) -> Element {
+    rsx! {
+        div { class: "grid grid-{n}", aria_busy: "true",
+            for i in 0..n {
+                div { key: "{i}", class: "card stat",
+                    Skeleton { width: "40%", height: "14px" }
+                    div { style: "height: 12px" }
+                    Skeleton { width: "65%", height: "36px" }
+                    div { style: "height: 10px" }
+                    Skeleton { width: "30%", height: "12px" }
+                }
+            }
+        }
+    }
+}
+
+/// 표·차트 자리 표시.
+#[component]
+pub fn SkeletonBlock(#[props(default = 6)] rows: usize, #[props(default)] chart: bool) -> Element {
+    rsx! {
+        div { class: "skeleton-block", aria_busy: "true", aria_label: "불러오는 중",
+            if chart {
+                Skeleton { height: "200px" }
+            } else {
+                for i in 0..rows {
+                    div { key: "{i}", class: "skeleton-row",
+                        Skeleton { width: "{40 + (i * 13) % 35}%", height: "14px" }
+                        Skeleton { width: "12%", height: "14px" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 표
+// ---------------------------------------------------------------------------
+
+/// 정렬 가능한 표 머리글.
+#[component]
+pub fn SortTh<K: Copy + PartialEq + 'static>(
+    label: String,
+    k: K,
+    sort: Signal<crate::logic::table::Sort<K>>,
+    #[props(default = true)] right: bool,
+) -> Element {
+    let s = sort();
+    let cls = if right { "r sortable" } else { "sortable" };
+    rsx! {
+        th { class: "{cls}", aria_sort: s.aria(k), scope: "col",
+            button {
+                class: "th-btn",
+                onclick: move |_| {
+                    let cur = sort();
+                    sort.set(cur.toggle(k));
+                },
+                "{label}"
+                span { class: "sort-arrow", "{s.arrow(k)}" }
+            }
+        }
+    }
+}
+
+/// CSV 내보내기 버튼.
+#[component]
+pub fn CsvButton(file_name: String, headers: Vec<String>, rows: Vec<Vec<String>>) -> Element {
+    rsx! {
+        Button {
+            variant: Variant::Ghost,
+            size: Size::Sm,
+            disabled: rows.is_empty(),
+            onclick: move |_| {
+                let h: Vec<&str> = headers.iter().map(String::as_str).collect();
+                let csv = crate::logic::table::to_csv(&h, &rows);
+                crate::platform::download_text(&file_name, "text/csv;charset=utf-8", &csv);
+            },
+            "CSV 내보내기"
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 입력
+// ---------------------------------------------------------------------------
+
+/// 여러 줄 입력.
+#[component]
+pub fn TextArea(
+    label: String,
+    value: String,
+    oninput: EventHandler<String>,
+    placeholder: Option<String>,
+    hint: Option<String>,
+    #[props(default)] disabled: bool,
+) -> Element {
+    rsx! {
+        div { class: "field",
+            label { "{label}" }
+            textarea {
+                class: "input textarea",
+                value: "{value}",
+                disabled,
+                placeholder: placeholder.unwrap_or_default(),
+                oninput: move |e| oninput.call(e.value()),
+            }
+            if let Some(h) = hint {
+                div { class: "hint", "{h}" }
+            }
+        }
+    }
+}
+
+/// 두 번 눌러야 실행되는 삭제 버튼.
+#[component]
+pub fn ConfirmButton(
+    label: String,
+    #[props(default = "정말 삭제할까요?".to_string())] confirm: String,
+    #[props(default)] disabled: bool,
+    onconfirm: EventHandler<()>,
+) -> Element {
+    let mut armed = use_signal(|| false);
+    rsx! {
+        if armed() {
+            span { class: "row confirm",
+                span { class: "confirm-text", "{confirm}" }
+                Button { variant: Variant::Danger, size: Size::Sm, onclick: move |_| { armed.set(false); onconfirm.call(()); }, "확인" }
+                Button { variant: Variant::Ghost, size: Size::Sm, onclick: move |_| armed.set(false), "취소" }
+            }
+        } else {
+            Button { variant: Variant::Ghost, size: Size::Sm, disabled, onclick: move |_| armed.set(true), "{label}" }
+        }
+    }
+}
+
+/// 전역 알림: 3초 뒤 사라진다.
+#[component]
+pub fn ToastHost() -> Element {
+    let mut ctx = crate::state::use_app();
+    let msg = ctx.toast.read().clone();
+    use_effect(move || {
+        if ctx.toast.read().is_some() {
+            spawn(async move {
+                sleep_ms(3000).await;
+                ctx.toast.set(None);
+            });
+        }
+    });
+    rsx! {
+        if let Some(m) = msg {
+            Toast { message: m }
+        }
+    }
+}
+
+/// 페이지 머리말.
+#[component]
+pub fn PageHead(title: String, desc: Option<String>, actions: Option<Element>) -> Element {
+    rsx! {
+        div { class: "page-head",
+            div {
+                h1 { class: "page-title", "{title}" }
+                if let Some(d) = desc {
+                    p { class: "page-desc", "{d}" }
+                }
+            }
+            if let Some(a) = actions {
+                div { class: "row", {a} }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
