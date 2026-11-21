@@ -59,6 +59,8 @@ argon2 = "0.6"
 clap = { version = "4", features = ["derive", "env"] }
 zstd = "0.14"
 bytes = "1"
+# 서버 바이너리(api·ingest) 전역 할당자: 요청마다 작은 할당이 많아 시스템 malloc보다 빠르다.
+mimalloc = "0.1"
 
 # argon2는 디버그 빌드에서 수십 배 느리다 (로그인 테스트·로컬 개발용).
 [profile.dev.package.argon2]
@@ -69,12 +71,18 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
+# 서버는 패닉 시 프로세스를 내리고 재시작한다 (언와인딩 코드·표 제거로 바이너리가 작고 빠르다).
+# 테스트(dev 프로파일)는 그대로 unwind라 패닉 단언이 동작한다.
+panic = "abort"
+strip = "symbols"
 
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"
 lto = "fat"
 panic = "abort"
+# release의 strip = "symbols"를 물려받지 않는다 (이전과 같은 기본값 유지)
+strip = "debuginfo"
 
 # 디스크·빌드 시간 절약: 개발·테스트 빌드는 디버그 정보 없이 (백트레이스 줄 번호만 유지)
 [profile.dev]

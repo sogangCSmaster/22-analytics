@@ -425,6 +425,239 @@ async fn batch_retry_is_idempotent() {
     );
 }
 
+// ── 일괄 처리: 쓰기 횟수·순차 처리와 같은 결과 ─────────────────
+
+/// 이 테스트 DB의 `table`에 대한 INSERT 쿼리 수 (system.query_log).
+async fn insert_queries(db: &TestDb, table: &str) -> u64 {
+    db.ch.query("SYSTEM FLUSH LOGS").execute().await.unwrap();
+    db.ch
+        .query(
+            "SELECT count() FROM system.query_log WHERE event_date >= yesterday() \
+             AND type = 'QueryFinish' AND query_kind = 'Insert' AND has(tables, ?)",
+        )
+        .bind(format!("{}.{table}", db.name()))
+        .fetch_one()
+        .await
+        .unwrap()
+}
+
+/// 이 테스트 DB의 `table`을 읽은 SELECT 쿼리 수.
+async fn select_queries(db: &TestDb, table: &str) -> u64 {
+    db.ch.query("SYSTEM FLUSH LOGS").execute().await.unwrap();
+    db.ch
+        .query(
+            "SELECT count() FROM system.query_log WHERE event_date >= yesterday() \
+             AND type = 'QueryFinish' AND query_kind = 'Select' AND has(tables, ?)",
+        )
+        .bind(format!("{}.{table}", db.name()))
+        .fetch_one()
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn single_writer_skips_recheck_reads_and_uses_async_insert() {
+    // 기본(단일 writer): 프로세스 안 잠금으로 충분하므로 쓴 뒤 다시 읽지 않는다
+    let h = setup().await;
+    let before = (
+        select_queries(&h.db, "order_events").await,
+        select_queries(&h.db, "orders").await,
+    );
+    assert_eq!(h.post(&confirm("S1", 1_000)).await.0, StatusCode::ACCEPTED);
+    let after = (
+        select_queries(&h.db, "order_events").await,
+        select_queries(&h.db, "orders").await,
+    );
+    assert_eq!(
+        (after.0 - before.0, after.1 - before.1),
+        (1, 1),
+        "이벤트·현재 상태를 한 번씩만 읽는다"
+    );
+    assert_eq!(h.order("S1").await.unwrap().effective_amount, 1_000);
+    // 단건 insert는 async_insert(완료까지 대기)로 보낸다: 동시 주문이 한 파트로 모인다
+    let sync_inserts: u64 =
+        h.db.ch
+            .query(
+                "SELECT count() FROM system.query_log WHERE event_date >= yesterday() \
+                 AND type = 'QueryFinish' AND query_kind = 'Insert' \
+                 AND (has(tables, ?) OR has(tables, ?)) \
+                 AND Settings['async_insert'] != '1'",
+            )
+            .bind(format!("{}.order_events", h.db.name()))
+            .bind(format!("{}.orders", h.db.name()))
+            .fetch_one()
+            .await
+            .unwrap();
+    assert_eq!(sync_inserts, 0);
+}
+
+/// 응답을 (accepted, error 코드)로 줄인다 (단건·일괄 응답 모양 차이를 없앤다).
+fn outcome(accepted: bool, v: &Value) -> (bool, String) {
+    (accepted, v["error"].as_str().unwrap_or("").to_owned())
+}
+
+/// 비교용 주문 상태 (version 제외: 순차 처리는 중간 버전을 더 쓴다).
+async fn final_states(db: &TestDb, project: i32) -> Vec<Value> {
+    let rows: Vec<OrderRow> = db
+        .ch
+        .query("SELECT ?fields FROM orders FINAL WHERE project_id = ? ORDER BY order_id")
+        .bind(project as u32)
+        .fetch_all()
+        .await
+        .unwrap();
+    rows.into_iter()
+        .map(|r| {
+            json!([
+                r.order_id,
+                r.source,
+                r.status,
+                r.visitor_id,
+                r.member_hash,
+                r.currency,
+                r.gross_amount,
+                r.net_amount,
+                r.refunded_amount,
+                r.effective_amount,
+                analytics_core::timeutil::dt_to_ms(r.ordered_at)
+            ])
+        })
+        .collect()
+}
+
+async fn event_counts(db: &TestDb, project: i32) -> Vec<(String, u64)> {
+    db.ch
+        .query(
+            "SELECT order_id, count() FROM order_events WHERE project_id = ? \
+             GROUP BY order_id ORDER BY order_id",
+        )
+        .bind(project as u32)
+        .fetch_all()
+        .await
+        .unwrap()
+}
+
+/// 기존 상태·순서 바뀐 이벤트·중복·키 충돌·같은 주문 여러 건·검증 실패가 섞인 100건.
+fn mixed_batch() -> Vec<Value> {
+    let mut items = vec![];
+    for i in 0..50 {
+        items.push(confirm(&format!("B{i:02}"), 10_000 + i));
+    }
+    for i in 0..10 {
+        items.push(refund(&format!("B{i:02}"), 1_000, "2026-11-21T01:00:00Z"));
+    }
+    for i in 0..5 {
+        // 환불이 확정보다 먼저
+        items.push(refund(&format!("C{i}"), 500, "2026-11-21T01:00:00Z"));
+        items.push(confirm(&format!("C{i}"), 20_000));
+    }
+    for i in 10..15 {
+        items.push(cancel(&format!("B{i:02}"), "2026-11-21T02:00:00Z"));
+    }
+    for i in 0..5 {
+        items.push(refund(&format!("P{i}"), 2_000, "2026-11-21T03:00:00Z"));
+    }
+    for _ in 0..5 {
+        items.push(confirm("B00", 10_000));
+    }
+    let mut a = confirm("K1", 100);
+    a["idempotency_key"] = json!("k1");
+    let mut b = confirm("K1", 1);
+    b["idempotency_key"] = json!("k1");
+    items.push(a);
+    items.push(b);
+    items.push(refund("B20", 100, "2026-11-21T04:00:00Z"));
+    items.push(refund("B20", 200, "2026-11-21T04:00:01Z"));
+    items.push(json!({ "event_type": "NOPE", "order_id": "X" }));
+    for i in 0..10 {
+        items.push(confirm(&format!("D{i}"), 1 + i));
+    }
+    assert_eq!(items.len(), 100);
+    items
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_of_100_uses_one_insert_per_table_and_matches_sequential() {
+    let h = setup().await;
+    // 비교용 두 번째 프로젝트: 같은 salt(회원 해시가 같도록), 같은 기존 주문
+    let other = ProjectBuilder::new().salt(&h.salt).insert(&h.db.pg).await as i32;
+    let (other_key, _) = analytics_pg::api_keys::create(&h.db.pg, other, None)
+        .await
+        .unwrap();
+    let other_auth = format!("Bearer {other_key}");
+    for i in 0..5 {
+        let body = confirm(&format!("P{i}"), 50_000).to_string();
+        h.post(&confirm(&format!("P{i}"), 50_000)).await;
+        send(
+            &h.app,
+            "/v1/orders",
+            &[("authorization", &other_auth)],
+            body.into_bytes(),
+        )
+        .await;
+    }
+    let items = mixed_batch();
+
+    let before = (
+        insert_queries(&h.db, "order_events").await,
+        insert_queries(&h.db, "orders").await,
+    );
+    let (s, v) = h.batch(&json!({ "orders": items })).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    let after = (
+        insert_queries(&h.db, "order_events").await,
+        insert_queries(&h.db, "orders").await,
+    );
+    assert!(
+        after.0 - before.0 <= 2 && after.1 - before.1 <= 2,
+        "100건 일괄이 order_events {}번, orders {}번 insert",
+        after.0 - before.0,
+        after.1 - before.1
+    );
+
+    // 같은 항목을 한 건씩 순서대로 보낸 결과와 같아야 한다
+    let mut sequential = vec![];
+    for item in &items {
+        let (st, r) = send(
+            &h.app,
+            "/v1/orders",
+            &[("authorization", &other_auth)],
+            item.to_string().into_bytes(),
+        )
+        .await;
+        sequential.push(outcome(st == StatusCode::ACCEPTED, &r));
+    }
+    let batched: Vec<(bool, String)> = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| outcome(r["accepted"] == true, r))
+        .collect();
+    assert_eq!(batched, sequential, "항목별 결과");
+    assert_eq!(batched[86], (false, "idempotency_key_reused".to_owned()));
+    assert_eq!(
+        final_states(&h.db, h.project).await,
+        final_states(&h.db, other).await,
+        "주문 상태"
+    );
+    assert_eq!(
+        event_counts(&h.db, h.project).await,
+        event_counts(&h.db, other).await,
+        "주문별 이벤트 수"
+    );
+    let o = h.order("B20").await.unwrap();
+    assert_eq!(o.refunded_amount, 300);
+
+    // 같은 일괄 재전송: 아무것도 더 쓰지 않는다
+    let states = final_states(&h.db, h.project).await;
+    let (s2, v2) = h.batch(&json!({ "orders": mixed_batch() })).await;
+    assert_eq!((s2, &v2), (s, &v));
+    assert_eq!(final_states(&h.db, h.project).await, states);
+    assert_eq!(
+        event_counts(&h.db, h.project).await,
+        event_counts(&h.db, other).await
+    );
+}
+
 // ── 경계값·엣지 ─────────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread")]
@@ -594,12 +827,15 @@ async fn concurrent_requests_for_same_order_do_not_race() {
 #[tokio::test(flavor = "multi_thread")]
 async fn two_ingest_writers_converge_after_recheck() {
     // 줄무늬 잠금은 프로세스 안에서만 직렬화한다. ingest 두 대(서로 다른 OrderService)가 같은 주문을
-    // 동시에 처리해도, 투영 후 이벤트를 다시 읽어 확인하므로 마지막 상태는 모든 이벤트를 반영한다.
-    let h = setup().await;
-    let other = app_for(Arc::new(OrderService::new(
-        h.db.pg.clone(),
-        h.db.ch.clone(),
-    )));
+    // 동시에 처리해도, 다중 writer 모드(ORDERS_MULTI_WRITER)면 투영 후 이벤트를 다시 읽어 확인하므로
+    // 마지막 상태는 모든 이벤트를 반영한다.
+    let mut h = setup().await;
+    let multi =
+        || Arc::new(OrderService::new(h.db.pg.clone(), h.db.ch.clone()).with_multi_writer(true));
+    let (one, two) = (multi(), multi());
+    h.app = app_for(one.clone());
+    h.svc = one;
+    let other = app_for(two);
     let ids: Vec<String> = (0..4).map(|i| format!("R{i}")).collect();
     for id in &ids {
         h.post(&confirm(id, 1_000_000)).await;
@@ -637,6 +873,96 @@ async fn two_ingest_writers_converge_after_recheck() {
         );
         assert_eq!(o.effective_amount, 992_000);
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_ingest_writers_converge_with_batches() {
+    // 다중 writer 모드의 일괄 경로: 한 프로세스는 일괄, 다른 프로세스는 단건으로 같은 주문들을 동시에 쓴다
+    let h = setup().await;
+    let multi =
+        || Arc::new(OrderService::new(h.db.pg.clone(), h.db.ch.clone()).with_multi_writer(true));
+    let (a, b) = (app_for(multi()), app_for(multi()));
+    let ids: Vec<String> = (0..6).map(|i| format!("W{i}")).collect();
+    for id in &ids {
+        h.post(&confirm(id, 1_000_000)).await;
+    }
+    let auth = format!("Bearer {}", h.key);
+    let mut tasks = vec![];
+    for round in 0..4 {
+        let batch: Vec<Value> = ids
+            .iter()
+            .map(|id| refund(id, 1_000, &format!("2026-11-20T12:00:{round:02}Z")))
+            .collect();
+        let (app, auth2) = (a.clone(), auth.clone());
+        tasks.push(tokio::spawn(async move {
+            let body = json!({ "orders": batch }).to_string().into_bytes();
+            send(&app, "/v1/orders:batch", &[("authorization", &auth2)], body)
+                .await
+                .0
+        }));
+        for id in &ids {
+            let (app, auth2) = (b.clone(), auth.clone());
+            let body = refund(id, 1_000, &format!("2026-11-20T13:00:{round:02}Z")).to_string();
+            tasks.push(tokio::spawn(async move {
+                send(
+                    &app,
+                    "/v1/orders",
+                    &[("authorization", &auth2)],
+                    body.into_bytes(),
+                )
+                .await
+                .0
+            }));
+        }
+    }
+    for t in tasks {
+        assert_eq!(t.await.unwrap(), StatusCode::ACCEPTED);
+    }
+    for id in &ids {
+        let o = h.order(id).await.unwrap();
+        assert_eq!(
+            o.refunded_amount, 8_000,
+            "{id}: 두 프로세스의 환불 모두 반영"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_write_failure_keeps_conflicts_and_retry_recovers() {
+    let h = setup().await;
+    let mut a = confirm("F1", 100);
+    a["idempotency_key"] = json!("k1");
+    h.batch(&json!([a.clone()])).await;
+    // 읽기는 되고 쓰기만 실패: order_events를 같은 내용의 (insert 불가) 뷰로 바꾼다
+    for q in [
+        "RENAME TABLE order_events TO oe_away",
+        "CREATE VIEW order_events AS SELECT * FROM oe_away",
+    ] {
+        h.db.ch.query(q).execute().await.unwrap();
+    }
+    let mut b = confirm("F1", 1);
+    b["idempotency_key"] = json!("k1");
+    let body = json!([b, confirm("F2", 2_000)]);
+    let (s, v) = h.batch(&body).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert_eq!(v["results"][0]["error"], "idempotency_key_reused");
+    assert_eq!(v["results"][1]["error"], "storage_unavailable");
+    for q in [
+        "DROP VIEW order_events",
+        "RENAME TABLE oe_away TO order_events",
+    ] {
+        h.db.ch.query(q).execute().await.unwrap();
+    }
+    assert!(h.order("F2").await.is_none());
+    let (s, v) = h.batch(&body).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    assert_eq!(v["results"][1]["accepted"], true);
+    assert_eq!(h.order("F2").await.unwrap().effective_amount, 2_000);
+    assert_eq!(
+        h.event_count("F2").await,
+        1,
+        "재전송은 이벤트를 다시 쓰지 않는다"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

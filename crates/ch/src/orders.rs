@@ -145,10 +145,7 @@ pub fn next_version(prev: Option<u64>, now_ms: i64) -> u64 {
 }
 
 pub async fn insert_order_event(client: &clickhouse::Client, e: &OrderEvent) -> anyhow::Result<()> {
-    let mut insert = client.insert::<OrderEventRow>("order_events").await?;
-    insert.write(&OrderEventRow::from(e)).await?;
-    insert.end().await?;
-    Ok(())
+    insert_order_events(client, &[e]).await
 }
 
 /// 한 주문의 모든 이벤트 (중복 행 포함, 정렬 안 됨).
@@ -183,10 +180,86 @@ pub async fn current_order(
 }
 
 pub async fn insert_order(client: &clickhouse::Client, row: &OrderRow) -> anyhow::Result<()> {
-    let mut insert = client.insert::<OrderRow>("orders").await?;
-    insert.write(row).await?;
+    insert_orders(client, std::slice::from_ref(row)).await
+}
+
+/// 여러 주문 이벤트를 INSERT 한 번으로 쓴다 (일괄 API: 파트·왕복 수를 줄인다). 비어 있으면 아무것도 안 한다.
+pub async fn insert_order_events(
+    client: &clickhouse::Client,
+    events: &[&OrderEvent],
+) -> anyhow::Result<()> {
+    if events.is_empty() {
+        return Ok(());
+    }
+    let mut insert = client.insert::<OrderEventRow>("order_events").await?;
+    for e in events {
+        insert.write(&OrderEventRow::from(*e)).await?;
+    }
     insert.end().await?;
     Ok(())
+}
+
+/// 여러 주문 행을 INSERT 한 번으로 쓴다. 비어 있으면 아무것도 안 한다.
+pub async fn insert_orders(client: &clickhouse::Client, rows: &[OrderRow]) -> anyhow::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut insert = client.insert::<OrderRow>("orders").await?;
+    for r in rows {
+        insert.write(r).await?;
+    }
+    insert.end().await?;
+    Ok(())
+}
+
+/// 여러 주문의 모든 이벤트 (중복 행 포함, 정렬 안 됨). [`order_events`]의 일괄 버전:
+/// `order_id IN (…)` 한 번(IN 목록 [`crate::attribution::IN_CHUNK`]개마다)으로 읽는다.
+pub async fn order_events_many(
+    client: &clickhouse::Client,
+    scope: ProjectScope,
+    order_ids: &[String],
+) -> anyhow::Result<Vec<OrderEvent>> {
+    let mut out = Vec::new();
+    for chunk in order_ids.chunks(crate::attribution::IN_CHUNK) {
+        let mut q = client
+            .query(&format!(
+                "SELECT ?fields FROM order_events WHERE project_id = ? AND order_id IN ({})",
+                placeholders(chunk.len())
+            ))
+            .bind(scope.project_id());
+        for id in chunk {
+            q = q.bind(id.as_str());
+        }
+        let rows: Vec<OrderEventRow> = q.fetch_all().await?;
+        out.extend(rows.iter().filter_map(OrderEventRow::to_event));
+    }
+    Ok(out)
+}
+
+/// 여러 주문의 현재 상태 (`FINAL`). 없는 주문은 결과에 없다.
+pub async fn current_orders(
+    client: &clickhouse::Client,
+    scope: ProjectScope,
+    order_ids: &[String],
+) -> anyhow::Result<Vec<OrderRow>> {
+    let mut out = Vec::new();
+    for chunk in order_ids.chunks(crate::attribution::IN_CHUNK) {
+        let mut q = client
+            .query(&format!(
+                "SELECT ?fields FROM orders FINAL WHERE project_id = ? AND order_id IN ({})",
+                placeholders(chunk.len())
+            ))
+            .bind(scope.project_id());
+        for id in chunk {
+            q = q.bind(id.as_str());
+        }
+        out.extend(q.fetch_all::<OrderRow>().await?);
+    }
+    Ok(out)
+}
+
+fn placeholders(n: usize) -> String {
+    vec!["?"; n].join(", ")
 }
 
 #[cfg(test)]

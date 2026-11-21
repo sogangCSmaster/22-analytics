@@ -133,21 +133,35 @@ pub async fn changed_orders(
         .await?)
 }
 
-/// `ordered_at >= from_ms`인 주문 (ordered_at 오름차순).
-pub async fn orders_since(
+/// `ordered_at >= from_ms`인 주문 한 페이지: `order_id > after`(없으면 처음부터) 중 order_id 오름차순
+/// `limit`건. 전체 재연산은 이 키셋 페이지를 이어 읽어 클라이언트 메모리를 페이지 크기로 묶는다.
+///
+/// 키는 정렬 키 `(project_id, order_id)`의 order_id다: 서버가 정렬 순서대로 읽다가 `limit`건에서 멈추므로
+/// (read-in-order) 페이지마다 비용이 일정하다. `(ordered_at, order_id)` 키셋은 ordered_at에 인덱스가 없어
+/// 페이지마다 남은 구간 전체를 읽고 정렬한다 (350만 행 측정: 페이지당 150~310ms, order_id 키셋은 40~50ms).
+pub async fn orders_since_page(
     client: &Client,
     scope: ProjectScope,
     from_ms: i64,
+    after: Option<&str>,
+    limit: usize,
 ) -> anyhow::Result<Vec<OrderForAttribution>> {
-    Ok(client
+    let mut q = client
         .query(&format!(
             "{ORDER_COLS} AND ordered_at >= fromUnixTimestamp64Milli(toInt64(?), 'UTC') \
-             ORDER BY ordered_at, order_id"
+             {} ORDER BY order_id LIMIT ?",
+            if after.is_some() {
+                "AND order_id > ?"
+            } else {
+                ""
+            }
         ))
         .bind(scope.project_id())
-        .bind(from_ms)
-        .fetch_all()
-        .await?)
+        .bind(from_ms);
+    if let Some(a) = after {
+        q = q.bind(a);
+    }
+    Ok(q.bind(limit as u64).fetch_all().await?)
 }
 
 /// 주문 ID로 조회한다 (없는 ID는 무시).

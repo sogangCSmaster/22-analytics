@@ -4,6 +4,8 @@ use std::time::Duration;
 
 /// ClickHouse 배치 플러시 주기 기본값. 길수록 INSERT(파트) 수가 줄어든다.
 pub const DEFAULT_FLUSH_INTERVAL_MS: &str = "3000";
+/// Postgres 풀 기본 크기 (`PG_MAX_CONNECTIONS`). 키 검증·프로젝트 조회뿐이고 결과를 캐시한다.
+pub const DEFAULT_PG_MAX_CONNECTIONS: u32 = 3;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -17,15 +19,17 @@ pub struct Config {
     pub flush_rows: usize,
     pub tracker_dist: PathBuf,
     pub dev_site_dir: PathBuf,
+    /// 주문을 쓰는 ingest가 여러 대인가 (`ORDERS_MULTI_WRITER`, 기본 false).
+    /// 켜면 주문 투영을 쓴 뒤 다시 읽어 프로세스 간 경합을 보정한다 (orders 모듈 문서 5번).
+    pub orders_multi_writer: bool,
+    /// `PG_MAX_CONNECTIONS`
+    pub pg_max_connections: u32,
 }
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let get = analytics_ch::env_or;
-        let edge_emulation = matches!(
-            get("EDGE_EMULATION", "false").as_str(),
-            "1" | "true" | "yes"
-        );
+        let edge_emulation = flag(&get("EDGE_EMULATION", "false"));
         let edge_secret = std::env::var("EDGE_SHARED_SECRET").unwrap_or_default();
         if !edge_emulation && edge_secret.len() < 32 {
             anyhow::bail!("EDGE_SHARED_SECRET은 32자 이상이어야 합니다 (운영 모드)");
@@ -52,8 +56,15 @@ impl Config {
             flush_rows: get("FLUSH_ROWS", "10000").parse().context("FLUSH_ROWS")?,
             tracker_dist: get("TRACKER_DIST", "./tracker/dist").into(),
             dev_site_dir: get("DEV_SITE_DIR", "./dev/site").into(),
+            orders_multi_writer: flag(&get("ORDERS_MULTI_WRITER", "false")),
+            pg_max_connections: analytics_pg::max_connections_from_env(DEFAULT_PG_MAX_CONNECTIONS),
         })
     }
+}
+
+/// `1`·`true`·`yes`면 켜짐.
+fn flag(v: &str) -> bool {
+    matches!(v, "1" | "true" | "yes")
 }
 
 #[cfg(test)]
@@ -71,12 +82,21 @@ impl Config {
             flush_rows: 10_000,
             tracker_dist: "./tracker/dist".into(),
             dev_site_dir: "./dev/site".into(),
+            orders_multi_writer: false,
+            pg_max_connections: DEFAULT_PG_MAX_CONNECTIONS,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pg_pool_default_is_3() {
+        // ingest의 PG 쿼리는 키 검증·프로젝트 조회뿐이고 결과를 캐시한다
+        assert_eq!(super::DEFAULT_PG_MAX_CONNECTIONS, 3);
+        assert_eq!(super::Config::for_tests(b"", true).pg_max_connections, 3);
+    }
+
     #[test]
     fn default_flush_interval_is_3s() {
         // C6: 초당 INSERT를 1/3로 줄인다 (작은 파트·머지 비용 감소). 지연은 수 초로 충분하다.

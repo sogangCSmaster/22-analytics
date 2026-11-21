@@ -26,7 +26,8 @@ pub fn key_from_query(query: Option<&str>) -> Option<PublicKey> {
 }
 
 /// 공개 키별 `ProjectConfig` 캐시. 없는 키(`None`)도 캐시한다 (negative caching).
-pub type ConfigCache = TtlCache<String, ProjectConfig>;
+/// 요청마다 설정을 복제하지 않도록 `Rc`로 들고 있는다 (isolate는 단일 스레드).
+pub type ConfigCache = TtlCache<String, std::rc::Rc<ProjectConfig>>;
 
 pub fn new_cache() -> ConfigCache {
     TtlCache::new(CONFIG_TTL_MS, CONFIG_CACHE_MAX)
@@ -132,8 +133,11 @@ pub(crate) mod tests {
     #[test]
     fn cache_uses_config_ttl() {
         let mut c = new_cache();
-        c.put("pk_a".into(), Some(project()), 0);
-        assert_eq!(c.get("pk_a", CONFIG_TTL_MS - 1), Some(Some(project())));
+        c.put("pk_a".into(), Some(std::rc::Rc::new(project())), 0);
+        assert_eq!(
+            c.get("pk_a", CONFIG_TTL_MS - 1),
+            Some(Some(std::rc::Rc::new(project())))
+        );
         assert_eq!(c.get("pk_a", CONFIG_TTL_MS), None);
     }
 }

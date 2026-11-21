@@ -70,9 +70,11 @@ impl Default for TrackingSettings {
 }
 
 impl TrackingSettings {
+    /// 대소문자를 무시한다. 수집 경로에서 파라미터마다 호출되므로 소문자 사본을 만들지 않는다.
     pub fn should_strip(&self, key: &str) -> bool {
-        let k = key.to_ascii_lowercase();
-        ALWAYS_STRIP_PARAMS.contains(&k.as_str())
+        ALWAYS_STRIP_PARAMS
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(key))
             || self
                 .strip_query_params
                 .iter()

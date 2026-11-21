@@ -13,6 +13,10 @@ mod orders;
 mod pipeline;
 
 use axum::{Router, routing::get};
+
+/// 전역 할당자: 이벤트 파싱·직렬화의 작은 할당이 많다.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
@@ -43,11 +47,15 @@ async fn main() -> anyhow::Result<()> {
     analytics_ch::ping(&client).await?;
 
     let metrics = Arc::new(metrics::Metrics::default());
-    let (pipeline, writer) = pipeline::start(client.clone(), cfg.clone(), metrics.clone()).await?;
+    // 수집 insert는 행 타입이 고정이라 스키마 검증(매 insert마다 컬럼 확인)을 끈다. 주문·조회는 기본값.
+    let events_client = client.clone().with_validation(false);
+    let (pipeline, writer) = pipeline::start(events_client, cfg.clone(), metrics.clone()).await?;
 
     // 주문 API(비밀 키 검증)는 운영·로컬 모두 Postgres가 필요하다.
-    let pool = analytics_pg::connect(&cfg.database_url).await?;
-    let orders = Arc::new(orders::OrderService::new(pool.clone(), client));
+    let pool = analytics_pg::connect(&cfg.database_url, cfg.pg_max_connections).await?;
+    let orders = Arc::new(
+        orders::OrderService::new(pool.clone(), client).with_multi_writer(cfg.orders_multi_writer),
+    );
 
     let emulator = if cfg.edge_emulation {
         tracing::warn!("엣지 에뮬레이션 모드: 로컬 개발 전용");

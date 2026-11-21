@@ -709,9 +709,11 @@ GROUP BY model, lookback_days;
 | IaC | Terraform | `infra/terraform` |
 
 - **ingest는 한 대(단일 writer)를 권장합니다.** 같은 주문의 처리 직렬화(줄무늬 잠금)는 프로세스 안에서만
-  유효합니다. 여러 대를 띄우면 투영을 쓴 뒤 이벤트를 다시 읽어 달라졌으면 다시 쓰는 재확인(최대 3회)으로
+  유효합니다. 기본값(단일 writer)에서는 투영을 쓴 뒤 다시 읽지 않습니다. 여러 대를 띄우면
+  `ORDERS_MULTI_WRITER=true`로 투영을 쓴 뒤 이벤트를 다시 읽어 달라졌으면 다시 쓰는 재확인(최대 3회)을 켜서
   수렴시키지만, 이는 보정일 뿐 직렬화를 보장하지 않습니다(같은 ms의 version 충돌 등).
-- **ClickHouse 메모리 설정**: 8GB 장비에서는 `max_server_memory_usage_to_ram_ratio=0.6`, `async_insert=0`(ingest가 직접 배치), `max_threads=2`로 둡니다.
+- **ClickHouse 메모리 설정**: 8GB 장비에서는 `max_server_memory_usage_to_ram_ratio=0.6`, 서버 기본 `async_insert=0`(수집 이벤트는 ingest가 직접 배치), `max_threads=2`로 둡니다. 주문 insert만 쿼리 설정으로 `async_insert=1, wait_for_async_insert=1`을 씁니다. api·jobs 클라이언트는 쿼리당 `max_threads=2`, `max_memory_usage=1.5GB`를 겁니다.
+- **Postgres 연결**: 서버별 풀 크기 `PG_MAX_CONNECTIONS` (기본 api 4, ingest 3, jobs 3).
 - **Tiered storage**: 30일이 지난 파티션은 S3 disk로 `MOVE`합니다(`TTL ... TO VOLUME 'cold'`).
 - **백업**:
   - ClickHouse: `clickhouse-backup`으로 매일 S3에 증분 백업
@@ -753,6 +755,14 @@ GROUP BY model, lookback_days;
 | ingest 플러시 | `FLUSH_INTERVAL_MS` 기본 1초 → 3초 (INSERT·작은 파트 감소) |
 | ClickHouse 저장 | `0005_storage`: 시각 열 `Delta+ZSTD(1)`, `title`·`referrer` `ZSTD(3)`, `events.event_id` 7일·`order_events.raw` 90일 컬럼 TTL |
 | 보존 검증 | 매시간은 최근 40일 주문만, 주간 전체. 증분 연산은 바뀐 주문 ID에만 `FINAL` |
+| 주문 일괄 API | 배치 전체를 `order_id IN (…)` 조회 2번 + 테이블당 multi-row insert 1번 (이전: 주문마다 왕복 6번·파트 2개). 단건은 재확인 읽기 생략(단일 writer), 조회 2개 동시, `async_insert` |
+| 전체 기여 연산 | 주문을 `order_id` 키셋 페이지(2000건)로 이어 읽는다 (이전: 350만 행 `fetch_all`, 클라이언트 540MB) |
+| ingest 쓰기 | ClickHouse insert(재시도 대기 포함)를 별도 작업으로 분리. 수신 루프는 insert가 실패·지연돼도 계속 받는다 |
+| 수집 CPU | 페이지 URL 파싱 빠른 경로(제거할 파라미터가 없으면 쿼리 재인코딩 없음), 아카이브 zstd 9 → 3, mimalloc, 수집 insert 스키마 검증 끔 |
+| `0006_orders_version_index` | `orders.version` minmax 스킵 인덱스 (증분 조회). 기존 파트는 `MATERIALIZE INDEX`를 따로 돌려야 적용 |
+
+남은 과제: 서버 측 리포트 결과 캐시(P2-9)는 하지 않았다. 같은 기간·필터의 대시보드 조회가 반복되면 api에
+짧은 TTL 캐시(프로젝트·쿼리 키, 주문·이벤트 적재 시 무효화)를 둔다.
 
 ---
 

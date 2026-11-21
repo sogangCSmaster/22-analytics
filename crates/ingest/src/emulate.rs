@@ -20,8 +20,8 @@ use axum::{
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::{Arc, Mutex};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
@@ -32,7 +32,8 @@ const CONFIG_CACHE_MAX: usize = 10_000;
 pub struct Emulator {
     pool: PgPool,
     tracker_dist: PathBuf,
-    cache: Mutex<TtlCache<String, ProjectConfig>>,
+    /// 요청마다 설정(허용 도메인·설정 JSON)을 복제하지 않도록 `Arc`로 들고 있는다.
+    cache: Mutex<TtlCache<String, Arc<ProjectConfig>>>,
 }
 
 impl Emulator {
@@ -45,11 +46,13 @@ impl Emulator {
     }
 
     /// Worker의 KV 조회 + 메모리 캐시와 같은 역할.
-    async fn project(&self, key: &str) -> anyhow::Result<Option<ProjectConfig>> {
+    async fn project(&self, key: &str) -> anyhow::Result<Option<Arc<ProjectConfig>>> {
         if let Some(cfg) = lock(&self.cache).get(key, now_ms()) {
             return Ok(cfg);
         }
-        let cfg = analytics_pg::projects::config_by_public_key(&self.pool, key).await?;
+        let cfg = analytics_pg::projects::config_by_public_key(&self.pool, key)
+            .await?
+            .map(Arc::new);
         lock(&self.cache).put(key.to_owned(), cfg.clone(), now_ms());
         Ok(cfg)
     }
