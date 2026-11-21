@@ -14,6 +14,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
 use tower::ServiceExt;
 
 const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef-edge";
@@ -1094,7 +1095,7 @@ fn purchase_at(
 async fn client_purchase_projected_when_enabled() {
     let h = setup_with(json!({"client_purchase_as_order": true})).await;
     let e = purchase(h.project, "C1", 50_000, 1);
-    h.svc.client_purchases(&[e.clone(), e]).await.unwrap();
+    h.svc.client_purchases(&[e.clone(), e]).await;
     let o = h.order("C1").await.unwrap();
     assert_eq!(o.source, "client");
     assert_eq!(o.effective_amount, 50_000);
@@ -1107,8 +1108,7 @@ async fn client_purchase_ignored_when_disabled() {
     let h = setup().await;
     h.svc
         .client_purchases(&[purchase(h.project, "C1", 50_000, 1)])
-        .await
-        .unwrap();
+        .await;
     assert!(h.order("C1").await.is_none());
     assert_eq!(h.event_count("C1").await, 0);
 }
@@ -1121,14 +1121,12 @@ async fn s2s_always_wins_over_client() {
     let before = h.order("O1").await.unwrap();
     h.svc
         .client_purchases(&[purchase(h.project, "O1", 999, 1)])
-        .await
-        .unwrap();
+        .await;
     assert_eq!(h.order("O1").await.unwrap(), before);
     // 클라이언트 먼저 → S2S가 오면 S2S로 바뀐다
     h.svc
         .client_purchases(&[purchase(h.project, "O2", 999, 2)])
-        .await
-        .unwrap();
+        .await;
     assert_eq!(h.order("O2").await.unwrap().source, "client");
     h.post(&confirm("O2", 100_000)).await;
     let o = h.order("O2").await.unwrap();
@@ -1167,8 +1165,7 @@ async fn ordered_at_frozen_when_s2s_replaces_client_across_months() {
     let at = ms("2026-10-31T23:59:00Z");
     h.svc
         .client_purchases(&[purchase_at(h.project, "M1", 50_000, 1, at)])
-        .await
-        .unwrap();
+        .await;
     assert_eq!(h.order("M1").await.unwrap().source, "client");
     let (s, _) = h
         .post(&confirm_at("M1", 100_000, "2026-11-01T09:10:00+09:00"))
@@ -1223,4 +1220,103 @@ async fn confirm_correction_across_months_counted_once() {
     );
     let (oct, nov) = h.oct_plus_nov().await;
     assert_eq!((oct, nov), (80_000, 0));
+}
+
+// ── 클라이언트 purchase 남용 방지 ──────────────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_purchase_cannot_rewrite_amount() {
+    // 공개 키만으로 보낸 나중 purchase가 클라이언트 주문 금액을 바꾸지 못한다
+    let h = setup_with(json!({"client_purchase_as_order": true})).await;
+    let r = h
+        .svc
+        .client_purchases(&[purchase(h.project, "C1", 50_000, 1)])
+        .await;
+    assert_eq!((r.applied, r.failed), (1, 0));
+    h.svc
+        .client_purchases(&[purchase_at(h.project, "C1", 1, 2, 1_795_167_999_000)])
+        .await;
+    let o = h.order("C1").await.unwrap();
+    assert_eq!(o.effective_amount, 50_000);
+    assert_eq!(h.event_count("C1").await, 2, "이벤트는 남긴다 (감사용)");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_events_per_order_are_capped() {
+    let h = setup_with(json!({"client_purchase_as_order": true})).await;
+    let evs: Vec<_> = (0..(super::MAX_CLIENT_EVENTS_PER_ORDER as u128 + 5))
+        .map(|i| purchase(h.project, "C1", 1000, 100 + i))
+        .collect();
+    let r = h.svc.client_purchases(&evs).await;
+    assert_eq!(r.applied, super::MAX_CLIENT_EVENTS_PER_ORDER);
+    assert_eq!(r.capped, 5);
+    assert_eq!(
+        h.event_count("C1").await,
+        super::MAX_CLIENT_EVENTS_PER_ORDER
+    );
+    assert_eq!(h.svc.metrics.client_capped.load(Relaxed), 5);
+    // S2S 이벤트는 상한과 무관하게 받는다
+    assert_eq!(h.post(&confirm("C1", 7)).await.0, StatusCode::ACCEPTED);
+    assert_eq!(h.order("C1").await.unwrap().source, "s2s");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn background_client_projection_is_bounded() {
+    let db = TestDb::new().await;
+    let (project, _) = make_project(&db, json!({"client_purchase_as_order": true})).await;
+    // 동시 작업 한도 0: 모두 버리고 지표로 센다 (작업을 무한히 띄우지 않는다)
+    let svc = Arc::new(OrderService::with_client_concurrency(
+        db.pg.clone(),
+        db.ch.clone(),
+        0,
+    ));
+    svc.spawn_client_purchases(&[purchase(project, "B1", 1, 1), purchase(project, "B2", 1, 2)]);
+    assert_eq!(svc.metrics.client_dropped.load(Relaxed), 2);
+    // 한도 안이면 백그라운드에서 반영된다
+    let svc = Arc::new(OrderService::with_client_concurrency(
+        db.pg.clone(),
+        db.ch.clone(),
+        1,
+    ));
+    svc.spawn_client_purchases(&[purchase(project, "B3", 1, 3)]);
+    let scope = ProjectScope::authorized(project as u32);
+    let mut found = false;
+    for _ in 0..100 {
+        if ch_orders::current_order(&db.ch, scope, "B3")
+            .await
+            .unwrap()
+            .is_some()
+        {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(found);
+    assert_eq!(svc.metrics.client_dropped.load(Relaxed), 0);
+    assert!(
+        ch_orders::current_order(&db.ch, scope, "B1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_purchase_failure_does_not_skip_rest_of_batch() {
+    let h = setup_with(json!({"client_purchase_as_order": true})).await;
+    let dead = analytics_ch::Client::default().with_url("http://127.0.0.1:1");
+    let svc = OrderService::new(h.db.pg.clone(), dead);
+    let evs = [
+        purchase(h.project, "F1", 1, 1),
+        purchase(h.project, "F2", 1, 2),
+        purchase(h.project, "F3", 1, 3),
+    ];
+    let r = svc.client_purchases(&evs).await;
+    assert_eq!(
+        (r.applied, r.failed),
+        (0, 3),
+        "실패한 건 뒤의 건도 시도한다"
+    );
+    assert_eq!(svc.metrics.client_failed.load(Relaxed), 3);
 }

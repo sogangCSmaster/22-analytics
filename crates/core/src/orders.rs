@@ -1210,6 +1210,31 @@ mod tests {
     }
 
     #[test]
+    fn client_only_order_keeps_first_confirm() {
+        // 공개 키(pk)만 있으면 누구나 purchase를 보낼 수 있으므로, 클라이언트 주문은 첫 확정을 쓴다.
+        let mut first = confirm("client:1", 50_000, 1_000);
+        first.source = OrderSource::Client;
+        first.visitor_id = Some(Uuid::from_u128(1));
+        let mut forged = confirm("client:2", 1, 2_000);
+        forged.source = OrderSource::Client;
+        forged.visitor_id = Some(Uuid::from_u128(2));
+        for p in permutations(&[first.clone(), forged.clone()]) {
+            let s = fold(&p).unwrap();
+            assert_eq!(
+                s.net_amount, 50_000,
+                "나중 클라이언트 확정이 금액을 바꾸지 못한다"
+            );
+            assert_eq!(s.ordered_at_ms, 1_000);
+            assert_eq!(s.visitor_id, Some(Uuid::from_u128(1)));
+        }
+        // S2S가 오면 S2S의 최신 확정이 이긴다
+        let s2s = [confirm("a", 100_000, 3_000), confirm("b", 90_000, 4_000)];
+        let all = [first, forged, s2s[0].clone(), s2s[1].clone()];
+        let s = fold(&all).unwrap();
+        assert_eq!((s.source, s.net_amount), (OrderSource::S2s, 90_000));
+    }
+
+    #[test]
     fn s2s_wins_over_client() {
         let mut client = confirm("client:1", 120_000, 500);
         client.source = OrderSource::Client;
