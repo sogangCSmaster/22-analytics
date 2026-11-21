@@ -115,8 +115,8 @@ pub fn map_response(reply: Option<OriginReply>) -> EdgeResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::forward::tests::{NOW, SECRET};
-    use analytics_core::edge_auth::{HEADER_SIGNATURE, HEADER_TIMESTAMP, verify};
+    use crate::forward::tests::{NOW, SECRET, origin_verifies};
+    use analytics_core::edge_auth::{HEADER_SIGNATURE, HEADER_TIMESTAMP, SignedRequest, verify};
 
     const BODY: &[u8] =
         br#"{"event_type":"PURCHASE_CONFIRMED","order_id":"ORD-9901","net_amount":100000}"#;
@@ -131,14 +131,7 @@ mod tests {
     }
 
     fn verifies(f: &ForwardRequest) -> bool {
-        let ts: i64 = f.header(HEADER_TIMESTAMP).unwrap().parse().unwrap();
-        verify(
-            SECRET,
-            ts,
-            &f.body,
-            f.header(HEADER_SIGNATURE).unwrap(),
-            NOW,
-        )
+        origin_verifies(f, forward::ORDERS_PATH, &f.body, NOW)
     }
 
     // ── 해피 ──
@@ -168,6 +161,46 @@ mod tests {
         let f = build_forward(&r, "https://origin", SECRET, NOW).unwrap();
         assert_eq!(f.header(HEADER_FORWARDED_PATH), Some("/v1/orders:batch"));
         assert_eq!(f.header(HEADER_IDEMPOTENCY_KEY), Some("ORD-9901:confirm"));
+        assert!(verifies(&f), "멱등 키까지 서명된다");
+    }
+
+    #[test]
+    fn forwarded_headers_are_covered_by_signature() {
+        let mut r = req(BODY);
+        r.idempotency_key = Some("k-1");
+        let f = build_forward(&r, "https://origin", SECRET, NOW).unwrap();
+        assert!(verifies(&f));
+        let ts: i64 = f.header(HEADER_TIMESTAMP).unwrap().parse().unwrap();
+        let sig = f.header(HEADER_SIGNATURE).unwrap();
+        let base = SignedRequest {
+            internal_path: forward::ORDERS_PATH,
+            timestamp_ms: ts,
+            body: BODY,
+            forwarded_path: "/v1/orders",
+            forwarded_authorization: "Bearer sk_live_abcdefgh12345678",
+            idempotency_key: "k-1",
+        };
+        assert!(verify(SECRET, &base, sig, NOW));
+        for changed in [
+            SignedRequest {
+                forwarded_path: "/v1/orders:batch",
+                ..base
+            },
+            SignedRequest {
+                forwarded_authorization: "Bearer sk_live_attacker",
+                ..base
+            },
+            SignedRequest {
+                idempotency_key: "",
+                ..base
+            },
+            SignedRequest {
+                internal_path: forward::COLLECT_PATH,
+                ..base
+            },
+        ] {
+            assert!(!verify(SECRET, &changed, sig, NOW), "{changed:?}");
+        }
     }
 
     #[test]
@@ -296,12 +329,10 @@ mod tests {
         let f = build_forward(&req(raw), "https://o", SECRET, NOW).unwrap();
         assert_eq!(f.body, raw);
         assert!(verifies(&f));
-        let sig = f.header(HEADER_SIGNATURE).unwrap();
-        assert!(!verify(
-            SECRET,
-            NOW,
+        assert!(!origin_verifies(
+            &f,
+            forward::ORDERS_PATH,
             br#"{"order_id":"A","net_amount":1}"#,
-            sig,
             NOW
         ));
     }

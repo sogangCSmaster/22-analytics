@@ -213,7 +213,7 @@ impl RetryPolicy {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use analytics_core::edge_auth::verify;
+    use analytics_core::edge_auth::{SignedRequest, verify};
     use uuid::Uuid;
 
     pub(crate) const SECRET: &[u8] = b"edge-shared-secret";
@@ -256,15 +256,27 @@ pub(crate) mod tests {
         }
     }
 
-    fn verifies(req: &ForwardRequest, now: i64) -> bool {
+    /// 원점(ingest)이 하는 것과 같이 요청 헤더로 서명 대상을 다시 만들어 검증한다.
+    pub(crate) fn origin_verifies(
+        req: &ForwardRequest,
+        internal_path: &str,
+        body: &[u8],
+        now: i64,
+    ) -> bool {
         let ts: i64 = req.header(HEADER_TIMESTAMP).unwrap().parse().unwrap();
-        verify(
-            SECRET,
-            ts,
-            &req.body,
-            req.header(HEADER_SIGNATURE).unwrap(),
-            now,
-        )
+        let signed = SignedRequest {
+            internal_path,
+            timestamp_ms: ts,
+            body,
+            forwarded_path: req.header("x-forwarded-path").unwrap_or(""),
+            forwarded_authorization: req.header("x-forwarded-authorization").unwrap_or(""),
+            idempotency_key: req.header("idempotency-key").unwrap_or(""),
+        };
+        verify(SECRET, &signed, req.header(HEADER_SIGNATURE).unwrap(), now)
+    }
+
+    fn verifies(req: &ForwardRequest, now: i64) -> bool {
+        req.url.ends_with(COLLECT_PATH) && origin_verifies(req, COLLECT_PATH, &req.body, now)
     }
 
     // ── 해피 ──
@@ -311,25 +323,43 @@ pub(crate) mod tests {
             NOW,
         );
         let sig = req.header(HEADER_SIGNATURE).unwrap();
+        let c = |ts, body| SignedRequest::collect(ts, body);
+        assert!(verify(SECRET, &c(NOW, &req.body), sig, NOW));
         let mut tampered = req.body.clone();
         let i = tampered.len() / 2;
         tampered[i] ^= 1;
-        assert!(!verify(SECRET, NOW, &tampered, sig, NOW));
+        assert!(!verify(SECRET, &c(NOW, &tampered), sig, NOW));
         let mut extended = req.body.clone();
         extended.push(b' ');
-        assert!(!verify(SECRET, NOW, &extended, sig, NOW));
+        assert!(!verify(SECRET, &c(NOW, &extended), sig, NOW));
         assert!(!verify(
             SECRET,
-            NOW,
-            &req.body[..req.body.len() - 1],
+            &c(NOW, &req.body[..req.body.len() - 1]),
             sig,
             NOW
         ));
-        assert!(!verify(b"wrong", NOW, &req.body, sig, NOW));
+        assert!(!verify(b"wrong", &c(NOW, &req.body), sig, NOW));
         assert!(
-            !verify(SECRET, NOW + 1, &req.body, sig, NOW),
+            !verify(SECRET, &c(NOW + 1, &req.body), sig, NOW),
             "타임스탬프도 서명에 포함"
         );
+    }
+
+    #[test]
+    fn collect_signature_is_bound_to_collect_path() {
+        let req = signed("https://o", COLLECT_PATH, SECRET, b"{}".to_vec(), NOW);
+        assert!(origin_verifies(&req, COLLECT_PATH, &req.body, NOW));
+        assert!(
+            !origin_verifies(&req, ORDERS_PATH, &req.body, NOW),
+            "다른 내부 경로로 재생할 수 없다"
+        );
+    }
+
+    #[test]
+    fn requeued_message_resigned_in_v1_format() {
+        let m = &queue_messages(&[event(1)])[0];
+        let r = m.to_request("https://o", SECRET, NOW + 60_000);
+        assert!(origin_verifies(&r, COLLECT_PATH, &r.body, NOW + 60_000));
     }
 
     #[test]

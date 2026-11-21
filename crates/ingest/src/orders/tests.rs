@@ -673,8 +673,79 @@ async fn malformed_and_hostile_payloads() {
     assert!(v["message"].is_string());
 }
 
-fn signed(body: &[u8], ts: i64) -> (String, String) {
-    (ts.to_string(), edge_auth::sign(SECRET, ts, body))
+/// Worker와 같은 방식(v1)으로 `/internal/orders` 요청을 서명한다.
+fn signed_for(
+    secret: &[u8],
+    body: &[u8],
+    ts: i64,
+    path: &str,
+    auth: &str,
+    idem: &str,
+) -> (String, String) {
+    let req = edge_auth::SignedRequest {
+        internal_path: edge_auth::ORDERS_PATH,
+        timestamp_ms: ts,
+        body,
+        forwarded_path: path,
+        forwarded_authorization: auth,
+        idempotency_key: idem,
+    };
+    (ts.to_string(), edge_auth::sign(secret, &req))
+}
+
+fn edge_headers(ts: &str, sig: &str, path: &str, auth: &str) -> Vec<(String, String)> {
+    vec![
+        ("x-edge-timestamp".to_owned(), ts.to_owned()),
+        ("x-edge-signature".to_owned(), sig.to_owned()),
+        ("x-forwarded-path".to_owned(), path.to_owned()),
+        ("x-forwarded-authorization".to_owned(), auth.to_owned()),
+    ]
+}
+
+async fn post_internal(app: &Router, headers: Vec<(String, String)>, b: Vec<u8>) -> StatusCode {
+    let hs: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    send(app, "/internal/orders", &hs, b).await.0
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn internal_signature_covers_forwarded_headers_and_path() {
+    let h = setup().await;
+    let body = confirm("X1", 1).to_string().into_bytes();
+    let auth = format!("Bearer {}", h.key);
+    let now = crate::internal::now_ms();
+
+    // 단건 경로로 서명한 요청을 일괄 경로로 바꿔 보낼 수 없다
+    let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", &auth, "");
+    let s = post_internal(&h.app, edge_headers(&ts, &sig, "/v1/orders:batch", &auth), body.clone()).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "x-forwarded-path 바꿔치기");
+    // 다른 Authorization으로 바꿔치기
+    let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", "Bearer sk_live_a", "");
+    let s = post_internal(&h.app, edge_headers(&ts, &sig, "/v1/orders", &auth), body.clone()).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "x-forwarded-authorization 바꿔치기");
+    // 서명되지 않은 멱등 키 추가
+    let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", &auth, "");
+    let mut hs = edge_headers(&ts, &sig, "/v1/orders", &auth);
+    hs.push(("idempotency-key".into(), "injected".into()));
+    let s = post_internal(&h.app, hs, body.clone()).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "idempotency-key 주입");
+    // /internal/collect용 서명을 /internal/orders에 재생
+    let csig = edge_auth::sign(SECRET, &edge_auth::SignedRequest::collect(now, &body));
+    let s = post_internal(
+        &h.app,
+        edge_headers(&now.to_string(), &csig, "/v1/orders", &auth),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "교차 경로 재생");
+    // (이전 형식 서명 거부는 core edge_auth 단위 테스트가 확인한다)
+    // 극단 타임스탬프는 패닉 없이 401
+    let (ts, sig) = signed_for(SECRET, &body, i64::MIN, "/v1/orders", &auth, "");
+    let s = post_internal(&h.app, edge_headers(&ts, &sig, "/v1/orders", &auth), body.clone()).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(h.event_count("X1").await, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -683,15 +754,9 @@ async fn internal_route_with_edge_signature() {
     let body = confirm("E1", 1234).to_string().into_bytes();
     let auth = format!("Bearer {}", h.key);
     let now = crate::internal::now_ms();
+    let signed = |body: &[u8], ts: i64| signed_for(SECRET, body, ts, "/v1/orders", &auth, "");
     let (ts, sig) = signed(&body, now);
-    let hdr = |ts: &str, sig: &str, path: &str, auth: &str| {
-        vec![
-            ("x-edge-timestamp".to_owned(), ts.to_owned()),
-            ("x-edge-signature".to_owned(), sig.to_owned()),
-            ("x-forwarded-path".to_owned(), path.to_owned()),
-            ("x-forwarded-authorization".to_owned(), auth.to_owned()),
-        ]
-    };
+    let hdr = |ts: &str, sig: &str, path: &str, auth: &str| edge_headers(ts, sig, path, auth);
     let post = |headers: Vec<(String, String)>, b: Vec<u8>| {
         let app = h.app.clone();
         async move {
@@ -726,28 +791,35 @@ async fn internal_route_with_edge_signature() {
     let (ots, osig) = signed(&body, old);
     let (s, _) = post(hdr(&ots, &osig, "/v1/orders", &auth), body.clone()).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED, "오래된 서명 재사용");
-    let wrong = edge_auth::sign(b"wrong-secret-wrong-secret-wrong-secret", now, &body);
+    let (_, wrong) = signed_for(
+        b"wrong-secret-wrong-secret-wrong-secret",
+        &body,
+        now,
+        "/v1/orders",
+        &auth,
+        "",
+    );
     let (s, _) = post(hdr(&ts, &wrong, "/v1/orders", &auth), body.clone()).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
 
     // 서명이 맞아도 원 요청의 키는 원점에서 다시 검증한다
-    let (s, v) = post(
-        hdr(&ts, &sig, "/v1/orders", "Bearer sk_live_forged"),
-        body.clone(),
-    )
-    .await;
+    let forged = "Bearer sk_live_forged";
+    let (_, fsig) = signed_for(SECRET, &body, now, "/v1/orders", forged, "");
+    let (s, v) = post(hdr(&ts, &fsig, "/v1/orders", forged), body.clone()).await;
     assert_eq!((s, err_code(&v)), (StatusCode::UNAUTHORIZED, "invalid_key"));
-    let (s, _) = post(hdr(&ts, &sig, "/v1/orders", ""), body.clone()).await;
+    let (_, esig) = signed_for(SECRET, &body, now, "/v1/orders", "", "");
+    let (s, _) = post(hdr(&ts, &esig, "/v1/orders", ""), body.clone()).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
     // 모르는 경로
-    let (s, _) = post(hdr(&ts, &sig, "/v1/collect", &auth), body.clone()).await;
+    let (_, usig) = signed_for(SECRET, &body, now, "/v1/collect", &auth, "");
+    let (s, _) = post(hdr(&ts, &usig, "/v1/collect", &auth), body.clone()).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 
     // 일괄 + 엣지가 전달한 idempotency-key
     let batch = json!({"orders": [confirm("E3", 1)]})
         .to_string()
         .into_bytes();
-    let (bts, bsig) = signed(&batch, now);
+    let (bts, bsig) = signed_for(SECRET, &batch, now, "/v1/orders:batch", &auth, "");
     let (s, v) = post(hdr(&bts, &bsig, "/v1/orders:batch", &auth), batch).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{v}");
     assert_eq!(v["results"][0]["accepted"], true);
@@ -755,7 +827,7 @@ async fn internal_route_with_edge_signature() {
     let r = refund("E1", 5, "2026-11-20T12:00:00Z")
         .to_string()
         .into_bytes();
-    let (rts, rsig) = signed(&r, now);
+    let (rts, rsig) = signed_for(SECRET, &r, now, "/v1/orders", &auth, "edge-key-1");
     let mut with_key = hdr(&rts, &rsig, "/v1/orders", &auth);
     with_key.push(("idempotency-key".into(), "edge-key-1".into()));
     let (s, _) = post(with_key, r).await;

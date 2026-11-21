@@ -62,3 +62,46 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
 pub fn now_ms() -> i64 {
     (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use analytics_core::edge_auth::SignedRequest;
+
+    const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef-edge";
+    const NOW: i64 = 1_795_219_200_000;
+    const BODY: &[u8] = br#"{"events":[]}"#;
+
+    fn headers(ts: i64, sig: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(HEADER_TIMESTAMP, ts.to_string().parse().unwrap());
+        h.insert(HEADER_SIGNATURE, sig.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn collect_accepts_v1_collect_signature() {
+        let sig = edge_auth::sign(SECRET, &SignedRequest::collect(NOW, BODY));
+        assert!(verify_collect(SECRET, &headers(NOW, &sig), BODY, NOW));
+        assert!(!verify_collect(SECRET, &HeaderMap::new(), BODY, NOW));
+    }
+
+    #[test]
+    fn collect_rejects_signature_made_for_orders() {
+        // /internal/orders로 서명된 본문을 /internal/collect로 재생할 수 없다
+        let orders = SignedRequest {
+            internal_path: edge_auth::ORDERS_PATH,
+            ..SignedRequest::collect(NOW, BODY)
+        };
+        let sig = edge_auth::sign(SECRET, &orders);
+        assert!(!verify_collect(SECRET, &headers(NOW, &sig), BODY, NOW));
+    }
+
+    #[test]
+    fn collect_extreme_timestamps_do_not_panic() {
+        for ts in [i64::MIN, i64::MAX] {
+            let sig = edge_auth::sign(SECRET, &SignedRequest::collect(ts, BODY));
+            assert!(!verify_collect(SECRET, &headers(ts, &sig), BODY, NOW));
+        }
+    }
+}
