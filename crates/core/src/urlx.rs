@@ -30,21 +30,27 @@ pub struct PageUrl {
 }
 
 /// 페이지 URL을 파싱하고 정리한다. http(s)가 아니면 `None`.
+///
+/// 수집 경로에서 이벤트마다 호출되므로 할당을 줄인다: 키는 빌린 채로 비교하고(대소문자 무시),
+/// 제거할 파라미터가 없으면 원래 쿼리 문자열을 그대로 둔다(다시 인코딩하지 않는다).
 pub fn parse_page_url(raw: &str, settings: &TrackingSettings) -> Option<PageUrl> {
     let mut url = Url::parse(raw).ok()?;
     if !matches!(url.scheme(), "http" | "https") {
         return None;
     }
-    let host = url.host_str()?.to_ascii_lowercase();
+    // http(s)는 파서가 host를 이미 소문자로 정규화한다.
+    let host = url.host_str()?.to_owned();
     let mut campaign = Campaign::default();
-    let mut kept: Vec<(String, String)> = Vec::new();
+    let mut stripped = false;
+    let mut kept = 0usize;
 
     for (k, v) in url.query_pairs() {
-        let (k, v) = (k.into_owned(), v.into_owned());
         if settings.should_strip(&k) {
+            stripped = true;
             continue;
         }
-        match k.as_str() {
+        kept += 1;
+        match &*k {
             "utm_source" => campaign.utm_source = clip(&v, 200),
             "utm_medium" => campaign.utm_medium = clip(&v, 200),
             "utm_campaign" => campaign.utm_campaign = clip(&v, 200),
@@ -55,24 +61,31 @@ pub fn parse_page_url(raw: &str, settings: &TrackingSettings) -> Option<PageUrl>
         // 설정 순서대로 첫 번째 클릭 ID를 채택한다.
         if campaign.click_id.is_empty()
             && !v.is_empty()
-            && settings.click_id_params.iter().any(|p| p == &k)
+            && settings.click_id_params.iter().any(|p| *p == *k)
         {
             campaign.click_id = clip(&v, 256);
-            campaign.click_id_type = k.clone();
+            campaign.click_id_type = k.into_owned();
         }
-        kept.push((k, v));
     }
 
-    if kept.is_empty() {
+    if kept == 0 {
         url.set_query(None);
-    } else {
-        url.query_pairs_mut().clear().extend_pairs(kept.iter());
+    } else if stripped {
+        // 느린 경로: 남길 파라미터만 다시 직렬화한다 (제거가 있을 때만).
+        let query = url.query().unwrap_or_default().to_owned();
+        let mut out = url::form_urlencoded::Serializer::new(String::with_capacity(query.len()));
+        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+            if !settings.should_strip(&k) {
+                out.append_pair(&k, &v);
+            }
+        }
+        url.set_query(Some(&out.finish()));
     }
     url.set_fragment(None);
 
     let path = url.path().to_owned();
     Some(PageUrl {
-        url: clip(url.as_str(), crate::event::MAX_URL_LEN),
+        url: clip_owned(url.into(), crate::event::MAX_URL_LEN),
         host,
         path,
         campaign,
@@ -118,11 +131,17 @@ pub fn same_site(a: &str, b: &str) -> bool {
 }
 
 /// 허용 도메인 매칭: `client.com`은 `client.com`과 모든 하위 도메인을 허용한다.
+/// 요청마다 호출되므로 허용 항목마다 문자열을 만들지 않는다 (대소문자 무시 비교).
 pub fn host_allowed(host: &str, allowed: &[String]) -> bool {
-    let host = host.to_ascii_lowercase();
     allowed.iter().any(|a| {
-        let a = a.trim().trim_start_matches("*.").to_ascii_lowercase();
-        host == a || host.ends_with(&format!(".{a}"))
+        let a = a.trim().trim_start_matches("*.");
+        if host.len() == a.len() {
+            return host.eq_ignore_ascii_case(a);
+        }
+        // `.{a}`로 끝나는지: 바이트 단위로 자르므로 경계가 문자 중간이어도 안전하다.
+        host.len() > a.len()
+            && host.as_bytes()[host.len() - a.len() - 1] == b'.'
+            && host.as_bytes()[host.len() - a.len()..].eq_ignore_ascii_case(a.as_bytes())
     })
 }
 
