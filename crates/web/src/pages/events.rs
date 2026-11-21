@@ -83,7 +83,7 @@ pub fn EventsTable(
     });
     rsx! {
         div { class: "table-wrap",
-            table { class: "table stack",
+            table { class: "table table-cards",
                 thead {
                     tr {
                         SortTh { label: "이벤트", k: Col::Name, sort, right: false }

@@ -143,7 +143,7 @@ pub fn ChannelRevenueTable(report: RevenueReport, prev: Option<RevenueReport>) -
     let total_roas_change = roas_change(r.roas, prev.as_ref().map(|p| p.roas));
     rsx! {
         div { class: "table-wrap", style: "margin-top: 16px;",
-            table { class: "table stack",
+            table { class: "table table-cards",
                 thead { tr {
                     th { scope: "col", "매체" }
                     th { class: "r m-hide", scope: "col", "매체가 주장한 매출" }
@@ -410,7 +410,7 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                             div { class: "callout", "이 쪽에는 주문이 없어요. 이전 쪽으로 돌아가 보세요." }
                         } else {
                             div { class: "table-wrap",
-                                table { class: "table stack",
+                                table { class: "table table-cards",
                                     thead { tr {
                                         th { scope: "col", "주문" }
                                         th { scope: "col", "마지막 클릭" }

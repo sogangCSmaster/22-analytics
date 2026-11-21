@@ -71,7 +71,7 @@ pub fn PagesTable(
     });
     rsx! {
         div { class: "table-wrap",
-            table { class: "table stack",
+            table { class: "table table-cards",
                 thead {
                     tr {
                         SortTh { label: "페이지 경로", k: Col::Path, sort, right: false }

@@ -253,7 +253,7 @@ const PREV_PAGES_LIMIT: u32 = crate::pages::page_report::LIMIT;
 pub fn TopPagesTable(rows: Vec<(PageRow, Option<PageRow>)>, compare: bool) -> Element {
     rsx! {
         div { class: "table-wrap",
-            table { class: "table stack",
+            table { class: "table table-cards",
                 thead { tr {
                     th { scope: "col", "페이지" }
                     th { class: "r", scope: "col", "페이지뷰" }

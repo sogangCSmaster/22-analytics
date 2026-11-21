@@ -390,42 +390,48 @@
   .barlist-value { grid-area: value; align-self: start; }
 
   /* 카드 행으로 바꾸지 않는 표(설정·관리·주문): 카드 안에서 가로 스크롤, 첫 열 고정 */
-  .table:not(.stack) th:first-child, .table:not(.stack) td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg); }
+  .table:not(.table-cards) th:first-child, .table:not(.table-cards) td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg); }
 }
 
 /* ===== 좁은 화면 표 → 카드 행 (≤640px) ===== */
 @media (max-width: 640px) {
-  .table.stack, .table.stack tbody, .table.stack tfoot, .table.stack thead { display: block; width: 100%; }
+  .table.table-cards, .table.table-cards tbody, .table.table-cards tfoot, .table.table-cards thead { display: block; width: 100%; }
   /* 머리글은 정렬 버튼만 칩으로 남긴다 */
-  .table.stack thead tr { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 6px; padding: 0 var(--s-4) var(--s-3); border-bottom: 1px solid var(--line); scrollbar-width: none; }
-  .table.stack thead tr::-webkit-scrollbar { display: none; }
-  .table.stack thead tr:not(:has(.sortable:not(.m-hide))) { display: none; }
-  .table.stack thead th { display: none; padding: 0; border: 0; }
-  .table.stack thead th.sortable:not(.m-hide) { display: block; flex: none; }
-  .table.stack thead .th-btn { height: 32px; padding: 0 12px; border-radius: 16px; background: var(--card); font-size: 12px; white-space: nowrap; }
-  .table.stack thead th[aria-sort="ascending"] .th-btn, .table.stack thead th[aria-sort="descending"] .th-btn { background: var(--primary-weak); color: var(--primary); font-weight: 700; }
-  .table.stack tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--line); }
-  .table.stack tbody tr:last-child { border-bottom: 0; }
-  .table.stack td {
+  .table.table-cards thead tr { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 6px; padding: 0 var(--s-4) var(--s-3); border-bottom: 1px solid var(--line); scrollbar-width: none; }
+  .table.table-cards thead tr::-webkit-scrollbar { display: none; }
+  .table.table-cards thead tr:not(:has(.sortable:not(.m-hide))) { display: none; }
+  .table.table-cards thead th { display: none; padding: 0; border: 0; }
+  .table.table-cards thead th.sortable:not(.m-hide) { display: block; flex: none; }
+  .table.table-cards thead .th-btn { height: 32px; padding: 0 12px; border-radius: 16px; background: var(--card); font-size: 12px; white-space: nowrap; }
+  .table.table-cards thead th[aria-sort="ascending"] .th-btn, .table.table-cards thead th[aria-sort="descending"] .th-btn { background: var(--primary-weak); color: var(--primary); font-weight: 700; }
+  .table.table-cards tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--line); }
+  .table.table-cards tbody tr:last-child { border-bottom: 0; }
+  .table.table-cards td {
     display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 0; border: 0; min-width: 0;
     white-space: normal; text-align: left; overflow-wrap: anywhere; background: transparent;
   }
-  .table.stack td::before { content: attr(data-label); font-size: 11px; color: var(--text-weak); font-weight: 500; }
-  .table.stack td:first-child { grid-column: 1 / -1; }
-  .table.stack td:first-child::before { display: none; }
-  .table.stack td:empty { display: none; }
-  .table.stack td.main-metric { flex-direction: row; flex-wrap: wrap; align-items: center; column-gap: 6px; }
-  .table.stack td.main-metric::before { flex-basis: 100%; }
-  .table.stack .m-hide { display: none; }
-  .table.stack .m-only { display: inline-flex; }
-  .table.stack .path-cell { max-width: none; word-break: break-all; }
-  .table.stack tbody tr:hover td { background: transparent; }
-  .table.stack tbody tr.clickable:active { background: var(--bg-page); }
-  .table.stack tfoot tr { background: var(--bg-page); border-bottom: 0; }
-  .table.stack tfoot td { border-top: 0; }
+  .table.table-cards td::before { content: attr(data-label); font-size: 11px; color: var(--text-weak); font-weight: 500; }
+  .table.table-cards td:first-child { grid-column: 1 / -1; }
+  .table.table-cards td:first-child::before { display: none; }
+  .table.table-cards td:empty { display: none; }
+  .table.table-cards td.main-metric { flex-direction: row; flex-wrap: wrap; align-items: center; column-gap: 6px; }
+  .table.table-cards td.main-metric::before { flex-basis: 100%; }
+  .table.table-cards .m-hide { display: none; }
+  .table.table-cards .m-only { display: inline-flex; }
+  .table.table-cards .path-cell { max-width: none; word-break: break-all; }
+  .table.table-cards tbody tr:hover td { background: transparent; }
+  .table.table-cards tbody tr.clickable:active { background: var(--bg-page); }
+  .table.table-cards tfoot tr { background: var(--bg-page); border-bottom: 0; }
+  .table.table-cards tfoot td { border-top: 0; }
 }
 
 @media (max-width: 400px) {
   .topbar-org { display: none; }
   .range-picker .segmented button { padding: 0 10px; }
+}
+
+/* 비교 열이 붙은 표는 칸 여백을 줄여 한 화면에 들어오게 한다 */
+@media (min-width: 641px) {
+  .table:has(.cmp-col) th, .table:has(.cmp-col) td { padding-left: 12px; padding-right: 12px; }
+  .table:has(.cmp-col) th:first-child, .table:has(.cmp-col) td:first-child { padding-left: var(--s-5); }
 }

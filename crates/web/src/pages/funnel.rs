@@ -58,7 +58,7 @@ pub fn pair_steps(
 pub fn FunnelTable(steps: Vec<(FunnelStep, Option<FunnelStep>)>, compare: bool) -> Element {
     rsx! {
         div { class: "table-wrap",
-            table { class: "table stack",
+            table { class: "table table-cards",
                 thead { tr {
                     th { scope: "col", "단계" }
                     th { class: "r", scope: "col", "방문자" }

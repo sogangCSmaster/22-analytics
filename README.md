@@ -11,6 +11,9 @@ BinaryCube Analytics — 멀티 프로젝트 웹 분석 + 주문번호 기준 �
 - 로그인: 아무 이메일·비밀번호로 들어갑니다 (빈 값도 됩니다).
 - 로그인부터 개요·실시간·유입·페이지·이벤트·전자상거래·실제 매출(중복 소거)·설정·관리 화면까지 모두 볼 수 있습니다.
   설정 변경은 브라우저(localStorage)에만 남습니다.
+- 처음 들어오면 "데모 화면입니다 · 모든 숫자는 예시 데이터예요" 알림이 잠깐 떴다 사라집니다 (브라우저 세션당 한 번).
+- 상단 바의 **이전 기간 비교**를 켜면 지표 카드·추이 차트·모든 리포트 표에 이전 기간 값과 변화(▲/▼, 이전 0이면 "신규")가 붙습니다.
+- 휴대폰(390px)에서도 가로 넘침 없이 보이도록 표는 카드 행으로 바뀝니다 (`docs/screenshots/demo-mobile-*.png`).
 
 ![데모 개요](docs/screenshots/demo-overview.png)
 
@@ -28,7 +31,7 @@ BinaryCube Analytics — 멀티 프로젝트 웹 분석 + 주문번호 기준 �
 ```sh
 make demo          # dx serve → http://localhost:8080 (예시 데이터, 아무 값으로 로그인)
 make demo-pages    # GitHub Pages용 릴리스 번들 (/22-analytics/ 경로)
-make e2e-demo      # 브라우저 확인: /22-analytics/ 경로 + 404.html 폴백, 스크린샷 docs/screenshots/demo-*.png
+make e2e-demo      # 브라우저 확인: /22-analytics/ 경로 + 404.html 폴백, 스크린샷 docs/screenshots/demo-*.png (데스크톱·비교·모바일)
 cargo test -p analytics-web --no-default-features   # 데모 서버 단위 테스트 포함
 ```
 

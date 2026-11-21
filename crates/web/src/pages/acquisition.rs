@@ -75,7 +75,7 @@ pub fn ChannelTable(
     });
     rsx! {
         div { class: "table-wrap",
-            table { class: "table stack",
+            table { class: "table table-cards",
                 thead {
                     tr {
                         SortTh { label: "채널", k: Col::Channel, sort, right: false }
