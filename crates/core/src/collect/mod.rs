@@ -3,6 +3,8 @@
 //! Cloudflare Worker와 ingest의 엣지 에뮬레이션 모드가 같은 함수를 쓴다.
 //! I/O는 하지 않는다. UUID 생성은 호출자가 주입한다.
 
+pub mod cookie;
+
 use crate::channel::{self, ChannelInput, ChannelRule};
 use crate::event::{self, Ecommerce, Event, Item, WireBatch, WireEvent, WireLanding, names};
 use crate::settings::TrackingSettings;
@@ -13,6 +15,10 @@ use uuid::Uuid;
 
 /// 클라이언트 시각을 믿을 수 있는 최대 오차.
 const MAX_CLOCK_SKEW_MS: i64 = 24 * 60 * 60 * 1000;
+/// UA 파서(woothee)에 넘기는 최대 길이. 비정상적으로 긴 UA로 CPU를 쓰게 하는 것을 막는다.
+pub const MAX_UA_LEN: usize = 1024;
+/// Referer는 URL 한도의 두 배까지만 본다. 넘으면 없는 것으로 친다.
+pub const MAX_REFERER_LEN: usize = event::MAX_URL_LEN * 2;
 
 /// Worker KV / ingest 캐시에 들어가는 프로젝트 수집 설정.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,7 +34,8 @@ pub struct ProjectConfig {
     pub salt_hex: String,
 }
 
-/// 요청 맥락. 엣지(또는 에뮬레이터)가 헤더에서 채운다.
+/// 요청 맥락. 엣지(또는 에뮬레이터)가 헤더 원문으로 채운다. 길이 제한(UA 자르기, 긴 Referer
+/// 무시)은 [`process`]가 적용하므로 호출자는 값을 손질하지 않는다.
 #[derive(Debug, Default, Clone)]
 pub struct RequestCtx<'a> {
     pub origin: Option<&'a str>,
@@ -57,6 +64,19 @@ pub enum Reject {
     Invalid(&'static str),
 }
 
+impl Reject {
+    /// 로그·디버그 헤더용 짧은 코드.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Inactive => "inactive",
+            Self::OriginNotAllowed => "origin_not_allowed",
+            Self::Bot => "bot",
+            Self::DoNotTrack => "dnt",
+            Self::Invalid(_) => "invalid",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Processed {
     pub visitor_id: Uuid,
@@ -82,9 +102,10 @@ pub fn process(
     }
     // Referer는 Origin 헤더가 아예 없을 때만 쓴다. `Origin: null`처럼 값이 있지만 해석할 수 없으면
     // 거부한다 (sandbox iframe 등에서 Referer를 위조·유지한 요청이 허용 도메인으로 통과하지 않게).
+    let referer = ctx.referer.filter(|r| r.len() <= MAX_REFERER_LEN);
     let origin_host = match ctx.origin {
         Some(o) => host_of(o),
-        None => ctx.referer.and_then(host_of),
+        None => referer.and_then(host_of),
     }
     .ok_or(Reject::OriginNotAllowed)?;
     if !urlx::host_allowed(&origin_host, &cfg.allowed_origins) {
@@ -93,7 +114,7 @@ pub fn process(
     if cfg.settings.respect_dnt && ctx.dnt {
         return Err(Reject::DoNotTrack);
     }
-    let ua = parse_ua(ctx.user_agent);
+    let ua = parse_ua(urlx::clip_str(ctx.user_agent, MAX_UA_LEN));
     if ua.is_bot {
         return Err(Reject::Bot);
     }

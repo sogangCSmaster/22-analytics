@@ -3,6 +3,7 @@
 
 use crate::AppState;
 use crate::config::Config;
+use analytics_core::collect::cookie::{VISITOR_COOKIE, visitor_id};
 use analytics_core::collect::{self, ProjectConfig, RequestCtx};
 use analytics_core::event::{MAX_BATCH_BYTES, WireBatch};
 use analytics_core::timeutil::now_ms;
@@ -26,7 +27,6 @@ use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 const CONFIG_TTL: Duration = Duration::from_secs(60);
-const VISITOR_COOKIE: &str = "_at_vid";
 
 pub struct Emulator {
     pool: PgPool,
@@ -141,7 +141,7 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         country: h("cf-ipcountry").unwrap_or("KR"),
         region: "",
         city: "",
-        cookie_vid: cookie(&headers, VISITOR_COOKIE).and_then(|v| Uuid::parse_str(&v).ok()),
+        cookie_vid: cookie_vid(&headers),
         dnt: h("dnt") == Some("1"),
         now_ms: now_ms(),
     };
@@ -150,7 +150,7 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         Ok(p) => p,
         Err(e) => {
             tracing::debug!(reason = %e, "배치 거부");
-            return reject(&s, reject_code(&e));
+            return reject(&s, e.code());
         }
     };
 
@@ -202,25 +202,11 @@ fn status_with_reason(status: StatusCode, code: &'static str) -> Response {
     r
 }
 
-fn reject_code(e: &collect::Reject) -> &'static str {
-    match e {
-        collect::Reject::Inactive => "inactive",
-        collect::Reject::OriginNotAllowed => "origin_not_allowed",
-        collect::Reject::Bot => "bot",
-        collect::Reject::DoNotTrack => "dnt",
-        collect::Reject::Invalid(_) => "invalid",
-    }
-}
-
-fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+/// `Cookie` 헤더(여러 개일 수 있다)에서 엣지와 같은 규칙으로 `_at_vid`를 읽는다.
+fn cookie_vid(headers: &HeaderMap) -> Option<Uuid> {
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .find_map(|raw| {
-            raw.split(';').find_map(|kv| {
-                let (k, v) = kv.trim().split_once('=')?;
-                (k == name).then(|| v.to_owned())
-            })
-        })
+        .find_map(|raw| visitor_id(Some(raw)))
 }

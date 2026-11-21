@@ -6,33 +6,12 @@
 use analytics_core::urlx::registrable_domain;
 use uuid::Uuid;
 
-pub const VISITOR_COOKIE: &str = "_at_vid";
+pub use analytics_core::collect::cookie::{VISITOR_COOKIE, visitor_id};
 /// 1년
 pub const COOKIE_MAX_AGE_SECS: u32 = 31_536_000;
 
 /// 브라우저가 `Domain`을 거부하는 공개 호스팅 접미사 (PSL 등재). 이 아래에서는 Domain을 생략한다.
 const HOSTED_SUFFIXES: &[&str] = &["workers.dev", "pages.dev"];
-
-/// `Cookie` 헤더에서 `_at_vid`를 찾는다.
-///
-/// - 이름은 대소문자를 구분해 정확히 일치해야 한다.
-/// - 같은 이름이 여러 번 오면 (경로가 더 구체적인 쿠키가 앞에 온다, RFC 6265 §5.4) 처음으로
-///   UUID로 해석되는 값을 쓴다.
-/// - `=`가 없는 조각, 빈 값, UUID가 아닌 값, nil UUID는 무시한다.
-pub fn visitor_id(cookie_header: Option<&str>) -> Option<Uuid> {
-    cookie_header?.split(';').find_map(|pair| {
-        let (name, value) = pair.split_once('=')?;
-        if name.trim() != VISITOR_COOKIE {
-            return None;
-        }
-        let value = value.trim();
-        let value = value
-            .strip_prefix('"')
-            .and_then(|v| v.strip_suffix('"'))
-            .unwrap_or(value);
-        Uuid::parse_str(value).ok().filter(|u| !u.is_nil())
-    })
-}
 
 /// `Set-Cookie`의 `Domain` 값: 요청 호스트의 등록 가능 도메인.
 ///

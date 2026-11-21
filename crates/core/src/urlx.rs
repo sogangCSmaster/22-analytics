@@ -127,14 +127,19 @@ pub fn host_allowed(host: &str, allowed: &[String]) -> bool {
 }
 
 pub fn clip(s: &str, max: usize) -> String {
+    clip_str(s, max).to_owned()
+}
+
+/// [`clip`]의 빌림 버전: 앞 `max`바이트 이내의 가장 긴 UTF-8 접두사.
+pub fn clip_str(s: &str, max: usize) -> &str {
     if s.len() <= max {
-        return s.to_owned();
+        return s;
     }
     let mut end = max;
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    s[..end].to_owned()
+    &s[..end]
 }
 
 #[cfg(test)]
