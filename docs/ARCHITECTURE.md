@@ -73,11 +73,12 @@
 ### 1.1 데이터 흐름
 
 1. 트래커는 이벤트를 메모리 큐에 모았다가 다음 시점에 **배치로** 전송합니다.
-   - 2초가 지나거나 10건이 쌓였을 때
-   - 페이지가 숨겨질 때(`visibilitychange`, `pagehide`)
+   - 10건이 쌓였거나, 마지막 이벤트 뒤 15초 동안 새 이벤트가 없을 때
+   - 페이지가 숨겨질 때(`visibilitychange`, `pagehide`, `sendBeacon`)
+   - 요청 1건은 50건·60KB 이하로 나눕니다(서버 상한 64KB, `413` 없음).
 2. Worker는 받은 배치를 검증하고 보강한 뒤 Tunnel을 통해 `ingest`로 전달합니다(`ctx.waitUntil`). 브라우저에는 즉시 `204`를 응답합니다.
 3. 원점으로 전달하지 못하면 Worker가 배치를 **Cloudflare Queue**에 넣고, Queue consumer가 재시도합니다.
-4. `ingest`는 1초 또는 1만 행 단위로 ClickHouse에 insert합니다. 같은 배치를 로컬 세그먼트 파일(NDJSON)에도 append하고, 5분마다 zstd로 압축해 S3에 업로드합니다.
+4. `ingest`는 3초(`FLUSH_INTERVAL_MS`) 또는 1만 행 단위로 ClickHouse에 insert합니다. 같은 배치를 로컬 세그먼트 파일(NDJSON)에도 append하고, 5분마다 zstd로 압축해 S3에 업로드합니다.
 5. `jobs`는 주문 변경분을 감지해 기여 연산을 수행하고 결과를 `attributed_revenue`에 씁니다.
 6. 대시보드는 `api`를 통해 ClickHouse의 롤업 테이블과 기여 결과를 조회합니다.
 
@@ -137,7 +138,7 @@ Organization (광고주)
 - `t.js`는 **모든 프로젝트가 공유하는 하나의 불변 파일**입니다.
   - 버전마다 `/t.v{N}.js`를 두고 `immutable` 캐시를 적용합니다.
   - `/t.js`는 최신 버전을 가리키며 `max-age=3600`입니다.
-- 프로젝트 설정은 Worker가 `/v1/config?k=pk_...`로 내려줍니다. KV에서 읽고 `max-age=300`입니다. 트래커는 설정을 `localStorage`에 캐시해 다음 페이지에서 바로 씁니다.
+- 프로젝트 설정은 Worker가 `/v1/config?k=pk_...`로 내려줍니다. KV에서 읽고 `max-age=300`입니다. 트래커는 설정을 `localStorage`에 캐시해 다음 페이지에서 바로 씁니다. 다시 받는 것은 캐시가 없거나 24시간이 지났거나, 수집 응답 헤더 `x-cfg-v`(설정 버전, `Access-Control-Expose-Headers`로 노출)가 캐시한 `v`와 다를 때뿐입니다.
 - 수집 항목 토글은 **서버(Worker)에서도 다시 적용**합니다. 설정이 바뀐 직후 옛 설정으로 들어온 이벤트도 걸러지도록 하기 위해서입니다.
 
 ### 3.2 프로젝트 설정 (대시보드 토글)
@@ -220,7 +221,7 @@ at('getVisitorId', id => ...);         // 비 HttpOnly 모드에서 주문서에
 
 ### 4.1 수집 요청 처리 순서
 
-1. `pk` → 프로젝트 설정을 KV에서 조회합니다(Worker 메모리 캐시 60초). 없거나 비활성이면 `204` 후 폐기합니다.
+1. `pk` → 프로젝트 설정을 KV에서 조회합니다(Worker 메모리 캐시 5분). 없거나 비활성이면 `204` 후 폐기합니다.
 2. `Origin`이나 `Referer`가 허용 도메인 목록에 있는지 확인합니다. 아니면 폐기합니다.
 3. 봇을 필터링합니다.
    - Cloudflare `cf.botManagement`(사용 가능 시) 또는 UA 블랙리스트
@@ -730,22 +731,50 @@ GROUP BY model, lookback_days;
 | 가용성 요구 | ClickHouse 2노드 + Keeper 3노드(`ReplicatedMergeTree`) |
 | 수십억 행/일 | 샤딩, 또는 S3 원본을 유지한 채 ClickHouse Cloud로 이전 검토 |
 
+### 10.3 배포 시 챙길 비용 항목
+
+코드에는 이미 반영된 절감(아래 표)과 별개로, 운영 환경을 만들 때 설정해야 비용 추정(§11)이 맞는 항목입니다.
+
+| 항목 | 내용 | 이유 |
+|---|---|---|
+| S3 원본 업로더 | ingest가 회전·압축한 `.ndjson.zst` 세그먼트를 `22a-raw`로 올리고 로컬 파일을 지운다 (현재 코드는 로컬 압축까지만 한다) | 로컬 EBS가 원본으로 차지 않게. 90일 뒤 Glacier IR |
+| ClickHouse cold tier | `storage_configuration`에 S3 disk(`22a-ch-cold`)와 `hot`/`cold` volume 정책을 두고, 큰 표에 `TTL ... TO VOLUME 'cold'`(30일)를 건다 | 로컬 개발에는 S3가 없어 마이그레이션에 넣지 않았다. 배포 환경 전용 설정 + ALTER |
+| 보존 기간 | 원본 `events` 13개월, 롤업(`daily_*`)·주문·기여 결과 25개월. `events` TTL은 지금 25개월이므로 배포 때 `MODIFY TTL ... SETTINGS materialize_ttl_after_modify = 0`으로 줄인다 | 원본이 저장량의 대부분. 리포트는 13개월 이후 롤업으로 충분 |
+| 3년 Savings Plan | EC2 Compute Savings Plan 3년 약정 | 1년 대비 EC2 비용 약 40% 절감 (§11) |
+| 작은 고객 | 월 1천만 이벤트 이하는 `m7g.medium`(1 vCPU, 4GB)로 시작. ClickHouse `max_server_memory_usage_to_ram_ratio=0.5`, `max_threads=1` | 1천만 이벤트/월은 CPU·메모리 여유가 크다 |
+
+코드에 반영된 절감 (2026-11):
+
+| 항목 | 변경 |
+|---|---|
+| 트래커 설정 요청 | `/v1/config`를 페이지뷰마다 받지 않는다. 캐시가 없거나 24시간이 지났거나 수집 응답 `x-cfg-v`가 캐시 버전과 다를 때만 받는다 → 엣지 요청이 페이지뷰당 약 1건 |
+| 트래커 전송 | 2초 타이머 대신 10건·15초 유휴·페이지 이탈(sendBeacon)에 전송. 요청당 50건·60KB 이하 |
+| 엣지 설정 캐시 | isolate 메모리 캐시 60초 → 5분 (KV 읽기 감소) |
+| ingest 플러시 | `FLUSH_INTERVAL_MS` 기본 1초 → 3초 (INSERT·작은 파트 감소) |
+| ClickHouse 저장 | `0005_storage`: 시각 열 `Delta+ZSTD(1)`, `title`·`referrer` `ZSTD(3)`, `events.event_id` 7일·`order_events.raw` 90일 컬럼 TTL |
+| 보존 검증 | 매시간은 최근 40일 주문만, 주간 전체. 증분 연산은 바뀐 주문 ID에만 `FINAL` |
+
 ---
 
 ## 11. 비용 추정 (월 1억 이벤트, 대략치. 착수 시 재확인)
 
-| 항목 | 월 비용 |
-|---|---|
-| Cloudflare Workers Paid (기본 $5 + 배치로 약 3천만 요청) | $10~15 |
-| Cloudflare Queue (장애 시에만 사용) | ~$0 |
-| Cloudflare for SaaS (무료 할당 내) | $0 |
-| EC2 m7g.large (1년 Savings Plan 기준) | $45~55 |
-| EBS gp3 100GB | ~$10 |
-| S3 (원본 zstd 압축 약 10GB/월 누적, 백업) | $1~5 |
-| 기타 (CloudWatch, SSM, 데이터 아웃) | ~$5 |
-| **합계** | **약 $75~95** |
+가정: 페이지뷰 약 3천만(페이지뷰당 이벤트 약 3.3건), §10.3의 배포 항목 적용.
 
-이벤트당 저장 용량은 ClickHouse 압축 후 약 50~100바이트로 가정합니다. 이 기준이면 연간 약 1.2억 행당 10GB 수준입니다.
+| 항목 | 월 비용 (1년 약정) | 월 비용 (3년 약정) |
+|---|---|---|
+| Cloudflare Workers Paid ($5 + 요청 약 3천만: 페이지뷰당 약 1건, 설정 요청은 하루 1회 수준) | ~$11 | ~$11 |
+| Cloudflare Queue (장애 시에만 사용) · Cloudflare for SaaS (무료 할당 내) | ~$0 | ~$0 |
+| EC2 m7g.large (Compute Savings Plan) | ~$43 | ~$26 |
+| EBS gp3 100GB | ~$9 | ~$9 |
+| 퍼블릭 IPv4 1개 | ~$4 | ~$4 |
+| S3 (원본 zstd 약 10GB/월 누적 + Glacier IR, CH cold tier, 백업) | ~$8 | ~$8 |
+| 기타 (CloudWatch Logs 7일, SSM, 데이터 아웃) | ~$7 | ~$7 |
+| **합계** | **약 $82** | **약 $65** |
+
+- 트래커 수정(§10.3) 전에는 페이지뷰마다 설정 요청이 하나 더 있어 Workers 요청이 약 2배(~$20)였습니다.
+- 월 1천만 이벤트: `m7g.medium` + gp3 30GB, Workers는 기본 포함량 안 → 1년 약정 약 $35, 3년 약 $28.
+- 이벤트당 저장 용량은 ClickHouse 압축 후 약 50~100바이트로 가정합니다(0005 코덱 적용 후 아래쪽). 원본 13개월
+  보존이면 월 1억 이벤트 기준 hot(30일) 약 10GB, 나머지는 S3 cold tier에 있습니다.
 
 ---
 
@@ -884,6 +913,6 @@ make test      # 전체 테스트
 |---|---|
 | Cloudflare Worker `/t.js`, `/v1/config`, `/v1/collect` | ingest 같은 경로 (에뮬레이션) |
 | Worker → Tunnel → ingest `/internal/collect` (HMAC) | 같은 프로세스 안에서 바로 파이프라인으로 |
-| KV 프로젝트 설정 | Postgres 조회 + 60초 메모리 캐시 |
+| KV 프로젝트 설정 | Postgres 조회 + 60초 메모리 캐시 (운영 Worker는 5분) |
 | S3 원본 아카이브 | `ARCHIVE_DIR` 로컬 디렉터리 (`.ndjson.zst`) |
 | 거부 시 204 (사유 숨김) | 204 + `x-at-status` 헤더에 사유 (디버깅용) |

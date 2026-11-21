@@ -21,13 +21,22 @@ impl EdgeResponse {
 
     /// `{"error":"<code>"}` JSON 응답. code는 정적 문자열만 받는다 (입력값을 응답에 반사하지 않음).
     pub fn error(status: u16, code: &'static str) -> Self {
+        Self::json(status, format!(r#"{{"error":"{code}"}}"#).into_bytes())
+    }
+
+    /// 주문 API 오류 `{"error","message"}` (원점 ingest와 같은 상태·코드·메시지).
+    pub fn api_error(e: ApiError) -> Self {
+        Self::json(e.status(), e.body().to_string().into_bytes())
+    }
+
+    fn json(status: u16, body: Vec<u8>) -> Self {
         Self {
             status,
             headers: vec![(
                 "content-type".into(),
                 "application/json; charset=utf-8".into(),
             )],
-            body: format!(r#"{{"error":"{code}"}}"#).into_bytes(),
+            body,
         }
     }
 
@@ -45,28 +54,7 @@ impl EdgeResponse {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OrdersKind {
-    Single,
-    Batch,
-}
-
-impl OrdersKind {
-    /// 클라이언트가 호출한 경로. 원점에 `x-forwarded-path`로 전달한다.
-    pub fn public_path(self) -> &'static str {
-        match self {
-            Self::Single => "/v1/orders",
-            Self::Batch => "/v1/orders:batch",
-        }
-    }
-
-    pub fn body_limit(self) -> usize {
-        match self {
-            Self::Single => crate::orders::MAX_ORDER_BYTES,
-            Self::Batch => crate::orders::MAX_ORDER_BATCH_BYTES,
-        }
-    }
-}
+pub use analytics_core::orders::api::{ApiError, OrdersKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
@@ -82,15 +70,18 @@ pub enum Route {
 /// 메서드·경로로 처리기를 고른다. `/t.js` 등 정적 파일은 wrangler `[assets]`가 Worker 앞에서 처리한다.
 pub fn route(method: &str, path: &str) -> Route {
     let m = method.to_ascii_uppercase();
+    if let Some(kind) = OrdersKind::from_path(path) {
+        return if m == "POST" {
+            Route::Orders(kind)
+        } else {
+            Route::MethodNotAllowed
+        };
+    }
     match (path, m.as_str()) {
         ("/v1/collect", "POST") => Route::Collect,
         ("/v1/config", "GET") => Route::Config,
-        ("/v1/orders", "POST") => Route::Orders(OrdersKind::Single),
-        ("/v1/orders:batch", "POST") => Route::Orders(OrdersKind::Batch),
         ("/v1/collect" | "/v1/config", "OPTIONS") => Route::Preflight,
-        ("/v1/collect" | "/v1/config" | "/v1/orders" | "/v1/orders:batch", _) => {
-            Route::MethodNotAllowed
-        }
+        ("/v1/collect" | "/v1/config", _) => Route::MethodNotAllowed,
         _ => Route::NotFound,
     }
 }
@@ -153,11 +144,20 @@ mod tests {
 
     #[test]
     fn error_body_never_reflects_input() {
-        let r = EdgeResponse::error(401, "unauthorized");
-        assert_eq!(r.body, br#"{"error":"unauthorized"}"#);
+        let r = EdgeResponse::error(400, "bad_request");
+        assert_eq!(r.body, br#"{"error":"bad_request"}"#);
         assert_eq!(
             r.header("Content-Type"),
             Some("application/json; charset=utf-8")
         );
+    }
+
+    #[test]
+    fn api_error_matches_origin_contract() {
+        let r = EdgeResponse::api_error(ApiError::MissingKey);
+        assert_eq!(r.status, 401);
+        let v: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!(v, ApiError::MissingKey.body());
+        assert_eq!(v["error"], "missing_key");
     }
 }

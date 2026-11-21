@@ -3,16 +3,23 @@
 //! Cloudflare Worker와 ingest의 엣지 에뮬레이션 모드가 같은 함수를 쓴다.
 //! I/O는 하지 않는다. UUID 생성은 호출자가 주입한다.
 
+pub mod cookie;
+
 use crate::channel::{self, ChannelInput, ChannelRule};
 use crate::event::{self, Ecommerce, Event, Item, WireBatch, WireEvent, WireLanding, names};
+use crate::ids::is_sha256_hex;
 use crate::settings::TrackingSettings;
-use crate::urlx::{self, Campaign, clip};
+use crate::urlx::{self, Campaign, clip, clip_owned};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 /// 클라이언트 시각을 믿을 수 있는 최대 오차.
 const MAX_CLOCK_SKEW_MS: i64 = 24 * 60 * 60 * 1000;
+/// UA 파서(woothee)에 넘기는 최대 길이. 비정상적으로 긴 UA로 CPU를 쓰게 하는 것을 막는다.
+pub const MAX_UA_LEN: usize = 1024;
+/// Referer는 URL 한도의 두 배까지만 본다. 넘으면 없는 것으로 친다.
+pub const MAX_REFERER_LEN: usize = event::MAX_URL_LEN * 2;
 
 /// Worker KV / ingest 캐시에 들어가는 프로젝트 수집 설정.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,7 +35,8 @@ pub struct ProjectConfig {
     pub salt_hex: String,
 }
 
-/// 요청 맥락. 엣지(또는 에뮬레이터)가 헤더에서 채운다.
+/// 요청 맥락. 엣지(또는 에뮬레이터)가 헤더 원문으로 채운다. 길이 제한(UA 자르기, 긴 Referer
+/// 무시)은 [`process`]가 적용하므로 호출자는 값을 손질하지 않는다.
 #[derive(Debug, Default, Clone)]
 pub struct RequestCtx<'a> {
     pub origin: Option<&'a str>,
@@ -57,6 +65,19 @@ pub enum Reject {
     Invalid(&'static str),
 }
 
+impl Reject {
+    /// 로그·디버그 헤더용 짧은 코드.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Inactive => "inactive",
+            Self::OriginNotAllowed => "origin_not_allowed",
+            Self::Bot => "bot",
+            Self::DoNotTrack => "dnt",
+            Self::Invalid(_) => "invalid",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Processed {
     pub visitor_id: Uuid,
@@ -82,9 +103,10 @@ pub fn process(
     }
     // Referer는 Origin 헤더가 아예 없을 때만 쓴다. `Origin: null`처럼 값이 있지만 해석할 수 없으면
     // 거부한다 (sandbox iframe 등에서 Referer를 위조·유지한 요청이 허용 도메인으로 통과하지 않게).
+    let referer = ctx.referer.filter(|r| r.len() <= MAX_REFERER_LEN);
     let origin_host = match ctx.origin {
         Some(o) => host_of(o),
-        None => ctx.referer.and_then(host_of),
+        None => referer.and_then(host_of),
     }
     .ok_or(Reject::OriginNotAllowed)?;
     if !urlx::host_allowed(&origin_host, &cfg.allowed_origins) {
@@ -93,7 +115,7 @@ pub fn process(
     if cfg.settings.respect_dnt && ctx.dnt {
         return Err(Reject::DoNotTrack);
     }
-    let ua = parse_ua(ctx.user_agent);
+    let ua = parse_ua(urlx::clip_str(ctx.user_agent, MAX_UA_LEN));
     if ua.is_bot {
         return Err(Reject::Bot);
     }
@@ -122,6 +144,12 @@ pub fn process(
         .unwrap_or_default();
 
     let session_source = batch.l.as_ref().and_then(|l| session_source(cfg, l));
+    // 지역 정보는 배치 단위로 같으므로 한 번만 자른다.
+    let geo = Geo {
+        country: clip(ctx.country, 2),
+        region: clip(ctx.region, 64),
+        city: clip(ctx.city, 64),
+    };
 
     let mut events = Vec::with_capacity(batch.e.len());
     let mut dropped = 0;
@@ -130,6 +158,7 @@ pub fn process(
             visitor_id,
             session_id,
             member_hash: &member_hash,
+            geo: &geo,
         };
         match build_event(
             ctx,
@@ -156,6 +185,13 @@ struct Ids<'a> {
     visitor_id: Uuid,
     session_id: Uuid,
     member_hash: &'a str,
+    geo: &'a Geo,
+}
+
+struct Geo {
+    country: String,
+    region: String,
+    city: String,
 }
 
 /// 세션 범위 유입 정보: 랜딩 페이지의 캠페인과 채널.
@@ -242,7 +278,7 @@ fn build_event(
         Some(src) if !is_session_start => (src.campaign.clone(), src.channel.clone()),
         _ => {
             let ch = classify_campaign(&page.campaign, &referrer_host, &page.host, cfg);
-            (page.campaign.clone(), ch)
+            (page.campaign, ch)
         }
     };
 
@@ -252,21 +288,20 @@ fn build_event(
         we.t
     };
     let ec = we.ec.map(|ec| Ecommerce {
-        order_id: clip(ec.order_id.as_deref().unwrap_or(""), 128),
+        order_id: clip_owned(ec.order_id.unwrap_or_default(), 128),
         value: money(ec.value.unwrap_or(0.0)),
-        currency: clip(
-            &ec.currency
-                .unwrap_or_else(|| "KRW".into())
-                .to_ascii_uppercase(),
-            3,
-        ),
+        currency: {
+            let mut c = clip_owned(ec.currency.unwrap_or_else(|| "KRW".into()), 3);
+            c.make_ascii_uppercase();
+            c
+        },
         items: ec
             .items
             .into_iter()
             .take(event::MAX_ITEMS)
             .map(|i| Item {
-                id: clip(&i.id, 128),
-                name: clip(&i.name, 256),
+                id: clip_owned(i.id, 128),
+                name: clip_owned(i.name, 256),
                 price: money(i.price),
                 qty: i.qty,
             })
@@ -289,8 +324,8 @@ fn build_event(
         member_hash: ids.member_hash.to_owned(),
         url: page.url,
         host: page.host,
-        path: clip(&page.path, 1024),
-        title: clip(we.ti.as_deref().unwrap_or(""), 300),
+        path: clip_owned(page.path, 1024),
+        title: clip_owned(we.ti.unwrap_or_default(), 300),
         referrer,
         referrer_host,
         utm_source: campaign.utm_source,
@@ -301,9 +336,9 @@ fn build_event(
         click_id: campaign.click_id,
         click_id_type: campaign.click_id_type,
         channel,
-        country: clip(ctx.country, 2),
-        region: clip(ctx.region, 64),
-        city: clip(ctx.city, 64),
+        country: ids.geo.country.clone(),
+        region: ids.geo.region.clone(),
+        city: ids.geo.city.clone(),
         device_type: ua.device_type.to_owned(),
         browser: ua.browser.clone(),
         os: ua.os.clone(),
@@ -328,7 +363,7 @@ fn props(
                 serde_json::Value::Number(n) => n.to_string(),
                 other => other.to_string(),
             };
-            Some((k, clip(&v, event::MAX_PROP_VALUE_LEN)))
+            Some((k, clip_owned(v, event::MAX_PROP_VALUE_LEN)))
         })
         .collect()
 }
@@ -351,10 +386,6 @@ fn host_of(s: &str) -> Option<String> {
 
 fn parse_uuid(s: &str) -> Option<Uuid> {
     Uuid::parse_str(s).ok().filter(|u| !u.is_nil())
-}
-
-fn is_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// 프로젝트 salt로 회원 해시를 다시 해싱한다. 프로젝트끼리 같은 회원을 연결할 수 없게 하기 위해서다.
@@ -553,6 +584,35 @@ mod tests {
             process(&ctx("HeadlessChrome/120"), &cfg(), b, counter()),
             Err(Reject::Bot)
         );
+    }
+
+    #[test]
+    fn overlong_referer_is_ignored_like_edge() {
+        // 엣지와 에뮬레이터가 같게: URL 한도 두 배를 넘는 Referer는 없는 것으로 친다
+        let mut c = ctx(CHROME);
+        c.origin = None;
+        let long = format!(
+            "https://www.client.com/{}",
+            "a".repeat(crate::event::MAX_URL_LEN * 2)
+        );
+        c.referer = Some(&long);
+        let b = batch(vec![ev("page_view", "https://client.com/")]);
+        assert_eq!(
+            process(&c, &cfg(), b.clone(), counter()),
+            Err(Reject::OriginNotAllowed)
+        );
+        let ok = format!("https://www.client.com/{}", "a".repeat(100));
+        c.referer = Some(&ok);
+        assert!(process(&c, &cfg(), b, counter()).is_ok());
+    }
+
+    #[test]
+    fn user_agent_is_clipped_before_parsing() {
+        // UA 파서에는 앞 1024바이트만 넘긴다 (엣지와 같음): 그 뒤의 문자열은 판정에 쓰지 않는다
+        let ua = format!("{CHROME}{}bot", " ".repeat(1100));
+        let b = batch(vec![ev("page_view", "https://client.com/")]);
+        let out = process(&ctx(&ua), &cfg(), b, counter()).unwrap();
+        assert_eq!(out.events[0].browser, "Chrome");
     }
 
     #[test]

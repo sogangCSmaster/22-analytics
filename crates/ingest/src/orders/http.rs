@@ -14,12 +14,11 @@
 //! 409 `idempotency_key_reused`: 같은 (이벤트 유형, 멱등 키)로 금액·시각이 다른 요청이 이미 있다.
 
 use super::{OrderService, ProjectCtx};
-use crate::internal::now_ms;
+use crate::config::Config;
 use analytics_core::edge_auth::{self, HEADER_SIGNATURE, HEADER_TIMESTAMP};
-use analytics_core::orders::{
-    self as core_orders, MAX_BATCH_BODY_BYTES, MAX_BATCH_ORDERS, MAX_SINGLE_BODY_BYTES,
-    OrderProject,
-};
+use analytics_core::orders::api::{ApiError, OrdersKind as Kind, bearer};
+use analytics_core::orders::{self as core_orders, MAX_BATCH_ORDERS, OrderProject};
+use analytics_core::timeutil::now_ms;
 use analytics_pg::api_keys::{self, SCOPE_ORDERS_WRITE};
 use axum::{
     Json, Router,
@@ -33,40 +32,33 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-pub const PATH_SINGLE: &str = "/v1/orders";
-pub const PATH_BATCH: &str = "/v1/orders:batch";
-pub const HEADER_FORWARDED_AUTH: &str = "x-forwarded-authorization";
-pub const HEADER_FORWARDED_PATH: &str = "x-forwarded-path";
-pub const HEADER_IDEMPOTENCY_KEY: &str = "idempotency-key";
+pub use analytics_core::orders::api::{
+    HEADER_FORWARDED_AUTHORIZATION, HEADER_FORWARDED_PATH, HEADER_IDEMPOTENCY_KEY,
+};
+pub const PATH_SINGLE: &str = Kind::Single.path();
+pub const PATH_BATCH: &str = Kind::Batch.path();
 /// 일괄 요청 안에서 동시에 처리하는 주문 수.
 const BATCH_CONCURRENCY: usize = 16;
 
 #[derive(Clone)]
 pub struct OrdersHttp {
     pub svc: Arc<OrderService>,
-    /// 비어 있으면 `/internal/orders`를 등록하지 않는다.
-    pub edge_secret: Arc<Vec<u8>>,
-    /// 참이면 `/v1/orders*`를 직접 받는다 (로컬 엣지 에뮬레이션).
-    pub emulation: bool,
+    /// `edge_secret`이 비어 있으면 `/internal/orders`를 등록하지 않는다.
+    /// `edge_emulation`이면 `/v1/orders*`를 직접 받는다 (로컬 엣지 에뮬레이션).
+    pub cfg: Arc<Config>,
 }
 
 pub fn router<S: Clone + Send + Sync + 'static>(st: OrdersHttp) -> Router<S> {
     let mut r = Router::new();
-    if st.emulation {
+    if st.cfg.edge_emulation {
         r = r
             .route(PATH_SINGLE, post(emulated_single))
             .route(PATH_BATCH, post(emulated_batch));
     }
-    if !st.edge_secret.is_empty() {
+    if !st.cfg.edge_secret.is_empty() {
         r = r.route("/internal/orders", post(internal));
     }
     r.with_state(st)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Single,
-    Batch,
 }
 
 fn header<'a>(h: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -89,36 +81,26 @@ async fn emulated_batch(State(st): State<OrdersHttp>, headers: HeaderMap, body: 
 }
 
 async fn internal(State(st): State<OrdersHttp>, headers: HeaderMap, body: Bytes) -> Response {
-    let ts = header(&headers, HEADER_TIMESTAMP).and_then(|v| v.parse::<i64>().ok());
-    let sig = header(&headers, HEADER_SIGNATURE);
-    let (Some(ts), Some(sig)) = (ts, sig) else {
-        return error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_signature",
-            "엣지 서명이 없습니다",
-        );
-    };
-    let signed = edge_auth::SignedRequest {
-        internal_path: edge_auth::ORDERS_PATH,
-        timestamp_ms: ts,
-        body: &body,
-        forwarded_path: header(&headers, HEADER_FORWARDED_PATH).unwrap_or(""),
-        forwarded_authorization: header(&headers, HEADER_FORWARDED_AUTH).unwrap_or(""),
+    let forwarded = edge_auth::Forwarded {
+        path: header(&headers, HEADER_FORWARDED_PATH).unwrap_or(""),
+        authorization: header(&headers, HEADER_FORWARDED_AUTHORIZATION).unwrap_or(""),
         idempotency_key: header(&headers, HEADER_IDEMPOTENCY_KEY).unwrap_or(""),
     };
-    if !edge_auth::verify(&st.edge_secret, &signed, sig, now_ms()) {
-        return error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_signature",
-            "엣지 서명이 올바르지 않습니다",
-        );
+    if !edge_auth::verify_headers(
+        &st.cfg.edge_secret,
+        edge_auth::ORDERS_PATH,
+        header(&headers, HEADER_TIMESTAMP),
+        header(&headers, HEADER_SIGNATURE),
+        &body,
+        forwarded,
+        now_ms(),
+    ) {
+        return api_error(ApiError::InvalidSignature);
     }
-    let kind = match header(&headers, HEADER_FORWARDED_PATH) {
-        Some(PATH_SINGLE) => Kind::Single,
-        Some(PATH_BATCH) => Kind::Batch,
-        _ => return error(StatusCode::NOT_FOUND, "not_found", "알 수 없는 경로"),
+    let Some(kind) = header(&headers, HEADER_FORWARDED_PATH).and_then(Kind::from_path) else {
+        return api_error(ApiError::NotFound);
     };
-    let auth = header(&headers, HEADER_FORWARDED_AUTH);
+    let auth = header(&headers, HEADER_FORWARDED_AUTHORIZATION);
     let idem = match kind {
         Kind::Single => header(&headers, HEADER_IDEMPOTENCY_KEY),
         Kind::Batch => None,
@@ -130,27 +112,19 @@ fn error(status: StatusCode, code: &str, message: &str) -> Response {
     (status, Json(json!({ "error": code, "message": message }))).into_response()
 }
 
-const KEY_REUSED: &str = "idempotency_key_reused";
-const KEY_REUSED_MESSAGE: &str = "같은 멱등 키로 내용이 다른 요청이 이미 처리되었습니다";
+fn api_error(e: ApiError) -> Response {
+    let status = StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, Json(e.body())).into_response()
+}
 
-fn key_reused() -> Response {
-    error(StatusCode::CONFLICT, KEY_REUSED, KEY_REUSED_MESSAGE)
+/// 일괄 결과 항목의 실패 표현.
+fn item_error(order_id: Value, e: ApiError) -> Value {
+    json!({ "order_id": order_id, "accepted": false, "error": e.code(), "message": e.message() })
 }
 
 fn storage_unavailable(e: &anyhow::Error) -> Response {
     tracing::error!(error = %e, "주문 저장소 오류");
-    error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "storage_unavailable",
-        "일시적인 저장소 오류입니다. 같은 요청을 다시 보내 주세요",
-    )
-}
-
-/// `Bearer <token>` (스킴 대소문자 무시).
-fn bearer(v: &str) -> Option<&str> {
-    let (scheme, token) = v.trim().split_once(' ')?;
-    let token = token.trim();
-    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
+    api_error(ApiError::StorageUnavailable)
 }
 
 async fn handle(
@@ -160,23 +134,15 @@ async fn handle(
     idempotency_key: Option<&str>,
     body: &[u8],
 ) -> Response {
-    let limit = match kind {
-        Kind::Single => MAX_SINGLE_BODY_BYTES,
-        Kind::Batch => MAX_BATCH_BODY_BYTES,
-    };
-    if body.len() > limit {
-        return error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "too_large",
-            "본문이 너무 큽니다",
-        );
+    if body.len() > kind.body_limit() {
+        return api_error(ApiError::TooLarge);
     }
     let project = match authenticate(st, auth).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
     let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return error(StatusCode::BAD_REQUEST, "bad_json", "JSON 형식이 아닙니다");
+        return api_error(ApiError::BadJson);
     };
     match kind {
         Kind::Single => single(st, &project, value, idempotency_key).await,
@@ -186,37 +152,19 @@ async fn handle(
 
 async fn authenticate(st: &OrdersHttp, auth: Option<&str>) -> Result<ProjectCtx, Response> {
     let Some(token) = auth.and_then(bearer) else {
-        return Err(error(
-            StatusCode::UNAUTHORIZED,
-            "missing_key",
-            "Authorization: Bearer sk_... 헤더가 필요합니다",
-        ));
+        return Err(api_error(ApiError::MissingKey));
     };
     let key = match api_keys::verify(st.svc.pg(), token).await {
         Ok(Some(k)) => k,
-        Ok(None) => {
-            return Err(error(
-                StatusCode::UNAUTHORIZED,
-                "invalid_key",
-                "유효하지 않은 비밀 키입니다",
-            ));
-        }
+        Ok(None) => return Err(api_error(ApiError::InvalidKey)),
         Err(e) => return Err(storage_unavailable(&e)),
     };
     if !key.has_scope(SCOPE_ORDERS_WRITE) {
-        return Err(error(
-            StatusCode::FORBIDDEN,
-            "insufficient_scope",
-            "orders:write 권한이 없는 키입니다",
-        ));
+        return Err(api_error(ApiError::InsufficientScope));
     }
     match st.svc.project(key.project_id).await {
         Ok(Some(p)) if p.active => Ok(p),
-        Ok(_) => Err(error(
-            StatusCode::FORBIDDEN,
-            "project_inactive",
-            "비활성 프로젝트입니다",
-        )),
+        Ok(_) => Err(api_error(ApiError::ProjectInactive)),
         Err(e) => Err(storage_unavailable(&e)),
     }
 }
@@ -241,7 +189,7 @@ async fn single(
         Err(e) => return error(StatusCode::UNPROCESSABLE_ENTITY, e.code(), &e.to_string()),
     };
     match st.svc.apply(v.event).await {
-        Ok(a) if a.conflict => key_reused(),
+        Ok(a) if a.conflict => api_error(ApiError::IdempotencyKeyReused),
         Ok(_) => (
             StatusCode::ACCEPTED,
             Json(json!({ "accepted": true, "warnings": v.warnings })),
@@ -256,35 +204,15 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
         Value::Array(a) => a,
         Value::Object(mut o) => match o.remove("orders") {
             Some(Value::Array(a)) => a,
-            _ => {
-                return error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_payload",
-                    "{\"orders\": [...]} 형식이어야 합니다",
-                );
-            }
+            _ => return api_error(ApiError::InvalidPayload),
         },
-        _ => {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "invalid_payload",
-                "{\"orders\": [...]} 형식이어야 합니다",
-            );
-        }
+        _ => return api_error(ApiError::InvalidPayload),
     };
     if items.is_empty() {
-        return error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "empty_batch",
-            "주문이 없습니다",
-        );
+        return api_error(ApiError::EmptyBatch);
     }
     if items.len() > MAX_BATCH_ORDERS {
-        return error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "too_many_orders",
-            "일괄 전송은 최대 500건입니다",
-        );
+        return api_error(ApiError::TooManyOrders);
     }
 
     let now = now_ms();
@@ -325,14 +253,12 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
             }
         };
         results[i] = match r {
-            Ok(a) if a.conflict => json!({ "order_id": order_id, "accepted": false,
-                "error": KEY_REUSED, "message": KEY_REUSED_MESSAGE }),
+            Ok(a) if a.conflict => item_error(order_id, ApiError::IdempotencyKeyReused),
             Ok(_) => json!({ "order_id": order_id, "accepted": true, "warnings": warnings }),
             Err(e) => {
                 tracing::error!(error = %e, "주문 저장 실패");
                 storage_failed = true;
-                json!({ "order_id": order_id, "accepted": false, "error": "storage_unavailable",
-                    "message": "일시적인 저장소 오류입니다. 같은 요청을 다시 보내 주세요" })
+                item_error(order_id, ApiError::StorageUnavailable)
             }
         };
     }
@@ -349,16 +275,13 @@ async fn batch(st: &OrdersHttp, project: &ProjectCtx, value: Value) -> Response 
     (status, Json(json!({ "results": results }))).into_response()
 }
 
-const INTERNAL_MESSAGE: &str = "내부 오류입니다. 같은 요청을 다시 보내 주세요";
-
 /// 결과가 비어 있는(`null`) 항목을 `{order_id, accepted:false, error:"internal"}`로 채운다.
 /// 하나라도 채웠으면 `true`.
 fn fill_missing_results(results: &mut [Value], order_ids: &[Value]) -> bool {
     let mut filled = false;
     for (r, order_id) in results.iter_mut().zip(order_ids) {
         if r.is_null() {
-            *r = json!({ "order_id": order_id, "accepted": false, "error": "internal",
-                "message": INTERNAL_MESSAGE });
+            *r = item_error(order_id.clone(), ApiError::Internal);
             filled = true;
         }
     }
@@ -383,7 +306,7 @@ mod tests {
         assert_eq!(
             results[1],
             json!({"order_id": "B", "accepted": false, "error": "internal",
-                "message": INTERNAL_MESSAGE})
+                "message": ApiError::Internal.message()})
         );
         assert_eq!(results[2]["order_id"], Value::Null);
         assert_eq!(results[2]["error"], "internal");

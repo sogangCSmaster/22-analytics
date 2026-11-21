@@ -17,6 +17,11 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
+/// 독이 든(poisoned) 잠금도 그대로 쓴다: 캐시처럼 언제든 다시 채울 수 있는 상태만 담는다.
+pub(crate) fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub cfg: Arc<config::Config>,
@@ -68,8 +73,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(internal::router())
         .merge(orders::http::router(orders::http::OrdersHttp {
             svc: orders,
-            edge_secret: Arc::new(cfg.edge_secret.clone()),
-            emulation: cfg.edge_emulation,
+            cfg: cfg.clone(),
         }));
     if emulator.is_some() {
         app = app.merge(emulate::router(&cfg));

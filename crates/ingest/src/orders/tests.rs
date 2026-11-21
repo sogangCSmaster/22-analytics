@@ -2,12 +2,13 @@
 
 use super::http::{OrdersHttp, router};
 use super::{OrderService, ProjectCtx};
+use crate::config::Config;
 use analytics_ch::ProjectScope;
 use analytics_ch::orders::{self as ch_orders, OrderRow};
 use analytics_core::collect::rehash_member;
 use analytics_core::edge_auth;
 use analytics_core::orders::{MAX_AMOUNT, MAX_BATCH_ORDERS, OrderStatus};
-use analytics_testkit::TestDb;
+use analytics_testkit::{MEMBER_HASH, ProjectBuilder, TestDb, VID};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -18,8 +19,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use tower::ServiceExt;
 
 const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef-edge";
-const MEMBER: &str = "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92";
-const VID: &str = "5c8a0d27-0861-4c76-b062-bc938f8c6833";
+const MEMBER: &str = MEMBER_HASH;
 
 struct H {
     db: TestDb,
@@ -31,30 +31,19 @@ struct H {
 }
 
 async fn make_project(db: &TestDb, settings: Value) -> (i32, String) {
-    let org: i64 =
-        sqlx::query_scalar("INSERT INTO organizations (name) VALUES ('광고주') RETURNING id")
-            .fetch_one(&db.pg)
-            .await
-            .unwrap();
     let salt = analytics_pg::new_salt_hex();
-    let id: i32 = sqlx::query_scalar(
-        "INSERT INTO projects (org_id, name, public_key, salt, settings) VALUES ($1, 'p', $2, $3, $4) RETURNING id",
-    )
-    .bind(org)
-    .bind(analytics_pg::new_public_key())
-    .bind(&salt)
-    .bind(settings)
-    .fetch_one(&db.pg)
-    .await
-    .unwrap();
-    (id, salt)
+    let id = ProjectBuilder::new()
+        .settings(settings)
+        .salt(&salt)
+        .insert(&db.pg)
+        .await;
+    (id as i32, salt)
 }
 
 fn app_for(svc: Arc<OrderService>) -> Router {
     router(OrdersHttp {
         svc,
-        edge_secret: Arc::new(SECRET.to_vec()),
-        emulation: true,
+        cfg: Arc::new(Config::for_tests(SECRET, true)),
     })
 }
 
@@ -663,7 +652,7 @@ async fn recheck_rewrites_when_events_changed_after_projection() {
         },
         &refund("RC", 5_000, "2026-11-20T12:00:00Z"),
         None,
-        crate::internal::now_ms(),
+        analytics_core::timeutil::now_ms(),
     )
     .unwrap();
     ch_orders::insert_order_event(&h.db.ch, &v.event)
@@ -905,7 +894,7 @@ async fn internal_signature_covers_forwarded_headers_and_path() {
     let h = setup().await;
     let body = confirm("X1", 1).to_string().into_bytes();
     let auth = format!("Bearer {}", h.key);
-    let now = crate::internal::now_ms();
+    let now = analytics_core::timeutil::now_ms();
 
     // 단건 경로로 서명한 요청을 일괄 경로로 바꿔 보낼 수 없다
     let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", &auth, "");
@@ -962,7 +951,7 @@ async fn internal_route_with_edge_signature() {
     let h = setup().await;
     let body = confirm("E1", 1234).to_string().into_bytes();
     let auth = format!("Bearer {}", h.key);
-    let now = crate::internal::now_ms();
+    let now = analytics_core::timeutil::now_ms();
     let signed = |body: &[u8], ts: i64| signed_for(SECRET, body, ts, "/v1/orders", &auth, "");
     let (ts, sig) = signed(&body, now);
     let hdr = |ts: &str, sig: &str, path: &str, auth: &str| edge_headers(ts, sig, path, auth);
@@ -1055,8 +1044,7 @@ async fn internal_route_disabled_without_secret() {
     let h = setup().await;
     let app = router(OrdersHttp {
         svc: h.svc.clone(),
-        edge_secret: Arc::new(vec![]),
-        emulation: false,
+        cfg: Arc::new(Config::for_tests(&[], false)),
     });
     let (s, _) = send(&app, "/internal/orders", &[], b"{}".to_vec()).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -1228,7 +1216,7 @@ async fn project_context_lookup() {
 fn ms(rfc3339: &str) -> i64 {
     let t = time::OffsetDateTime::parse(rfc3339, &time::format_description::well_known::Rfc3339)
         .unwrap();
-    (t.unix_timestamp_nanos() / 1_000_000) as i64
+    analytics_core::timeutil::dt_to_ms(t)
 }
 
 fn confirm_at(id: &str, net: i64, at: &str) -> Value {
@@ -1347,7 +1335,10 @@ async fn background_client_projection_is_bounded() {
         db.ch.clone(),
         0,
     ));
-    svc.spawn_client_purchases(&[purchase(project, "B1", 1, 1), purchase(project, "B2", 1, 2)]);
+    svc.spawn_client_purchases(vec![
+        purchase(project, "B1", 1, 1),
+        purchase(project, "B2", 1, 2),
+    ]);
     assert_eq!(svc.metrics.client_dropped.load(Relaxed), 2);
     // 한도 안이면 백그라운드에서 반영된다
     let svc = Arc::new(OrderService::with_client_concurrency(
@@ -1355,7 +1346,7 @@ async fn background_client_projection_is_bounded() {
         db.ch.clone(),
         1,
     ));
-    svc.spawn_client_purchases(&[purchase(project, "B3", 1, 3)]);
+    svc.spawn_client_purchases(vec![purchase(project, "B3", 1, 3)]);
     let scope = ProjectScope::authorized(project as u32);
     let mut found = false;
     for _ in 0..100 {

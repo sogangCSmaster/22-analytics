@@ -49,6 +49,11 @@ impl fmt::Display for PublicKey {
     }
 }
 
+/// SHA-256 hex 문자열(64자, 대소문자 무관)인지. 회원 ID 해시 검증에 쓴다 (수집·주문 공용).
+pub fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +65,16 @@ mod tests {
         assert_eq!(PublicKey::parse("sk_7Hq2abcdEFGH"), Err(InvalidKey));
         assert_eq!(PublicKey::parse("pk_abc"), Err(InvalidKey));
         assert_eq!(PublicKey::parse("pk_abc-defgh"), Err(InvalidKey));
+    }
+
+    #[test]
+    fn sha256_hex() {
+        let h = "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92";
+        assert!(is_sha256_hex(h));
+        assert!(is_sha256_hex(&h.to_ascii_uppercase()));
+        assert!(!is_sha256_hex(&h[..63]));
+        assert!(!is_sha256_hex(&format!("{h}0")));
+        assert!(!is_sha256_hex(&h.replace('8', "g")));
+        assert!(!is_sha256_hex(""));
     }
 }

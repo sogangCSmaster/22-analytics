@@ -1,6 +1,6 @@
 //! 주문 1건의 기여 결과 계산과 기존 결과와의 비교 (I/O 없음).
 
-use analytics_ch::attribution::{AttributedRow, ExistingRow, OrderForAttribution, TouchRow};
+use analytics_ch::attribution::{AttributedRow, OrderForAttribution, TouchRow};
 use analytics_core::attribution::{
     DAY_MS, HOUR_MS, Model, Params, Touch, attribute, within_lookback,
 };
@@ -8,12 +8,10 @@ use analytics_core::channel::{
     ChannelInput, ChannelRule, ORGANIC_SEARCH, ORGANIC_SOCIAL, REFERRAL, classify,
     is_touchpoint_channel,
 };
+use analytics_core::orders::OrderStatus;
 use analytics_pg::attribution_settings::AttributionSettings;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
-
-/// 취소 상태 (WP1 orders 계약).
-pub const STATUS_CANCELLED: &str = "CANCELLED";
 
 /// 기여 대상 채널인지 (direct·내부 이동은 항상 제외, 자연 유입·추천은 설정에 따름).
 pub fn is_eligible(channel: &str, settings: &AttributionSettings) -> bool {
@@ -70,7 +68,7 @@ pub fn select_touches(
 
 /// 주문이 기여 대상인지 (취소·0원 이하는 기존 결과를 삭제 표시만 한다).
 pub fn is_live(order: &OrderForAttribution) -> bool {
-    order.status != STATUS_CANCELLED && order.effective_amount > 0
+    order.status != OrderStatus::Cancelled && order.effective_amount > 0
 }
 
 /// 원하는 결과 행 (lookback × 모델). `computed_at`은 0으로 두고 [`plan_writes`]가 채운다.
@@ -138,7 +136,7 @@ type Content = (String, String, Option<i64>, i64, u8);
 /// - `computed_at = max(now_ms, 기존 최대 computed_at + 1)`: ReplacingMergeTree가 반드시 새 행을 고른다.
 pub fn plan_writes(
     desired: Vec<AttributedRow>,
-    existing: &[ExistingRow],
+    existing: &[AttributedRow],
     now_ms: i64,
 ) -> Vec<AttributedRow> {
     let alive: HashMap<Key, Content> = existing
@@ -211,19 +209,9 @@ pub fn plan_writes(
                 ))
             })
             .map(|e| AttributedRow {
-                project_id: e.project_id,
-                model: e.model.clone(),
-                lookback_days: e.lookback_days,
-                order_id: e.order_id.clone(),
-                touch_index: e.touch_index,
-                channel: e.channel.clone(),
-                utm_campaign: e.utm_campaign.clone(),
-                touch_ts: e.touch_ts,
-                ordered_at: e.ordered_at,
-                amount: e.amount,
-                is_assist: e.is_assist,
                 computed_at,
                 is_deleted: 1,
+                ..e.clone()
             }),
     );
     out
@@ -242,7 +230,7 @@ mod tests {
     fn order(amount: i64) -> OrderForAttribution {
         OrderForAttribution {
             order_id: "ORD-9901".into(),
-            status: "CONFIRMED".into(),
+            status: OrderStatus::Confirmed,
             visitor_id: Some(Uuid::nil()),
             member_hash: String::new(),
             effective_amount: amount,
@@ -287,22 +275,11 @@ mod tests {
             .collect()
     }
 
-    fn existing_from(rows: &[AttributedRow], computed_at: i64) -> Vec<ExistingRow> {
+    fn existing_from(rows: &[AttributedRow], computed_at: i64) -> Vec<AttributedRow> {
         rows.iter()
-            .map(|r| ExistingRow {
-                project_id: r.project_id,
-                order_id: r.order_id.clone(),
-                model: r.model.clone(),
-                lookback_days: r.lookback_days,
-                touch_index: r.touch_index,
-                ordered_at: r.ordered_at,
-                channel: r.channel.clone(),
-                utm_campaign: r.utm_campaign.clone(),
-                touch_ts: r.touch_ts,
-                amount: r.amount,
-                is_assist: r.is_assist,
-                is_deleted: r.is_deleted,
+            .map(|r| AttributedRow {
                 computed_at,
+                ..r.clone()
             })
             .collect()
     }
@@ -477,7 +454,7 @@ mod tests {
         let s = AttributionSettings::default();
         let mut o = order(100_000);
         assert!(is_live(&o));
-        o.status = "CANCELLED".into();
+        o.status = OrderStatus::Cancelled;
         assert!(!is_live(&o));
         assert!(desired_rows(P, &o, &manual_touches(), &s).is_empty());
         let zero = order(0);
@@ -485,7 +462,7 @@ mod tests {
         assert!(desired_rows(P, &zero, &manual_touches(), &s).is_empty());
         assert!(!is_live(&order(-5)));
         let mut partial = order(30_000);
-        partial.status = "PARTIALLY_REFUNDED".into();
+        partial.status = OrderStatus::PartiallyRefunded;
         assert!(is_live(&partial));
     }
 

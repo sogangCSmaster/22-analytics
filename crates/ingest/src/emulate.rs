@@ -3,9 +3,12 @@
 
 use crate::AppState;
 use crate::config::Config;
-use crate::internal::now_ms;
+use crate::lock;
+use analytics_core::cache::TtlCache;
+use analytics_core::collect::cookie::{VISITOR_COOKIE, visitor_id};
 use analytics_core::collect::{self, ProjectConfig, RequestCtx};
 use analytics_core::event::{MAX_BATCH_BYTES, WireBatch};
+use analytics_core::timeutil::now_ms;
 use axum::{
     Router,
     body::Bytes,
@@ -16,22 +19,20 @@ use axum::{
 };
 use serde::Deserialize;
 use sqlx::PgPool;
-use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::atomic::Ordering::Relaxed;
-use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
-const CONFIG_TTL: Duration = Duration::from_secs(60);
-const VISITOR_COOKIE: &str = "_at_vid";
+const CONFIG_TTL_MS: i64 = 60_000;
+const CONFIG_CACHE_MAX: usize = 10_000;
 
 pub struct Emulator {
     pool: PgPool,
     tracker_dist: PathBuf,
-    cache: RwLock<HashMap<String, (Instant, Option<ProjectConfig>)>>,
+    cache: Mutex<TtlCache<String, ProjectConfig>>,
 }
 
 impl Emulator {
@@ -39,22 +40,17 @@ impl Emulator {
         Self {
             pool,
             tracker_dist,
-            cache: RwLock::new(HashMap::new()),
+            cache: Mutex::new(TtlCache::new(CONFIG_TTL_MS, CONFIG_CACHE_MAX)),
         }
     }
 
     /// Worker의 KV 조회 + 메모리 캐시와 같은 역할.
     async fn project(&self, key: &str) -> anyhow::Result<Option<ProjectConfig>> {
-        if let Some((at, cfg)) = self.cache.read().await.get(key)
-            && at.elapsed() < CONFIG_TTL
-        {
-            return Ok(cfg.clone());
+        if let Some(cfg) = lock(&self.cache).get(key, now_ms()) {
+            return Ok(cfg);
         }
         let cfg = analytics_pg::projects::config_by_public_key(&self.pool, key).await?;
-        self.cache
-            .write()
-            .await
-            .insert(key.to_owned(), (Instant::now(), cfg.clone()));
+        lock(&self.cache).put(key.to_owned(), cfg.clone(), now_ms());
         Ok(cfg)
     }
 }
@@ -64,7 +60,8 @@ pub fn router(cfg: &Config) -> Router<AppState> {
         .allow_origin(AllowOrigin::mirror_request())
         .allow_credentials(true)
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE]);
+        .allow_headers([header::CONTENT_TYPE])
+        .expose_headers([header::HeaderName::from_static("x-cfg-v")]);
     Router::new()
         .route("/t.js", get(tracker_js))
         .route("/v1/config", get(public_config))
@@ -141,7 +138,7 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         country: h("cf-ipcountry").unwrap_or("KR"),
         region: "",
         city: "",
-        cookie_vid: cookie(&headers, VISITOR_COOKIE).and_then(|v| Uuid::parse_str(&v).ok()),
+        cookie_vid: cookie_vid(&headers),
         dnt: h("dnt") == Some("1"),
         now_ms: now_ms(),
     };
@@ -150,7 +147,7 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         Ok(p) => p,
         Err(e) => {
             tracing::debug!(reason = %e, "배치 거부");
-            return reject(&s, reject_code(&e));
+            return reject(&s, e.code());
         }
     };
 
@@ -159,23 +156,19 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         .events_dropped
         .fetch_add(processed.dropped as u64, Relaxed);
     // client_purchase_as_order: purchase 이벤트를 클라이언트 주문으로도 투영한다 (§5.3).
-    let purchases: Vec<_> = if project.settings.client_purchase_as_order {
-        processed
-            .events
-            .iter()
-            .filter(|e| e.event_name == analytics_core::orders::PURCHASE_EVENT)
-            .cloned()
-            .collect()
+    let purchases = if project.settings.client_purchase_as_order {
+        crate::orders::purchases_of(&processed.events)
     } else {
         vec![]
     };
     if s.pipeline.try_send(processed.events).is_err() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    s.orders.spawn_client_purchases(&purchases);
+    s.orders.spawn_client_purchases(purchases);
     s.metrics.events_received.fetch_add(n, Relaxed);
 
     let mut resp = StatusCode::NO_CONTENT.into_response();
+    set_cfg_version(&mut resp, project.settings_version);
     if processed.issue_cookie {
         // 운영에서는 커스텀 호스트명의 상위 도메인으로 Domain을 지정하고 Secure를 붙인다.
         let c = format!(
@@ -187,6 +180,17 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         }
     }
     resp
+}
+
+/// 트래커가 설정 변경을 알 수 있게 설정 버전을 붙인다 (엣지 `cors::config_version_headers`와 같다).
+/// expose 헤더는 CORS 레이어도 붙이지만, 응답만으로 계약이 드러나도록 여기서도 넣는다.
+fn set_cfg_version(resp: &mut Response, settings_version: u32) {
+    let h = resp.headers_mut();
+    h.insert("x-cfg-v", HeaderValue::from(settings_version));
+    h.insert(
+        header::ACCESS_CONTROL_EXPOSE_HEADERS,
+        HeaderValue::from_static("x-cfg-v"),
+    );
 }
 
 fn reject(s: &AppState, code: &'static str) -> Response {
@@ -202,25 +206,24 @@ fn status_with_reason(status: StatusCode, code: &'static str) -> Response {
     r
 }
 
-fn reject_code(e: &collect::Reject) -> &'static str {
-    match e {
-        collect::Reject::Inactive => "inactive",
-        collect::Reject::OriginNotAllowed => "origin_not_allowed",
-        collect::Reject::Bot => "bot",
-        collect::Reject::DoNotTrack => "dnt",
-        collect::Reject::Invalid(_) => "invalid",
-    }
-}
-
-fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+/// `Cookie` 헤더(여러 개일 수 있다)에서 엣지와 같은 규칙으로 `_at_vid`를 읽는다.
+fn cookie_vid(headers: &HeaderMap) -> Option<Uuid> {
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .find_map(|raw| {
-            raw.split(';').find_map(|kv| {
-                let (k, v) = kv.trim().split_once('=')?;
-                (k == name).then(|| v.to_owned())
-            })
-        })
+        .find_map(|raw| visitor_id(Some(raw)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_response_exposes_settings_version() {
+        let mut r = StatusCode::NO_CONTENT.into_response();
+        set_cfg_version(&mut r, 7);
+        assert_eq!(r.headers()["x-cfg-v"], "7");
+        assert_eq!(r.headers()["access-control-expose-headers"], "x-cfg-v");
+    }
 }

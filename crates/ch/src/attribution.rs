@@ -8,6 +8,7 @@
 //! 시각은 모두 UTC epoch 밀리초(`i64`)로 주고받는다. `DateTime64(3)`의 RowBinary 표현과 같다.
 
 use crate::ProjectScope;
+use analytics_core::orders::OrderStatus;
 use clickhouse::{Client, Row};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -19,13 +20,31 @@ pub const IN_CHUNK: usize = 1_000;
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize, Deserialize)]
 pub struct OrderForAttribution {
     pub order_id: String,
-    pub status: String,
+    /// 읽을 때 [`OrderStatus`]로 파싱한다 (모르는 값이면 행 읽기 오류).
+    #[serde(with = "status_str")]
+    pub status: OrderStatus,
     #[serde(with = "clickhouse::serde::uuid::option")]
     pub visitor_id: Option<Uuid>,
     pub member_hash: String,
     pub effective_amount: i64,
     pub ordered_at_ms: i64,
     pub version: u64,
+}
+
+/// `orders.status` 문자열 ↔ [`OrderStatus`].
+mod status_str {
+    use analytics_core::orders::OrderStatus;
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    pub fn serialize<S: Serializer>(s: &OrderStatus, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(s.as_str())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<OrderStatus, D::Error> {
+        let s = String::deserialize(d)?;
+        OrderStatus::parse(&s)
+            .ok_or_else(|| D::Error::custom(format!("알 수 없는 주문 상태 {s:?}")))
+    }
 }
 
 /// identity_links 한 줄.
@@ -52,7 +71,8 @@ pub struct TouchRow {
     pub page_host: String,
 }
 
-/// `attributed_revenue` 행 (insert용). 시각은 epoch ms.
+/// `attributed_revenue` 행. 시각은 epoch ms. 쓰기([`insert_rows`])와 기존 결과 읽기
+/// ([`latest_rows`]: 키별 최신 행, 삭제 표시 포함)에 같이 쓴다.
 #[derive(Debug, Clone, PartialEq, Eq, Row, Serialize, Deserialize)]
 pub struct AttributedRow {
     pub project_id: u32,
@@ -68,25 +88,6 @@ pub struct AttributedRow {
     pub is_assist: u8,
     pub computed_at: i64,
     pub is_deleted: u8,
-}
-
-/// 키(model, lookback_days, order_id, touch_index, ordered_at)별 가장 최근 행.
-/// 삭제 표시된 행도 포함한다 (`computed_at`을 단조 증가시키기 위해).
-#[derive(Debug, Clone, PartialEq, Eq, Row, Serialize, Deserialize)]
-pub struct ExistingRow {
-    pub project_id: u32,
-    pub order_id: String,
-    pub model: String,
-    pub lookback_days: u8,
-    pub touch_index: u16,
-    pub ordered_at: i64,
-    pub channel: String,
-    pub utm_campaign: String,
-    pub touch_ts: Option<i64>,
-    pub amount: i64,
-    pub is_assist: u8,
-    pub is_deleted: u8,
-    pub computed_at: i64,
 }
 
 /// 매출 보존 법칙(§7.4)을 어긴 주문.
@@ -109,6 +110,10 @@ fn placeholders(n: usize) -> String {
 }
 
 /// `version > since_version`인 주문 (version 오름차순).
+///
+/// 프로젝트 주문 전체에 FINAL을 걸지 않는다: 먼저 FINAL 없이 바뀐 주문 ID만 고르고
+/// (작은 집합), 그 ID들에만 FINAL을 건다. 정렬 키가 `(project_id, order_id)`라서 IN 조건으로
+/// 읽을 그래뉼이 줄어든다. 어떤 버전이 watermark보다 크면 최신 버전도 크므로 결과는 같다.
 pub async fn changed_orders(
     client: &Client,
     scope: ProjectScope,
@@ -116,9 +121,13 @@ pub async fn changed_orders(
 ) -> anyhow::Result<Vec<OrderForAttribution>> {
     Ok(client
         .query(&format!(
-            "{ORDER_COLS} AND version > ? ORDER BY version, order_id"
+            "{ORDER_COLS} \
+             AND order_id IN (SELECT order_id FROM orders WHERE project_id = ? AND version > ?) \
+             AND version > ? ORDER BY version, order_id"
         ))
         .bind(scope.project_id())
+        .bind(scope.project_id())
+        .bind(since_version)
         .bind(since_version)
         .fetch_all()
         .await?)
@@ -229,27 +238,30 @@ pub async fn touchpoints(
     Ok(out)
 }
 
-/// 주문들의 기존 기여 결과 (키별 최신 행, 삭제 표시 포함).
+/// 주문들의 기존 기여 결과: 키(model, lookback_days, order_id, touch_index, ordered_at)별 최신 행.
+/// 삭제 표시된 행도 포함한다 (`computed_at`을 단조 증가시키기 위해).
 ///
 /// FINAL은 삭제 표시 행을 숨기므로, `computed_at` 최댓값을 알기 위해 argMax로 직접 접는다.
+/// 열 순서는 [`AttributedRow`] 필드 순서와 같다.
 pub async fn latest_rows(
     client: &Client,
     scope: ProjectScope,
     order_ids: &[String],
-) -> anyhow::Result<Vec<ExistingRow>> {
+) -> anyhow::Result<Vec<AttributedRow>> {
     let mut out = Vec::new();
     for chunk in order_ids.chunks(IN_CHUNK) {
         let mut q = client
             .query(&format!(
-                "SELECT toUInt32(?) AS project_id, k_order AS order_id, k_model AS model, k_lb AS lookback_days, \
-                        k_idx AS touch_index, k_oa AS ordered_at, \
+                "SELECT toUInt32(?) AS project_id, k_model AS model, k_lb AS lookback_days, \
+                        k_order AS order_id, k_idx AS touch_index, \
                         argMax(v_channel, v_c) AS channel, \
                         argMax(v_campaign, v_c) AS utm_campaign, \
                         argMax(tuple(v_touch_ts), v_c).1 AS touch_ts, \
+                        k_oa AS ordered_at, \
                         argMax(v_amount, v_c) AS amount, \
                         argMax(v_assist, v_c) AS is_assist, \
-                        argMax(v_deleted, v_c) AS is_deleted, \
-                        max(v_c) AS computed_at \
+                        max(v_c) AS computed_at, \
+                        argMax(v_deleted, v_c) AS is_deleted \
                  FROM ( \
                    SELECT order_id AS k_order, model AS k_model, lookback_days AS k_lb, \
                           touch_index AS k_idx, toUnixTimestamp64Milli(ordered_at) AS k_oa, \
@@ -269,7 +281,7 @@ pub async fn latest_rows(
         for id in chunk {
             q = q.bind(id.as_str());
         }
-        out.extend(q.fetch_all::<ExistingRow>().await?);
+        out.extend(q.fetch_all::<AttributedRow>().await?);
     }
     Ok(out)
 }
@@ -296,10 +308,15 @@ pub async fn insert_rows(
 }
 
 /// 매출 보존 검증 (§7.4): raw_sum 외 모델에서 Σamount ≠ effective_amount인 주문.
+///
+/// `ordered_since_ms`가 있으면 `ordered_at >= ordered_since_ms`인 주문만 본다. 두 테이블 모두
+/// `ordered_at` 월 파티션이라 오래된 파티션을 읽지 않는다 (매시간 검증용). `None`이면 전체.
 pub async fn conservation_check(
     client: &Client,
     scope: ProjectScope,
+    ordered_since_ms: Option<i64>,
 ) -> anyhow::Result<Vec<BrokenOrder>> {
+    let since = ordered_since_ms.unwrap_or(0);
     Ok(client
         .query(
             "SELECT a.model AS model, a.lookback_days AS lookback_days, a.order_id AS order_id, \
@@ -308,21 +325,27 @@ pub async fn conservation_check(
                SELECT model, lookback_days, order_id, sum(amount) AS s \
                FROM attributed_revenue FINAL \
                WHERE project_id = ? AND model != 'raw_sum' AND is_deleted = 0 \
+                 AND ordered_at >= fromUnixTimestamp64Milli(toInt64(?), 'UTC') \
                GROUP BY model, lookback_days, order_id \
              ) AS a \
              INNER JOIN ( \
                SELECT order_id, effective_amount FROM orders FINAL WHERE project_id = ? \
+                 AND ordered_at >= fromUnixTimestamp64Milli(toInt64(?), 'UTC') \
              ) AS o ON a.order_id = o.order_id \
              WHERE a.s != o.effective_amount \
              ORDER BY order_id, model, lookback_days",
         )
         .bind(scope.project_id())
+        .bind(since)
         .bind(scope.project_id())
+        .bind(since)
         .fetch_all()
         .await?)
 }
 
 /// 테스트 픽스처: 다른 패키지(WP1 주문 writer, 수집 MV)가 쓰는 테이블에 행을 직접 넣는다.
+/// `fixtures` 기능을 켠 빌드(이 크레이트·jobs의 테스트)에서만 컴파일된다.
+#[cfg(feature = "fixtures")]
 #[doc(hidden)]
 pub mod fixtures {
     use clickhouse::{Client, Row, RowOwned, RowWrite};
@@ -362,7 +385,9 @@ pub mod fixtures {
                 project_id,
                 order_id: order_id.into(),
                 source: "s2s".into(),
-                status: "CONFIRMED".into(),
+                status: analytics_core::orders::OrderStatus::Confirmed
+                    .as_str()
+                    .into(),
                 visitor_id,
                 member_hash: String::new(),
                 currency: "KRW".into(),

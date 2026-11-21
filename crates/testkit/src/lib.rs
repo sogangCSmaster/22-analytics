@@ -9,10 +9,15 @@
 //! 테스트마다 `test_<uuid>` 이름으로 새 데이터베이스를 만들고, 값이 drop되면 지운다.
 //! 병렬 테스트와 여러 worktree가 같은 로컬 DB 서버를 써도 서로 간섭하지 않는다.
 //!
+//! 픽스처: [`ProjectBuilder`](조직+프로젝트 행), 공용 상수 [`VID`]·[`MEMBER_HASH`]·[`CHROME_UA`].
+//!
 //! 접속 정보: `TEST_DATABASE_URL`(없으면 `DATABASE_URL`, 기본 로컬), `CLICKHOUSE_URL`.
 
 use analytics_ch::ChConfig;
 use sqlx::postgres::PgPoolOptions;
+
+mod fixtures;
+pub use fixtures::{CHROME_UA, MEMBER_HASH, ProjectBuilder, VID};
 
 pub struct TestDb {
     pub pg: sqlx::PgPool,

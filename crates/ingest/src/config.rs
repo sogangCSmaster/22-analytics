@@ -2,6 +2,9 @@ use anyhow::Context;
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// ClickHouse 배치 플러시 주기 기본값. 길수록 INSERT(파트) 수가 줄어든다.
+pub const DEFAULT_FLUSH_INTERVAL_MS: &str = "3000";
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind: String,
@@ -18,7 +21,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
-        let get = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_owned());
+        let get = analytics_ch::env_or;
         let edge_emulation = matches!(
             get("EDGE_EMULATION", "false").as_str(),
             "1" | "true" | "yes"
@@ -42,7 +45,7 @@ impl Config {
                     .context("ARCHIVE_ROTATE_SECS")?,
             ),
             flush_interval: Duration::from_millis(
-                get("FLUSH_INTERVAL_MS", "1000")
+                get("FLUSH_INTERVAL_MS", DEFAULT_FLUSH_INTERVAL_MS)
                     .parse()
                     .context("FLUSH_INTERVAL_MS")?,
             ),
@@ -50,5 +53,33 @@ impl Config {
             tracker_dist: get("TRACKER_DIST", "./tracker/dist").into(),
             dev_site_dir: get("DEV_SITE_DIR", "./dev/site").into(),
         })
+    }
+}
+
+#[cfg(test)]
+impl Config {
+    /// 테스트용: 서명 비밀과 에뮬레이션 여부만 정하고 나머지는 기본값.
+    pub fn for_tests(edge_secret: &[u8], edge_emulation: bool) -> Self {
+        Self {
+            bind: "127.0.0.1:0".into(),
+            database_url: String::new(),
+            edge_secret: edge_secret.to_vec(),
+            edge_emulation,
+            archive_dir: "./var/archive".into(),
+            archive_rotate: Duration::from_secs(300),
+            flush_interval: Duration::from_millis(3000),
+            flush_rows: 10_000,
+            tracker_dist: "./tracker/dist".into(),
+            dev_site_dir: "./dev/site".into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_flush_interval_is_3s() {
+        // C6: 초당 INSERT를 1/3로 줄인다 (작은 파트·머지 비용 감소). 지연은 수 초로 충분하다.
+        assert_eq!(super::DEFAULT_FLUSH_INTERVAL_MS, "3000");
     }
 }

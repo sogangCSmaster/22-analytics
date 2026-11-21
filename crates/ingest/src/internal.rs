@@ -3,6 +3,7 @@
 use crate::AppState;
 use analytics_core::Event;
 use analytics_core::edge_auth::{self, HEADER_SIGNATURE, HEADER_TIMESTAMP};
+use analytics_core::timeutil::now_ms;
 use axum::{
     Router,
     body::Bytes,
@@ -35,15 +36,10 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
     };
     let n = fwd.events.len() as u64;
     // 프로젝트 설정(client_purchase_as_order)은 주문 서비스가 확인한다.
-    let purchases: Vec<Event> = fwd
-        .events
-        .iter()
-        .filter(|e| e.event_name == analytics_core::orders::PURCHASE_EVENT)
-        .cloned()
-        .collect();
+    let purchases = crate::orders::purchases_of(&fwd.events);
     match s.pipeline.try_send(fwd.events) {
         Ok(()) => {
-            s.orders.spawn_client_purchases(&purchases);
+            s.orders.spawn_client_purchases(purchases);
             s.metrics.events_received.fetch_add(n, Relaxed);
             StatusCode::NO_CONTENT
         }
@@ -53,24 +49,16 @@ async fn collect(State(s): State<AppState>, headers: HeaderMap, body: Bytes) -> 
 
 /// `/internal/collect` 서명 검증 (v1, 내부 경로 고정, 전달 헤더 없음).
 fn verify_collect(secret: &[u8], headers: &HeaderMap, body: &[u8], now_ms: i64) -> bool {
-    let ts = headers
-        .get(HEADER_TIMESTAMP)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<i64>().ok());
-    let sig = headers.get(HEADER_SIGNATURE).and_then(|v| v.to_str().ok());
-    let (Some(ts), Some(sig)) = (ts, sig) else {
-        return false;
-    };
-    edge_auth::verify(
+    let h = |name| headers.get(name).and_then(|v| v.to_str().ok());
+    edge_auth::verify_headers(
         secret,
-        &edge_auth::SignedRequest::collect(ts, body),
-        sig,
+        edge_auth::COLLECT_PATH,
+        h(HEADER_TIMESTAMP),
+        h(HEADER_SIGNATURE),
+        body,
+        edge_auth::Forwarded::default(),
         now_ms,
     )
-}
-
-pub fn now_ms() -> i64 {
-    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
 }
 
 #[cfg(test)]

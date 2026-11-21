@@ -4,22 +4,22 @@
 //! `/internal/orders`로 넘기고, 원점의 상태 코드와 본문을 그대로 돌려준다.
 //! 주문은 조용히 Queue에 넣지 않는다: 원점에 닿지 못하면 `503`을 돌려 가맹점 서버가 재시도하게 한다.
 //!
-//! `Authorization`이 없거나 형식이 잘못된 요청은 엣지에서 바로 `401`로 거절한다 (원점 부하 절감).
+//! `Authorization`이 없거나 형식이 잘못된 요청, 단건의 잘못된 멱등 키는 엣지에서 바로 거절한다
+//! (원점 부하 절감). 거절 상태·코드는 원점과 같다 ([`analytics_core::orders::api::ApiError`]).
 
 use crate::forward::{self, ForwardRequest};
 use crate::http::{EdgeResponse, OrdersKind};
+use analytics_core::orders::api::{ApiError, MAX_AUTHORIZATION_LEN, bearer, valid_idempotency_key};
 
-pub const MAX_ORDER_BYTES: usize = 64 * 1024;
-pub const MAX_ORDER_BATCH_BYTES: usize = 1024 * 1024;
-/// `Authorization` 헤더 최대 길이 (`Bearer sk_live_...`는 100자 안쪽)
-pub const MAX_AUTHORIZATION_LEN: usize = 512;
-pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
-/// 원점 장애 시 `Retry-After` (초)
-pub const RETRY_AFTER_SECS: u32 = 30;
-
-pub use crate::forward::{
+pub use analytics_core::orders::api::{
     HEADER_FORWARDED_AUTHORIZATION, HEADER_FORWARDED_PATH, HEADER_IDEMPOTENCY_KEY,
 };
+pub use analytics_core::orders::{
+    MAX_BATCH_BODY_BYTES as MAX_ORDER_BATCH_BYTES, MAX_IDEMPOTENCY_KEY_LEN,
+    MAX_SINGLE_BODY_BYTES as MAX_ORDER_BYTES,
+};
+/// 원점 장애 시 `Retry-After` (초)
+pub const RETRY_AFTER_SECS: u32 = 30;
 
 #[derive(Debug, Clone, Copy)]
 pub struct OrdersRequest<'a> {
@@ -37,19 +37,24 @@ pub fn build_forward(
     now_ms: i64,
 ) -> Result<ForwardRequest, EdgeResponse> {
     if req.body.len() > req.kind.body_limit() {
-        return Err(EdgeResponse::error(413, "payload_too_large"));
+        return Err(EdgeResponse::api_error(ApiError::TooLarge));
     }
-    let Some(authorization) = req.authorization.and_then(valid_authorization) else {
-        return Err(EdgeResponse::error(401, "unauthorized"));
-    };
+    let authorization = valid_authorization(req.authorization).map_err(EdgeResponse::api_error)?;
     if req.body.is_empty() {
-        return Err(EdgeResponse::error(400, "empty_body"));
+        // 원점은 빈 본문을 JSON 해석 오류로 본다
+        return Err(EdgeResponse::api_error(ApiError::BadJson));
     }
     // 전달 헤더도 서명에 포함된다 (원점이 같은 값으로 다시 계산한다).
-    let idempotency_key = req
-        .idempotency_key
-        .filter(|k| valid_idempotency_key(k))
-        .unwrap_or("");
+    // 단건의 잘못된 멱등 키는 원점처럼 422로 거절한다. 일괄은 원점이 헤더 키를 쓰지 않으므로
+    // 올바른 키만 전달한다.
+    let idempotency_key = match (req.kind, req.idempotency_key) {
+        (_, None) => "",
+        (_, Some(k)) if valid_idempotency_key(k) => k,
+        (OrdersKind::Single, Some(_)) => {
+            return Err(EdgeResponse::api_error(ApiError::InvalidIdempotencyKey));
+        }
+        (OrdersKind::Batch, Some(_)) => "",
+    };
     Ok(forward::signed_with(
         origin_url,
         forward::ORDERS_PATH,
@@ -57,7 +62,7 @@ pub fn build_forward(
         req.body.to_vec(),
         now_ms,
         forward::Forwarded {
-            path: req.kind.public_path(),
+            path: req.kind.path(),
             authorization,
             idempotency_key,
         },
@@ -68,20 +73,14 @@ fn is_header_text(s: &str) -> bool {
     s.bytes().all(|b| (0x20..0x7f).contains(&b))
 }
 
-/// `Bearer <token>` 형식만 받는다 (scheme은 대소문자 무시). 원점으로 넘길 값을 돌려준다.
-fn valid_authorization(v: &str) -> Option<&str> {
-    let v = v.trim();
+/// `Bearer <token>` 형식만 받는다 (scheme은 대소문자 무시). 원점으로 넘길 헤더 원문을 돌려준다.
+/// 없거나 형식이 틀리면 `missing_key`, 길이·문자 검사에 실패하면 `invalid_key` (원점과 같은 분류).
+fn valid_authorization(v: Option<&str>) -> Result<&str, ApiError> {
+    let v = v.map(str::trim).ok_or(ApiError::MissingKey)?;
     if v.len() > MAX_AUTHORIZATION_LEN || !is_header_text(v) {
-        return None;
+        return Err(ApiError::InvalidKey);
     }
-    let (scheme, token) = v.split_once(' ')?;
-    let token = token.trim();
-    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty() && !token.contains(' '))
-        .then_some(v)
-}
-
-fn valid_idempotency_key(k: &str) -> bool {
-    !k.is_empty() && k.len() <= MAX_IDEMPOTENCY_KEY_LEN && is_header_text(k)
+    bearer(v).map(|_| v).ok_or(ApiError::MissingKey)
 }
 
 /// 원점 응답 (wasm 계층이 채운다).
@@ -95,7 +94,7 @@ pub struct OriginReply {
 /// 원점 응답을 클라이언트 응답으로. `None`(네트워크 오류·타임아웃)이면 `503` + `Retry-After`.
 pub fn map_response(reply: Option<OriginReply>) -> EdgeResponse {
     let Some(reply) = reply else {
-        return EdgeResponse::error(503, "origin_unavailable")
+        return EdgeResponse::api_error(ApiError::OriginUnavailable)
             .with_header("retry-after", RETRY_AFTER_SECS.to_string());
     };
     // 원점 응답 헤더는 content-type만 옮긴다 (내부 헤더 유출 방지)
@@ -257,10 +256,41 @@ mod tests {
         );
     }
 
+    fn code(r: &EdgeResponse) -> String {
+        let v: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+        v["error"].as_str().unwrap().to_owned()
+    }
+
     #[test]
     fn empty_body_rejected_at_edge() {
         let e = build_forward(&req(b""), "https://o", SECRET, NOW).unwrap_err();
         assert_eq!(e.status, 400);
+        assert_eq!(code(&e), "bad_json", "원점(ingest)과 같은 코드");
+    }
+
+    #[test]
+    fn error_codes_match_origin() {
+        // 원점 ingest `/v1/orders`와 같은 상태·코드
+        let over = vec![b'x'; MAX_ORDER_BYTES + 1];
+        let e = build_forward(&req(&over), "https://o", SECRET, NOW).unwrap_err();
+        assert_eq!((e.status, code(&e).as_str()), (413, "too_large"));
+
+        let mut r = req(BODY);
+        r.authorization = None;
+        let e = build_forward(&r, "https://o", SECRET, NOW).unwrap_err();
+        assert_eq!((e.status, code(&e).as_str()), (401, "missing_key"));
+
+        r.authorization = Some("Basic dXNlcjpwYXNz");
+        let e = build_forward(&r, "https://o", SECRET, NOW).unwrap_err();
+        assert_eq!(code(&e), "missing_key");
+
+        let long = format!("Bearer sk_{}", "a".repeat(MAX_AUTHORIZATION_LEN));
+        r.authorization = Some(&long);
+        let e = build_forward(&r, "https://o", SECRET, NOW).unwrap_err();
+        assert_eq!((e.status, code(&e).as_str()), (401, "invalid_key"));
+
+        let down = map_response(None);
+        assert_eq!(code(&down), "origin_unavailable");
     }
 
     // ── 장애 ──
@@ -288,7 +318,7 @@ mod tests {
             let e = build_forward(&r, "https://o", SECRET, NOW).unwrap_err();
             assert_eq!(e.status, 401, "{auth:?}");
             assert!(
-                !String::from_utf8_lossy(&e.body).contains("sk_"),
+                !String::from_utf8_lossy(&e.body).contains("sk_live"),
                 "입력 반사 금지"
             );
         }
@@ -311,10 +341,24 @@ mod tests {
     }
 
     #[test]
-    fn bad_idempotency_key_is_dropped_not_forwarded() {
-        for k in ["", "a\r\nb", &"k".repeat(MAX_IDEMPOTENCY_KEY_LEN + 1)] {
+    fn bad_idempotency_key_single_is_422_batch_is_dropped() {
+        for k in [
+            "",
+            "a b",
+            "a\r\nb",
+            &"k".repeat(MAX_IDEMPOTENCY_KEY_LEN + 1),
+        ] {
+            // 단건: 원점과 같은 422 invalid_idempotency_key
             let mut r = req(BODY);
             r.idempotency_key = Some(k);
+            let e = build_forward(&r, "https://o", SECRET, NOW).unwrap_err();
+            assert_eq!(
+                (e.status, code(&e).as_str()),
+                (422, "invalid_idempotency_key"),
+                "{k:?}"
+            );
+            // 일괄: 원점이 헤더 키를 쓰지 않으므로 전달하지 않는다
+            r.kind = OrdersKind::Batch;
             let f = build_forward(&r, "https://o", SECRET, NOW).unwrap();
             assert_eq!(f.header(HEADER_IDEMPOTENCY_KEY), None, "{k:?}");
         }

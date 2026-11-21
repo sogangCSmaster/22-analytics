@@ -5,15 +5,11 @@ use crate::cookie;
 use crate::cors::{self, OriginCheck};
 use crate::http::EdgeResponse;
 use analytics_core::collect::{self, ProjectConfig, RequestCtx};
-use analytics_core::event::{MAX_BATCH_BYTES, MAX_URL_LEN, WireBatch};
-use analytics_core::urlx::clip;
+use analytics_core::event::{MAX_BATCH_BYTES, WireBatch};
 use analytics_core::{Event, PublicKey};
 use uuid::Uuid;
 
-/// UA 파서(woothee)에 넘기는 최대 길이. 비정상적으로 긴 UA로 CPU를 쓰게 하는 것을 막는다.
-pub const MAX_UA_LEN: usize = 1024;
-/// Referer는 URL 한도의 두 배까지만 본다. 넘으면 없는 것으로 친다.
-pub const MAX_REFERER_LEN: usize = MAX_URL_LEN * 2;
+pub use analytics_core::collect::{MAX_REFERER_LEN, MAX_UA_LEN};
 
 /// 요청에서 뽑은 값 (wasm 계층이 헤더와 `request.cf`로 채운다).
 #[derive(Debug, Clone, Default)]
@@ -76,12 +72,10 @@ pub fn handle(
             (Some(o), r)
         }
     };
-
-    let user_agent = clip(req.user_agent, MAX_UA_LEN);
     let ctx = RequestCtx {
         origin: origin.as_deref(),
-        referer: req.referer.filter(|r| r.len() <= MAX_REFERER_LEN),
-        user_agent: &user_agent,
+        referer: req.referer,
+        user_agent: req.user_agent,
         country: req.country,
         region: req.region,
         city: req.city,
@@ -91,6 +85,11 @@ pub fn handle(
     };
     match collect::process(&ctx, cfg, batch, new_uuid) {
         Ok(p) => {
+            // 트래커는 이 값이 캐시한 설정 버전과 다를 때만 /v1/config를 다시 받는다 (C1).
+            // 거부 응답에는 붙이지 않는다 (거부 사유와 무관하게 같은 응답).
+            response
+                .headers
+                .extend(cors::config_version_headers(cfg.settings_version));
             if p.issue_cookie {
                 response.headers.push((
                     "set-cookie".into(),
@@ -176,6 +175,24 @@ mod tests {
             None,
             "사유를 노출하지 않는다"
         );
+        assert_eq!(o.response.header("x-cfg-v"), None);
+    }
+
+    #[test]
+    fn response_carries_settings_version_for_tracker_config_refresh() {
+        // C1: 트래커는 이 값이 캐시한 설정의 v와 다를 때만 /v1/config를 다시 받는다.
+        let p = project();
+        let o = run(&req(), Some(&p), &body(&pv(E1)));
+        assert_eq!(o.response.header("x-cfg-v"), Some("3"));
+        assert_eq!(
+            o.response.header("access-control-expose-headers"),
+            Some("x-cfg-v")
+        );
+        // Origin 없는 요청(서버 간)도 같은 헤더
+        let mut r = req();
+        r.origin = None;
+        let o = run(&r, Some(&p), &body(&pv(E1)));
+        assert_eq!(o.response.header("x-cfg-v"), Some("3"));
     }
 
     // ── 해피 ──

@@ -6,7 +6,7 @@ use analytics_ch::attribution::fixtures::*;
 use analytics_core::attribution::DAY_MS;
 use analytics_jobs::attribution::{self as job, Mode, worker};
 use analytics_pg::attribution_settings as settings;
-use analytics_testkit::TestDb;
+use analytics_testkit::{ProjectBuilder, TestDb};
 use clickhouse::Row;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -35,22 +35,7 @@ async fn project(pool: &PgPool) -> u32 {
 }
 
 async fn project_with_status(pool: &PgPool, status: &str) -> u32 {
-    let org: i64 =
-        sqlx::query_scalar("INSERT INTO organizations (name) VALUES ('광고주') RETURNING id")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    let id: i32 = sqlx::query_scalar(
-        "INSERT INTO projects (org_id, name, public_key, salt, status) \
-         VALUES ($1, 'p', $2, 'salt', $3) RETURNING id",
-    )
-    .bind(org)
-    .bind(analytics_pg::new_public_key())
-    .bind(status)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    id as u32
+    ProjectBuilder::new().status(status).insert(pool).await
 }
 
 async fn finals(db: &TestDb, p: u32) -> Vec<Final> {
@@ -969,6 +954,51 @@ async fn conservation_check_detects_corruption_and_recompute_fixes_it() {
             .is_empty()
     );
     assert_manual(&finals(&db, p).await, 100_000);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recent_conservation_check_skips_old_orders() {
+    let db = TestDb::new().await;
+    let p = project(&db.pg).await;
+    manual_scenario(&db, p, Uuid::new_v4()).await;
+    job::run_project(&db.ch, &db.pg, p, &Mode::Incremental, NOW)
+        .await
+        .unwrap();
+    db.ch
+        .query(
+            "INSERT INTO attributed_revenue \
+             SELECT project_id, model, lookback_days, order_id, touch_index, channel, utm_campaign, \
+                    touch_ts, ordered_at, amount + 1, is_assist, computed_at + 1000, is_deleted \
+             FROM attributed_revenue FINAL \
+             WHERE model = 'linear' AND lookback_days = 7 AND touch_index = 1",
+        )
+        .execute()
+        .await
+        .unwrap();
+    let recent = |now_ms| job::ConservationWindow::Recent {
+        days: job::DEFAULT_CONSERVATION_DAYS,
+        now_ms,
+    };
+    let check = |w| job::conservation_check_window(&db.ch, &db.pg, Some(p), w);
+    // 주문 직후: 최근 40일 안이라 잡힌다
+    assert_eq!(check(recent(NOW)).await.unwrap().len(), 1);
+    // 41일 뒤 매시간 검증은 오래된 주문을 읽지 않는다
+    assert!(
+        check(recent(ORDER_AT + 41 * DAY_MS))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // 전체 검증(주간·CLI)은 여전히 잡는다
+    assert_eq!(check(job::ConservationWindow::Full).await.unwrap().len(), 1);
+    assert_eq!(
+        job::conservation_check(&db.ch, &db.pg, Some(p))
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "기존 함수는 전체 검증"
+    );
 }
 
 // ---------------------------------------------------------------- 장애·복구

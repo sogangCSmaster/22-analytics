@@ -23,6 +23,7 @@ serde_json.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+analytics-ch = { workspace = true, features = ["fixtures"] }
 analytics-testkit.workspace = true
 clickhouse.workspace = true
 serde.workspace = true

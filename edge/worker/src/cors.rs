@@ -54,6 +54,19 @@ pub fn check_origin(origin: Option<&str>, allowed: &[String]) -> OriginCheck {
 }
 
 /// 허용된 Origin에 붙이는 응답 헤더.
+/// 수집 응답의 설정 버전 헤더 (브라우저 JS가 읽을 수 있도록 노출).
+pub const HEADER_CONFIG_VERSION: &str = "x-cfg-v";
+
+pub fn config_version_headers(settings_version: u32) -> [(String, String); 2] {
+    [
+        (HEADER_CONFIG_VERSION.into(), settings_version.to_string()),
+        (
+            "access-control-expose-headers".into(),
+            HEADER_CONFIG_VERSION.into(),
+        ),
+    ]
+}
+
 pub fn credentialed_headers(origin: &str) -> Vec<(String, String)> {
     vec![
         ("access-control-allow-origin".into(), origin.to_owned()),

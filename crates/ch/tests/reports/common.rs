@@ -3,9 +3,10 @@
 use analytics_ch::rows::insert_events;
 use analytics_ch::{Client, ProjectScope};
 use analytics_core::Event;
+use analytics_core::timeutil::{KST, dt_to_ms};
 use clickhouse::Row;
 use serde::Serialize;
-use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset, macros::format_description};
+use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
 use uuid::Uuid;
 
 /// 기본 테스트 프로젝트
@@ -22,11 +23,11 @@ pub fn kst(s: &str) -> OffsetDateTime {
     let fmt = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
     PrimitiveDateTime::parse(s, fmt)
         .expect("시각 형식")
-        .assume_offset(UtcOffset::from_hms(9, 0, 0).unwrap())
+        .assume_offset(KST)
 }
 
 pub fn ms(t: OffsetDateTime) -> i64 {
-    (t.unix_timestamp_nanos() / 1_000_000) as i64
+    dt_to_ms(t)
 }
 
 pub fn uid(n: u128) -> Uuid {

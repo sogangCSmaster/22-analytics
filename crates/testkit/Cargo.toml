@@ -10,6 +10,7 @@ publish.workspace = true
 analytics-ch.workspace = true
 analytics-pg.workspace = true
 anyhow.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 uuid.workspace = true

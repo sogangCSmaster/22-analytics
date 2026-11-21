@@ -1,6 +1,7 @@
 //! `order_events` / `orders` 통합 테스트 (격리 ClickHouse DB).
 
 use analytics_ch::ProjectScope;
+use analytics_ch::attribution;
 use analytics_ch::orders::{self, OrderRow};
 use analytics_core::orders::{OrderEvent, OrderEventType, OrderSource, OrderState, OrderStatus};
 use analytics_testkit::TestDb;
@@ -132,9 +133,7 @@ async fn final_dedupes_across_partitions() {
         .unwrap()
         .unwrap();
     assert_eq!(row.version, 2);
-    let changed = orders::orders_changed_since(&db.ch, scope, 0)
-        .await
-        .unwrap();
+    let changed = attribution::changed_orders(&db.ch, scope, 0).await.unwrap();
     assert_eq!(changed.len(), 1, "파티션이 달라도 FINAL은 한 행");
 }
 
@@ -164,7 +163,7 @@ async fn tenant_isolation() {
             .is_none()
     );
     assert!(
-        orders::orders_changed_since(&db.ch, p1, 0)
+        attribution::changed_orders(&db.ch, p1, 0)
             .await
             .unwrap()
             .is_empty()
@@ -226,21 +225,21 @@ async fn changed_since_watermark() {
     orders::insert_order(&db.ch, &OrderRow::from_state(&state("A", T), 300))
         .await
         .unwrap();
-    let ids = |rows: Vec<OrderRow>| rows.into_iter().map(|r| r.order_id).collect::<Vec<_>>();
+    let ids = |rows: Vec<attribution::OrderForAttribution>| {
+        rows.into_iter().map(|r| r.order_id).collect::<Vec<_>>()
+    };
     assert_eq!(
-        ids(orders::orders_changed_since(&db.ch, scope, 0)
-            .await
-            .unwrap()),
+        ids(attribution::changed_orders(&db.ch, scope, 0).await.unwrap()),
         ["B", "A"]
     );
     assert_eq!(
-        ids(orders::orders_changed_since(&db.ch, scope, 200)
+        ids(attribution::changed_orders(&db.ch, scope, 200)
             .await
             .unwrap()),
         ["A"]
     );
     assert!(
-        orders::orders_changed_since(&db.ch, scope, 300)
+        attribution::changed_orders(&db.ch, scope, 300)
             .await
             .unwrap()
             .is_empty()

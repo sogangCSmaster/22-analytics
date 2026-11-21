@@ -5,12 +5,14 @@
 //! - 한 주문의 `ordered_at`(파티션 키)은 버전이 바뀌어도 그대로다 (`analytics_core::orders::project`).
 //!   그래서 같은 주문의 모든 버전이 한 파티션에 있고, 리포트는 파티션 간 병합 없이 `FINAL`을 쓸 수 있다.
 //! - `version`은 unix ms 근사값이며 주문마다 엄격히 증가한다: `max(이전 version + 1, now_ms)`.
-//! - 기여 연산 잡은 `version > watermark`로 바뀐 주문을 찾는다 ([`orders_changed_since`]).
+//! - 기여 연산 잡은 `version > watermark`로 바뀐 주문을 찾는다
+//!   ([`crate::attribution::changed_orders`]).
 //! - `order_events`는 append-only다. 같은 멱등 키의 중복 행이 있을 수 있으므로
 //!   읽는 쪽은 [`analytics_core::orders::fold`]처럼 멱등 키로 중복을 제거한다.
 
 use crate::ProjectScope;
 use analytics_core::orders::{OrderEvent, OrderEventType, OrderSource, OrderState, OrderStatus};
+use analytics_core::timeutil::{dt_to_ms, ms_to_dt};
 use clickhouse::Row;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -54,15 +56,6 @@ pub struct OrderRow {
     #[serde(with = "clickhouse::serde::time::datetime64::millis")]
     pub ordered_at: OffsetDateTime,
     pub version: u64,
-}
-
-fn ms_to_dt(ms: i64) -> OffsetDateTime {
-    OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000)
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH)
-}
-
-fn dt_to_ms(t: OffsetDateTime) -> i64 {
-    (t.unix_timestamp_nanos() / 1_000_000) as i64
 }
 
 impl From<&OrderEvent> for OrderEventRow {
@@ -194,23 +187,6 @@ pub async fn insert_order(client: &clickhouse::Client, row: &OrderRow) -> anyhow
     insert.write(row).await?;
     insert.end().await?;
     Ok(())
-}
-
-/// `version > watermark`인 주문 (`FINAL`, version 오름차순).
-pub async fn orders_changed_since(
-    client: &clickhouse::Client,
-    scope: ProjectScope,
-    watermark: u64,
-) -> anyhow::Result<Vec<OrderRow>> {
-    Ok(client
-        .query(
-            "SELECT ?fields FROM orders FINAL WHERE project_id = ? AND version > ? \
-             ORDER BY version, order_id",
-        )
-        .bind(scope.project_id())
-        .bind(watermark)
-        .fetch_all()
-        .await?)
 }
 
 #[cfg(test)]

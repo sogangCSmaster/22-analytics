@@ -37,7 +37,7 @@ use analytics_core::dto::reports::ReportRange;
 use time::{Date, Duration, format_description::BorrowedFormatItem, macros::format_description};
 
 /// 리포트 일자 기준 타임존 (1차 범위 고정).
-pub const TZ: &str = "Asia/Seoul";
+pub const TZ: &str = analytics_core::timeutil::TZ_NAME;
 /// 한 번에 조회할 수 있는 최대 일수.
 pub const MAX_RANGE_DAYS: u32 = 400;
 /// SQL 조각: 취소되지 않은 주문 (`orders.status`). 주문 writer가 상태를 대문자로 쓴다.

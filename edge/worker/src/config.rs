@@ -1,11 +1,12 @@
-//! 프로젝트 설정: KV 키, Worker 메모리 캐시(60초), `GET /v1/config` 응답.
+//! 프로젝트 설정: KV 키, Worker 메모리 캐시(5분), `GET /v1/config` 응답.
 
 use crate::http::EdgeResponse;
 use analytics_core::PublicKey;
+use analytics_core::cache::TtlCache;
 use analytics_core::collect::ProjectConfig;
-use std::collections::HashMap;
 
-pub const CONFIG_TTL_MS: i64 = 60_000;
+/// 설정 변경은 KV 반영 후 최대 5분 안에 적용된다 (공개 설정 응답 max-age와 같다).
+pub const CONFIG_TTL_MS: i64 = 300_000;
 /// 무작위 키로 메모리를 채우는 공격을 막기 위한 캐시 상한 (isolate당).
 pub const CONFIG_CACHE_MAX: usize = 10_000;
 /// 공개 설정 응답 캐시 (ARCHITECTURE §3.1: 설정 변경은 5분 안에 반영)
@@ -25,54 +26,10 @@ pub fn key_from_query(query: Option<&str>) -> Option<PublicKey> {
 }
 
 /// 공개 키별 `ProjectConfig` 캐시. 없는 키(`None`)도 캐시한다 (negative caching).
-#[derive(Debug)]
-pub struct ConfigCache {
-    ttl_ms: i64,
-    max_entries: usize,
-    entries: HashMap<String, (i64, Option<ProjectConfig>)>,
-}
+pub type ConfigCache = TtlCache<String, ProjectConfig>;
 
-impl Default for ConfigCache {
-    fn default() -> Self {
-        Self::new(CONFIG_TTL_MS, CONFIG_CACHE_MAX)
-    }
-}
-
-impl ConfigCache {
-    pub fn new(ttl_ms: i64, max_entries: usize) -> Self {
-        Self {
-            ttl_ms,
-            max_entries,
-            entries: HashMap::new(),
-        }
-    }
-
-    /// 신선한 항목이 있으면 `Some(설정 또는 None)`, 없거나 만료됐으면 `None`.
-    pub fn get(&self, key: &str, now_ms: i64) -> Option<Option<ProjectConfig>> {
-        self.entries
-            .get(key)
-            .filter(|(at, _)| now_ms - at < self.ttl_ms)
-            .map(|(_, cfg)| cfg.clone())
-    }
-
-    pub fn put(&mut self, key: &str, cfg: Option<ProjectConfig>, now_ms: i64) {
-        if self.entries.len() >= self.max_entries && !self.entries.contains_key(key) {
-            let ttl = self.ttl_ms;
-            self.entries.retain(|_, (at, _)| now_ms - *at < ttl);
-            if self.entries.len() >= self.max_entries {
-                self.entries.clear();
-            }
-        }
-        self.entries.insert(key.to_owned(), (now_ms, cfg));
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
+pub fn new_cache() -> ConfigCache {
+    TtlCache::new(CONFIG_TTL_MS, CONFIG_CACHE_MAX)
 }
 
 /// `GET /v1/config` 응답. 비활성·없는 프로젝트는 404.
@@ -166,36 +123,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn cache_ttl() {
-        let mut c = ConfigCache::new(60_000, 10);
-        assert_eq!(c.get("pk_a", 0), None);
-        c.put("pk_a", Some(project()), 1_000);
-        assert_eq!(c.get("pk_a", 1_000), Some(Some(project())));
-        assert_eq!(c.get("pk_a", 60_999), Some(Some(project())));
-        assert_eq!(
-            c.get("pk_a", 61_000),
-            None,
-            "60초가 지나면 KV를 다시 읽는다"
-        );
-        c.put("pk_missing", None, 0);
-        assert_eq!(c.get("pk_missing", 10), Some(None), "없는 키도 캐시");
+    fn memory_cache_matches_public_config_max_age() {
+        // C2: 설정 캐시는 5분 (공개 설정 응답 max-age와 같다). isolate당 KV 읽기를 줄인다.
+        assert_eq!(CONFIG_TTL_MS, 300_000);
+        assert_eq!(CONFIG_TTL_MS, i64::from(PUBLIC_CONFIG_MAX_AGE) * 1000);
     }
 
     #[test]
-    fn cache_is_bounded() {
-        let mut c = ConfigCache::new(60_000, 3);
-        for i in 0..3 {
-            c.put(&format!("pk_{i}"), None, 0);
-        }
-        assert_eq!(c.len(), 3);
-        // 만료된 항목부터 비운다
-        c.put("pk_new", None, 100_000);
-        assert_eq!(c.len(), 1);
-        assert_eq!(c.get("pk_new", 100_000), Some(None));
-        // 모두 신선한데 가득 차면 통째로 비우고 새로 담는다
-        for i in 0..10_000 {
-            c.put(&format!("pk_x{i}"), None, 100_000);
-            assert!(c.len() <= 3);
-        }
+    fn cache_uses_config_ttl() {
+        let mut c = new_cache();
+        c.put("pk_a".into(), Some(project()), 0);
+        assert_eq!(c.get("pk_a", CONFIG_TTL_MS - 1), Some(Some(project())));
+        assert_eq!(c.get("pk_a", CONFIG_TTL_MS), None);
     }
 }
