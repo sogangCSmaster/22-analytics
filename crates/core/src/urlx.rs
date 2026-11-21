@@ -176,12 +176,12 @@ mod tests {
     fn extracts_campaign_and_strips_pii() {
         let s = TrackingSettings::default();
         let p = parse_page_url(
-            "https://www.lotteimall.com/coop/affilGate.lotte?chl_no=141&utm_source=naver&email=a@b.com&abx_tid=1794994866344:5c8a#disp",
+            "https://www.shop.example.com/coop/affilGate.do?chl_no=141&utm_source=naver&email=a@b.com&abx_tid=1794994866344:5c8a#disp",
             &s,
         )
         .unwrap();
-        assert_eq!(p.host, "www.lotteimall.com");
-        assert_eq!(p.path, "/coop/affilGate.lotte");
+        assert_eq!(p.host, "www.shop.example.com");
+        assert_eq!(p.path, "/coop/affilGate.do");
         assert_eq!(p.campaign.utm_source, "naver");
         assert_eq!(p.campaign.click_id_type, "abx_tid");
         assert_eq!(p.campaign.click_id, "1794994866344:5c8a");

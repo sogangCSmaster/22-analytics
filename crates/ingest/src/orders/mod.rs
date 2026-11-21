@@ -1,4 +1,4 @@
-//! S2S 주문 처리 (ARCHITECTURE §5).
+//! S2S 주문 처리.
 //!
 //! 주문 이벤트 1건 처리 순서 ([`OrderService::apply`]):
 //! 1. 같은 주문의 처리를 직렬화한다 (order_id 해시로 고른 잠금).

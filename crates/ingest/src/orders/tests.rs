@@ -1719,7 +1719,7 @@ async fn client_purchase_failure_does_not_skip_rest_of_batch() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn equal_partial_refunds_same_ms_without_keys_collapse() {
-    // 문서화된 동작 (ARCHITECTURE §5.1): 키 없이 같은 금액·같은 시각의 부분 환불 두 건은 재전송과
+    // 문서화된 동작: 키 없이 같은 금액·같은 시각의 부분 환불 두 건은 재전송과
     // 구별할 수 없어 한 건으로 합쳐진다. 환불마다 Idempotency-Key를 보내면 각각 반영된다.
     let h = setup().await;
     h.post(&confirm("P1", 100_000)).await;

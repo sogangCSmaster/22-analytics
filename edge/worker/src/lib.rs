@@ -1,4 +1,4 @@
-//! Cloudflare Worker 엣지 (ARCHITECTURE §4).
+//! Cloudflare Worker 엣지.
 //!
 //! 판단 로직은 모두 플랫폼 독립 모듈에 두고 호스트에서 `cargo test -p analytics-edge`로 검증한다.
 //! `worker` 크레이트에 닿는 코드는 wasm32 전용 `glue` 모듈 하나뿐이다.

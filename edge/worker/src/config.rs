@@ -9,7 +9,7 @@ use analytics_core::collect::ProjectConfig;
 pub const CONFIG_TTL_MS: i64 = 300_000;
 /// 무작위 키로 메모리를 채우는 공격을 막기 위한 캐시 상한 (isolate당).
 pub const CONFIG_CACHE_MAX: usize = 10_000;
-/// 공개 설정 응답 캐시 (ARCHITECTURE §3.1: 설정 변경은 5분 안에 반영)
+/// 공개 설정 응답 캐시
 pub const PUBLIC_CONFIG_MAX_AGE: u32 = 300;
 /// 없는 키에 대한 404도 잠시 캐시해 KV 조회를 줄인다.
 pub const NOT_FOUND_MAX_AGE: u32 = 60;

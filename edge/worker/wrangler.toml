@@ -1,4 +1,4 @@
-# Cloudflare Worker "edge" (ARCHITECTURE §1, §4). 아직 배포하지 않는다 (대행사 계정 수령 후).
+# Cloudflare Worker "edge". 아직 배포하지 않는다 (대행사 계정 수령 후).
 # 바인딩 ID·도메인은 계정 생성 뒤 채운다. 자세한 절차는 README.md.
 
 name = "analytics-edge"

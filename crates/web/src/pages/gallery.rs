@@ -15,7 +15,7 @@ pub fn Gallery() -> Element {
         div { class: "page-head",
             div {
                 h1 { class: "page-title", "컴포넌트" }
-                p { class: "page-desc", "디자인 토큰과 기본 컴포넌트 (docs/ARCHITECTURE.md §12.1)" }
+                p { class: "page-desc", "디자인 토큰과 기본 컴포넌트" }
             }
         }
 

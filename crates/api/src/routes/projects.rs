@@ -108,7 +108,7 @@ pub async fn update(
     Ok(Json(project_dto(&p, access.role)))
 }
 
-/// 설치 스니펫 (ARCHITECTURE §3.1). 큐 스텁을 먼저 둬서 로드 전 `at(...)` 호출도 잃지 않는다.
+/// 설치 스니펫. 큐 스텁을 먼저 둬서 로드 전 `at(...)` 호출도 잃지 않는다.
 pub fn snippet_html(tracker_host: &str, public_key: &str) -> String {
     format!(
         "<script>window.at=window.at||function(){{(at.q=at.q||[]).push(arguments)}};</script>\n\

@@ -1,6 +1,6 @@
 # analytics-edge (Cloudflare Worker)
 
-workers-rs(Rust → WASM)로 만든 수집 엣지입니다. 동작 명세는 `docs/ARCHITECTURE.md` §1, §3.4, §4, 로컬 대응은 §16(ingest 엣지 에뮬레이션, `crates/ingest/src/emulate.rs`)을 따릅니다.
+workers-rs(Rust → WASM)로 만든 수집 엣지입니다. 로컬에서는 ingest 엣지 에뮬레이션(`crates/ingest/src/emulate.rs`)이 같은 동작을 합니다.
 
 > 아직 배포하지 않습니다. Cloudflare 계정·도메인을 받은 뒤 아래 절차로 올립니다.
 

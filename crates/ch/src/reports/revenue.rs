@@ -1,4 +1,4 @@
-//! 실제 매출 (중복 소거) 리포트 (docs/ARCHITECTURE.md §7.3, 매뉴얼 1.D).
+//! 실제 매출 (중복 소거) 리포트 (매뉴얼 1.D).
 //!
 //! `attributed_revenue`는 WP2 기여 연산 잡이 쓴다. 재연산·취소는 `computed_at`이 더 큰 행으로
 //! 대체되므로 항상 `FINAL`과 `is_deleted = 0`으로 읽는다. 기간은 주문 시각(Asia/Seoul) 기준.

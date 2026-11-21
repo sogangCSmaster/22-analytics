@@ -1,4 +1,4 @@
-//! 기여 연산 잡 (ARCHITECTURE §7).
+//! 기여 연산 잡.
 //!
 //! 주문마다: 식별자 확장 → lookback 안 터치포인트 → 현재 채널 규칙으로 재분류 →
 //! lookback × 모델 배분 → 기존 결과와 비교해 바뀐 주문만 `attributed_revenue`에 쓴다.

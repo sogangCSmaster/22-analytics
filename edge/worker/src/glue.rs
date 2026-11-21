@@ -36,7 +36,7 @@ const ORDERS_TIMEOUT: Duration = Duration::from_secs(20);
 const QUEUE_FORWARD_TIMEOUT: Duration = Duration::from_secs(15);
 
 thread_local! {
-    /// isolate 단위 메모리 캐시 (ARCHITECTURE §4.1: 5분)
+    /// isolate 단위 메모리 캐시
     static CACHE: RefCell<ConfigCache> = RefCell::new(config::new_cache());
 }
 

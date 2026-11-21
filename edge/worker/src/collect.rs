@@ -1,4 +1,4 @@
-//! `POST /v1/collect` 판단 로직 (ARCHITECTURE §4.1). ingest `emulate.rs`와 같은 동작을 하되,
+//! `POST /v1/collect` 판단 로직. ingest `emulate.rs`와 같은 동작을 하되,
 //! 거부 사유는 응답에 남기지 않는다 (항상 `204`, 본문 크기 초과만 `413`).
 
 use crate::cookie;

@@ -1,4 +1,4 @@
-//! 기여 연산 잡용 쿼리 (ARCHITECTURE §7).
+//! 기여 연산 잡용 쿼리.
 //!
 //! - 주문: `orders FINAL`의 현재 상태 (WP1이 쓰는 테이블, `version` 단조 증가)
 //! - 식별자 확장: `identity_links` (member_hash → visitor_id들)
