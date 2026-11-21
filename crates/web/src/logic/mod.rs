@@ -8,3 +8,4 @@ pub mod prefs;
 pub mod query;
 pub mod table;
 pub mod validate;
+pub mod view;

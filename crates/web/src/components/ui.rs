@@ -367,6 +367,16 @@ pub fn Drawer(open: bool, title: String, onclose: EventHandler<()>, children: El
     }
 }
 
+/// 프로젝트가 바뀌면 자식 화면을 통째로 새로 만든다.
+///
+/// 경로 매개변수 `pid`만 바뀌면 같은 컴포넌트가 그대로 남아 훅 상태(리소스·입력 중인 값·
+/// 펼친 비밀 키)가 이전 프로젝트 것으로 남는다. 키를 프로젝트로 묶어 다시 만들게 한다.
+#[component]
+pub fn ProjectScope(pid: i32, children: Element) -> Element {
+    let _ = pid;
+    rsx! { {children} }
+}
+
 pub use crate::platform::sleep_ms;
 
 #[component]

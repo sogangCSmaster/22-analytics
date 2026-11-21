@@ -48,6 +48,12 @@ pub fn path_label(channels: &[String]) -> String {
         .join(" → ")
 }
 
+/// 기여 설정을 읽었는데 클릭 인정 기간이 하나도 없으면, 오류 대신 설정으로 안내한다.
+pub fn needs_lookback_setup(settings_ready: bool, lookbacks: &[u8]) -> bool {
+    let _ = (settings_ready, lookbacks);
+    unimplemented!()
+}
+
 type SettingsRes = Resource<api::ApiResult<AttributionSettingsDto>>;
 
 /// 선택된 모델·lookback (사용자가 고르지 않았으면 프로젝트 기본값) 과 선택 가능한 lookback 목록.
@@ -446,6 +452,14 @@ mod tests {
         );
         assert_eq!(explain(&report(100, 100, 0)), None);
         assert_eq!(explain(&report(0, 0, 0)), None);
+    }
+
+    #[test]
+    fn empty_lookbacks_point_to_settings() {
+        assert!(needs_lookback_setup(true, &[]));
+        assert!(!needs_lookback_setup(true, &[7]));
+        // 아직 설정을 못 읽었으면 로딩·오류 상태를 보여준다
+        assert!(!needs_lookback_setup(false, &[]));
     }
 
     #[test]

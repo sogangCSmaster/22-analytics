@@ -17,6 +17,16 @@ pub fn safe_next(next: &str) -> Option<String> {
     ok.then(|| next.to_owned())
 }
 
+/// 로그인 응답은 받았는데 쿠키가 저장되지 않은 경우의 안내.
+pub const COOKIE_BLOCKED: &str = "로그인은 됐지만 브라우저가 로그인 쿠키를 막고 있어요. 쿠키 차단(시크릿 모드·추적 방지)을 풀거나 다른 브라우저로 다시 시도해 주세요";
+
+/// 로그인 직후 `/v1/auth/me` 확인 결과 → 계속 진행할지, 보여줄 오류.
+/// 401이면 쿠키가 저장되지 않은 것이다. 그 밖의 오류(네트워크 등)는 판단할 수 없으니 진행한다.
+pub fn session_check(r: &crate::api::ApiResult<MeResponse>) -> Result<(), &'static str> {
+    let _ = r;
+    unimplemented!()
+}
+
 #[component]
 pub fn Login(next: String) -> Element {
     let mut ctx = use_app();
@@ -129,5 +139,27 @@ mod tests {
         assert_eq!(safe_next("/login?next=/x"), None);
         assert_eq!(safe_next(""), None);
         assert_eq!(safe_next("javascript:alert(1)"), None);
+    }
+
+    #[test]
+    fn next_rejects_backslash_and_control_chars_anywhere() {
+        assert_eq!(safe_next("/p/1\\..\\evil"), None);
+        assert_eq!(safe_next("/a\\b"), None);
+        assert_eq!(safe_next("/p/1\n/x"), None);
+        assert_eq!(safe_next("/\t/evil.com"), None);
+        assert_eq!(safe_next("/p\u{7f}"), None);
+        assert_eq!(safe_next("/p/1/설정").as_deref(), Some("/p/1/설정"));
+    }
+
+    #[test]
+    fn me_401_after_login_means_cookie_blocked() {
+        use super::{COOKIE_BLOCKED, session_check};
+        use crate::logic::errors::ApiError;
+        assert_eq!(
+            session_check(&Err(ApiError::Unauthorized)),
+            Err(COOKIE_BLOCKED)
+        );
+        assert_eq!(session_check(&Err(ApiError::Network)), Ok(()));
+        assert!(COOKIE_BLOCKED.contains("브라우저가 로그인 쿠키를 막고 있어요"));
     }
 }

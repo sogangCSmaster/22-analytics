@@ -15,6 +15,25 @@ use analytics_core::dto::admin::{
 };
 use dioxus::prelude::*;
 
+/// 멤버 추가 실패 문구. 403은 계정이 없거나 다른 광고주 소속이라는 뜻이라 따로 안내하고,
+/// 409(마지막 관리자 등)는 서버 설명을 그대로 보여준다.
+pub fn member_error_message(e: &crate::logic::errors::ApiError) -> String {
+    let _ = e;
+    unimplemented!()
+}
+
+/// 멤버 변경이 나 자신에게 해당하는지 (내보내기·역할 변경).
+#[derive(Clone, Copy, Debug)]
+pub enum MemberChange<'a> {
+    Remove(i64),
+    Upsert(&'a str),
+}
+
+pub fn affects_me(me: &UserDto, change: MemberChange<'_>) -> bool {
+    let _ = (me, change);
+    unimplemented!()
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Tab {
     Orgs,
@@ -419,5 +438,48 @@ fn UsersTab() -> Element {
                 })}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logic::errors::ApiError;
+
+    fn me() -> UserDto {
+        UserDto {
+            id: 7,
+            email: "kim@client.com".into(),
+            name: "김".into(),
+            is_super_admin: false,
+            created_at: String::new(),
+            last_login_at: None,
+        }
+    }
+
+    #[test]
+    fn add_member_forbidden_has_specific_message() {
+        assert_eq!(
+            member_error_message(&ApiError::Forbidden),
+            "이 이메일은 추가할 수 없어요. 계정이 없거나 다른 광고주 소속이면 대행사 관리자에게 요청하세요"
+        );
+        let last = ApiError::Conflict("광고주에는 admin이 한 명 이상 있어야 합니다".into());
+        assert_eq!(
+            member_error_message(&last),
+            "광고주에는 admin이 한 명 이상 있어야 합니다"
+        );
+        assert_eq!(
+            member_error_message(&ApiError::Network),
+            ApiError::Network.message()
+        );
+    }
+
+    #[test]
+    fn detects_changes_to_myself() {
+        let m = me();
+        assert!(affects_me(&m, MemberChange::Remove(7)));
+        assert!(!affects_me(&m, MemberChange::Remove(8)));
+        assert!(affects_me(&m, MemberChange::Upsert(" Kim@Client.com ")));
+        assert!(!affects_me(&m, MemberChange::Upsert("lee@client.com")));
     }
 }
