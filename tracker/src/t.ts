@@ -10,7 +10,13 @@
  * at('consent', false)
  * at('pageview')
  * at('getVisitorId', (id) => ...)
+ *
+ * 전송: 10건이 쌓이거나 15초 조용하면 보내고, 페이지를 떠날 때는 sendBeacon으로 즉시 보낸다.
+ * 요청마다 50건·60KB 이하로 나눈다. 설정(/v1/config)은 캐시가 없거나 24시간이 지났거나
+ * 수집 응답의 x-cfg-v가 캐시 버전과 다를 때만 받는다 (페이지뷰당 엣지 요청 ≈ 1건).
  */
+
+import { IDLE_MS, SESSION_MS, campaignSig, needsConfig, newSession, shouldFlush, split } from "./lib";
 
 type Val = string | number | boolean | null;
 type Props = Record<string, Val>;
@@ -18,8 +24,8 @@ type Props = Record<string, Val>;
 interface Item { id?: string; name?: string; price?: number; qty?: number }
 interface Ec { order_id?: string; value?: number; currency?: string; items?: Item[] }
 
-/** 서버 PublicConfig와 같은 키 */
-interface Cfg { v: number; pv: boolean; spa: boolean; out: boolean; dl: boolean; scr: boolean; dnt: boolean }
+/** 서버 PublicConfig와 같은 키 (+ 받은 시각 at) */
+interface Cfg { v: number; pv: boolean; spa: boolean; out: boolean; dl: boolean; scr: boolean; dnt: boolean; at?: number }
 
 interface WireEvent {
   id: string; n: string; t: number; u: string;
@@ -33,8 +39,7 @@ interface WireEvent {
 
   const loc = location;
   const base = new URL(script.src).origin;
-  const SESSION_MS = 30 * 60 * 1000;
-  const MAX_BATCH = 10;
+  const CFG_KEY = "_at_cfg_" + key;
   const DEFAULTS: Cfg = { v: 0, pv: true, spa: true, out: false, dl: false, scr: false, dnt: false };
 
   // ---- 저장소 도우미 ------------------------------------------------------
@@ -76,8 +81,9 @@ interface WireEvent {
   };
 
   // ---- 상태 ---------------------------------------------------------------
-  let cfg: Cfg = DEFAULTS;
-  try { cfg = { ...DEFAULTS, ...JSON.parse(ls.get("_at_cfg_" + key) || "{}") }; } catch { /* 깨진 캐시 무시 */ }
+  let cached: Cfg | null = null;
+  try { cached = JSON.parse(ls.get(CFG_KEY) || "null"); } catch { /* 깨진 캐시 무시 */ }
+  const cfg: Cfg = { ...DEFAULTS, ...cached };
   let off = ls.get("_at_off") === "1" || (cfg.dnt && navigator.doNotTrack === "1");
   let member = ls.get("_at_m");
 
@@ -86,7 +92,7 @@ interface WireEvent {
   setCookie("_at_cv", vid, 31536000);
 
   let sid = "";
-  let newSession = false;
+  let fresh = false;
   /** 세션 랜딩 정보 { s: sid, u: 랜딩 URL, r: 랜딩 referrer } */
   let landing: { s: string; u: string; r?: string } | null = null;
   try { landing = JSON.parse(ls.get("_at_l") || "null"); } catch { /* 무시 */ }
@@ -94,17 +100,27 @@ interface WireEvent {
   const touchSession = (campaignSig?: string) => {
     const now = Date.now();
     const raw = getCookie("_at_sid");
-    const [id, last] = raw ? raw.split(".") : [];
-    const prevSig = ls.get("_at_cs");
-    const changed = !!campaignSig && campaignSig !== prevSig;
-    if (!id || now - +last > SESSION_MS || changed) {
+    if (newSession(raw, now, campaignSig, ls.get("_at_cs"))) {
       sid = uuid();
-      newSession = true;
+      fresh = true;
       ls.set("_at_cs", campaignSig || null);
     } else {
-      sid = id;
+      sid = raw!.split(".")[0];
     }
     setCookie("_at_sid", sid + "." + now, SESSION_MS / 1000);
+  };
+
+  // ---- 설정 ------------------------------------------------------------------
+  let cfgBusy = false;
+  /** 다음 페이지에서 쓸 설정 갱신 (필요할 때만, 페이지당 최대 1회). */
+  const refreshCfg = (header?: string | null) => {
+    if (cfgBusy || !needsConfig(cached, Date.now(), header)) return;
+    cfgBusy = true;
+    // 버전을 쿼리에 넣어 HTTP·엣지 캐시의 이전 버전 응답을 피한다
+    fetch(base + "/v1/config?k=" + encodeURIComponent(key) + (header ? "&v=" + encodeURIComponent(header) : ""))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (j) { cached = { ...j, at: Date.now() }; ls.set(CFG_KEY, JSON.stringify(cached)); } })
+      .catch(() => { /* 무시 */ });
   };
 
   // ---- 전송 큐 --------------------------------------------------------------
@@ -113,41 +129,38 @@ interface WireEvent {
 
   const flush = (unloading?: boolean) => {
     if (timer) { clearTimeout(timer); timer = undefined; }
-    while (queue.length) {
-      const batch = queue.splice(0, 50);
-      const l = landing && landing.s === sid ? { u: landing.u, r: landing.r } : undefined;
-      const body = JSON.stringify({ k: key, v: vid, s: sid, m: member || undefined, sv: 1, l, e: batch });
-      const url = base + "/v1/collect";
+    const l = landing && landing.s === sid ? { u: landing.u, r: landing.r } : undefined;
+    const encode = (e: WireEvent[]) => JSON.stringify({ k: key, v: vid, s: sid, m: member || undefined, sv: 1, l, e });
+    const url = base + "/v1/collect";
+    for (const batch of split(queue, encode)) {
+      const body = encode(batch);
       // 문자열 본문 = text/plain → CORS preflight 없음
       if (unloading && navigator.sendBeacon && navigator.sendBeacon(url, body)) continue;
-      fetch(url, { method: "POST", body, keepalive: true, credentials: "include" }).catch(() => { /* 다음 배치에서 재시도하지 않음 */ });
+      fetch(url, { method: "POST", body, keepalive: true, credentials: "include" })
+        .then((r) => refreshCfg(r.headers.get("x-cfg-v")))
+        .catch(() => { /* 다음 배치에서 재시도하지 않음 */ });
     }
+    queue = [];
   };
 
   const push = (n: string, extra?: Partial<WireEvent>) => {
     if (off) return;
     touchSession();
     const e: WireEvent = { id: uuid(), n, t: Date.now(), u: loc.href, sw: screen.width, ...extra };
-    if (newSession) {
+    if (fresh) {
       e.ss = true;
-      newSession = false;
+      fresh = false;
       landing = { s: sid, u: e.u, r: e.r };
       ls.set("_at_l", JSON.stringify(landing));
     }
     queue.push(e);
-    if (queue.length >= MAX_BATCH) flush();
-    else if (!timer) timer = setTimeout(flush, 2000);
+    if (shouldFlush(queue.length)) flush();
+    else { clearTimeout(timer); timer = setTimeout(flush, IDLE_MS); }
   };
 
   // ---- 페이지뷰 ------------------------------------------------------------
   let lastUrl = "";
   let maxScroll = 0;
-  const campaignSig = (): string | undefined => {
-    const p = new URLSearchParams(loc.search);
-    const sig = ["utm_source", "utm_medium", "utm_campaign", "gclid", "fbclid", "abx_tid", "n_keyword", "click_id"]
-      .map((k) => p.get(k) || "").join("|");
-    return /[^|]/.test(sig) ? sig : undefined;
-  };
 
   const pageview = () => {
     const href = loc.href;
@@ -156,7 +169,7 @@ interface WireEvent {
     lastUrl = href;
     maxScroll = 0;
     if (off) return;
-    touchSession(campaignSig());
+    touchSession(campaignSig(loc.search));
     push("page_view", { r: ref, ti: d.title });
   };
 
@@ -228,9 +241,5 @@ interface WireEvent {
     cmd(args[0], args[1], args[2]);
   }
 
-  // 다음 페이지에서 쓸 설정 갱신
-  fetch(base + "/v1/config?k=" + encodeURIComponent(key))
-    .then((r) => (r.ok ? r.text() : ""))
-    .then((t) => t && ls.set("_at_cfg_" + key, t))
-    .catch(() => { /* 무시 */ });
+  refreshCfg();
 })(window, document);
