@@ -1167,6 +1167,33 @@ mod tests {
     }
 
     #[test]
+    fn project_freezes_ordered_at_of_previous_row() {
+        // orders는 toYYYYMM(ordered_at)로 파티션된다. 이전 행의 ordered_at을 유지해야
+        // 같은 주문의 버전들이 한 파티션에 남아 FINAL이 중복을 없앤다.
+        let first = [refund("r", 1_000, 5_000)];
+        let prev = project(&first, None).unwrap();
+        assert_eq!(prev.ordered_at_ms, 5_000);
+        let more = [refund("r", 1_000, 5_000), confirm("c", 100_000, 1_000)];
+        assert_eq!(
+            fold(&more).unwrap().ordered_at_ms,
+            1_000,
+            "fold 자체는 확정 시각"
+        );
+        let next = project(&more, Some(&prev)).unwrap();
+        assert_eq!(next.ordered_at_ms, 5_000, "투영은 이전 행의 시각을 유지");
+        assert_eq!(next.status, OrderStatus::PartiallyRefunded);
+        // 확정 정정도 마찬가지
+        let a = project(&[confirm("c1", 100_000, 1_000)], None).unwrap();
+        let b = project(
+            &[confirm("c1", 100_000, 1_000), confirm("c2", 90_000, 9_000)],
+            Some(&a),
+        )
+        .unwrap();
+        assert_eq!((b.net_amount, b.ordered_at_ms), (90_000, 1_000));
+        assert!(project(&[], Some(&a)).is_none());
+    }
+
+    #[test]
     fn s2s_wins_over_client() {
         let mut client = confirm("client:1", 120_000, 500);
         client.source = OrderSource::Client;

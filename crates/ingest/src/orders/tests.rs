@@ -126,6 +126,57 @@ impl H {
             .unwrap()
             .len()
     }
+    /// FINAL 없이 본 orders 행들의 서로 다른 ordered_at (ms).
+    async fn ordered_at_versions(&self, id: &str) -> Vec<i64> {
+        self.db
+            .ch
+            .query(
+                "SELECT DISTINCT toUnixTimestamp64Milli(ordered_at) FROM orders \
+                 WHERE project_id = ? AND order_id = ? ORDER BY 1",
+            )
+            .bind(self.project as u32)
+            .bind(id)
+            .fetch_all()
+            .await
+            .unwrap()
+    }
+    /// 리포트처럼 기간(UTC, [from, to))으로 거른 FINAL 매출 합계.
+    async fn range_revenue(&self, from: &str, to: &str) -> i64 {
+        self.db
+            .ch
+            .query(
+                "SELECT toInt64(sum(effective_amount)) FROM orders FINAL \
+                 WHERE project_id = ? AND ordered_at >= toDateTime64(?, 3, 'UTC') \
+                   AND ordered_at < toDateTime64(?, 3, 'UTC') \
+                 SETTINGS do_not_merge_across_partitions_select_final = 1",
+            )
+            .bind(self.project as u32)
+            .bind(from)
+            .bind(to)
+            .fetch_one()
+            .await
+            .unwrap()
+    }
+    /// 10월 + 11월 매출 (월 경계를 걸친 주문이 한 번만 잡히는지).
+    async fn oct_plus_nov(&self) -> (i64, i64) {
+        (
+            self.range_revenue("2026-10-01 00:00:00", "2026-11-01 00:00:00")
+                .await,
+            self.range_revenue("2026-11-01 00:00:00", "2026-12-01 00:00:00")
+                .await,
+        )
+    }
+    async fn post_with_key(&self, body: &Value, key: &str) -> StatusCode {
+        let auth = format!("Bearer {}", self.key);
+        send(
+            &self.app,
+            "/v1/orders",
+            &[("authorization", &auth), ("idempotency-key", key)],
+            body.to_string().into_bytes(),
+        )
+        .await
+        .0
+    }
     /// FINAL 없이 본 orders 행 수 (투영을 몇 번 썼는지).
     async fn projection_writes(&self, id: &str) -> u64 {
         self.db
@@ -1015,9 +1066,19 @@ async fn event_append_failure_writes_no_projection() {
 // ── 클라이언트 purchase → 주문 ─────────────────────────────
 
 fn purchase(project: i32, order_id: &str, value: i64, event_id: u128) -> analytics_core::Event {
+    purchase_at(project, order_id, value, event_id, 1_795_167_912_000)
+}
+
+fn purchase_at(
+    project: i32,
+    order_id: &str,
+    value: i64,
+    event_id: u128,
+    ts_ms: i64,
+) -> analytics_core::Event {
     let raw = json!({
-        "project_id": project, "event_id": uuid::Uuid::from_u128(event_id), "ts_ms": 1_795_167_912_000i64,
-        "received_at_ms": 1_795_167_913_000i64, "event_name": "purchase",
+        "project_id": project, "event_id": uuid::Uuid::from_u128(event_id), "ts_ms": ts_ms,
+        "received_at_ms": ts_ms + 1000, "event_name": "purchase",
         "visitor_id": uuid::Uuid::from_u128(77), "session_id": uuid::Uuid::from_u128(3),
         "is_session_start": false, "member_hash": "", "url": "https://a.com/done", "host": "a.com",
         "path": "/done", "title": "", "referrer": "", "referrer_host": "", "utm_source": "",
@@ -1085,4 +1146,81 @@ async fn project_context_lookup() {
     assert!(!ctx.client_purchase_as_order);
     assert!(h.svc.project(999_999).await.unwrap().is_none());
     let _ = OrderStatus::Confirmed;
+}
+
+// ── ordered_at 고정 (파티션 간 중복 방지) ───────────────────
+
+fn ms(rfc3339: &str) -> i64 {
+    let t = time::OffsetDateTime::parse(rfc3339, &time::format_description::well_known::Rfc3339)
+        .unwrap();
+    (t.unix_timestamp_nanos() / 1_000_000) as i64
+}
+
+fn confirm_at(id: &str, net: i64, at: &str) -> Value {
+    with(confirm(id, net), "ordered_at", json!(at))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ordered_at_frozen_when_s2s_replaces_client_across_months() {
+    // 클라이언트 purchase 10/31 23:59(UTC) → S2S 확정 11/1 00:10: 다른 월 파티션
+    let h = setup_with(json!({"client_purchase_as_order": true})).await;
+    let at = ms("2026-10-31T23:59:00Z");
+    h.svc
+        .client_purchases(&[purchase_at(h.project, "M1", 50_000, 1, at)])
+        .await
+        .unwrap();
+    assert_eq!(h.order("M1").await.unwrap().source, "client");
+    let (s, _) = h
+        .post(&confirm_at("M1", 100_000, "2026-11-01T09:10:00+09:00"))
+        .await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let o = h.order("M1").await.unwrap();
+    assert_eq!((o.source.as_str(), o.effective_amount), ("s2s", 100_000));
+    assert_eq!(h.projection_writes("M1").await, 2);
+    assert_eq!(
+        h.ordered_at_versions("M1").await,
+        vec![at],
+        "모든 버전이 처음 행의 ordered_at을 유지"
+    );
+    let (oct, nov) = h.oct_plus_nov().await;
+    assert_eq!(oct + nov, 100_000, "월 범위 합계에 한 번만 ({oct} + {nov})");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refund_before_confirm_across_months_counted_once() {
+    let h = setup().await;
+    let (s, _) = h.post(&refund("M2", 10_000, "2026-11-02T00:00:00Z")).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let pending = h.order("M2").await.unwrap();
+    assert_eq!(pending.status, "PENDING");
+    h.post(&confirm_at("M2", 100_000, "2026-10-31T23:00:00Z"))
+        .await;
+    let o = h.order("M2").await.unwrap();
+    assert_eq!(
+        (o.status.as_str(), o.effective_amount),
+        ("PARTIALLY_REFUNDED", 90_000)
+    );
+    assert_eq!(h.ordered_at_versions("M2").await.len(), 1);
+    assert_eq!(o.ordered_at, pending.ordered_at);
+    let (oct, nov) = h.oct_plus_nov().await;
+    assert_eq!(oct + nov, 90_000, "{oct} + {nov}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn confirm_correction_across_months_counted_once() {
+    let h = setup().await;
+    h.post(&confirm_at("M3", 100_000, "2026-10-31T23:30:00Z"))
+        .await;
+    // 정정 확정 (다른 시각 → 다른 기본 멱등 키)
+    h.post(&confirm_at("M3", 80_000, "2026-11-01T01:00:00Z"))
+        .await;
+    let o = h.order("M3").await.unwrap();
+    assert_eq!(o.net_amount, 80_000, "늦은 확정 금액");
+    assert_eq!(h.projection_writes("M3").await, 2);
+    assert_eq!(
+        h.ordered_at_versions("M3").await,
+        vec![ms("2026-10-31T23:30:00Z")]
+    );
+    let (oct, nov) = h.oct_plus_nov().await;
+    assert_eq!((oct, nov), (80_000, 0));
 }
