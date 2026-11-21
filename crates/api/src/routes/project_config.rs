@@ -143,6 +143,11 @@ fn rule_dto(r: analytics_pg::channel_rules::Rule) -> ChannelRuleDto {
     }
 }
 
+/// 채널 이름: 광고비 CSV와 같이 소문자로 저장해야 매출 리포트에서 광고비와 한 채널로 묶인다.
+fn channel_name(s: &str) -> ApiResult<String> {
+    Ok(validate::name("channel", s, validate::MAX_CHANNEL_CHARS)?.to_lowercase())
+}
+
 fn rule_id(params: &HashMap<String, String>) -> ApiResult<i64> {
     parse_id(params.get("rule_id").map(String::as_str).unwrap_or(""))
 }
@@ -161,7 +166,7 @@ pub async fn create_rule(
     ApiJson(req): ApiJson<CreateChannelRuleRequest>,
 ) -> ApiResult<(StatusCode, Json<ChannelRuleDto>)> {
     access.require(Role::Analyst)?;
-    let channel = validate::name("channel", &req.channel, validate::MAX_CHANNEL_CHARS)?;
+    let channel = channel_name(&req.channel)?;
     let when = validate::rule_match(req.when)?;
     let priority = validate::priority(req.priority.unwrap_or(100))?;
     let label = validate::optional_name("label", &req.label, validate::MAX_NAME_CHARS)?;
@@ -198,7 +203,7 @@ pub async fn update_rule(
         .await?
         .ok_or_else(ApiError::not_found)?;
     if let Some(c) = req.channel.as_deref() {
-        rule.channel = validate::name("channel", c, validate::MAX_CHANNEL_CHARS)?;
+        rule.channel = channel_name(c)?;
     }
     if let Some(m) = req.when {
         rule.when = validate::rule_match(m)?;
@@ -265,7 +270,7 @@ pub async fn get_attribution(
     State(state): State<AppState>,
     access: ProjectAccess,
 ) -> ApiResult<Json<AttributionSettingsDto>> {
-    let s = analytics_pg::attribution::get(&state.pg, access.id()).await?;
+    let s = analytics_pg::attribution::get_or_default(&state.pg, access.id()).await?;
     Ok(Json(attribution_dto(s)))
 }
 
@@ -287,7 +292,7 @@ pub async fn put_attribution(
         include_organic: req.include_organic,
         include_referral: req.include_referral,
     };
-    let current = analytics_pg::attribution::get(&state.pg, access.id()).await?;
+    let current = analytics_pg::attribution::get_or_default(&state.pg, access.id()).await?;
     if current == s {
         return Ok(Json(attribution_dto(current)));
     }

@@ -59,16 +59,19 @@ pub async fn list(
 }
 
 /// `from..=to` 기간의 채널별 광고비 합계 (실제 매출 리포트의 ROAS용).
+///
+/// 채널은 소문자로 묶는다 (대소문자만 다른 옛 행도 한 채널). 합계가 BIGINT를 넘으면
+/// 오류 대신 BIGINT 최댓값으로 포화시킨다 (리포트 전체가 500이 되지 않게).
 pub async fn sum_by_channel(
     pool: &PgPool,
     project_id: i32,
     from: Date,
     to: Date,
 ) -> anyhow::Result<std::collections::HashMap<String, i64>> {
-    // BIGINT의 sum은 NUMERIC이다. 넘치면 오류로 끝나게 BIGINT로 되돌린다.
+    // BIGINT의 sum은 NUMERIC이라 넘치지 않는다. BIGINT로 되돌리기 전에 상한을 씌운다.
     let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT channel, sum(amount)::bigint FROM ad_spend \
-         WHERE project_id = $1 AND day BETWEEN $2 AND $3 GROUP BY channel",
+        "SELECT lower(channel), LEAST(sum(amount), 9223372036854775807)::bigint FROM ad_spend \
+         WHERE project_id = $1 AND day BETWEEN $2 AND $3 GROUP BY lower(channel)",
     )
     .bind(project_id)
     .bind(from)

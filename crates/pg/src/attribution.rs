@@ -12,19 +12,29 @@ pub struct AttributionSettings {
     pub include_referral: bool,
 }
 
-/// 행이 없으면(옛 데이터) 기본 행을 만들어 돌려준다.
-pub async fn get(pool: &PgPool, project_id: i32) -> anyhow::Result<AttributionSettings> {
-    sqlx::query("INSERT INTO attribution_settings (project_id) VALUES ($1) ON CONFLICT DO NOTHING")
-        .bind(project_id)
-        .execute(pool)
-        .await?;
+impl Default for AttributionSettings {
+    /// 테이블 기본값과 같다 (`0001_init.sql`).
+    fn default() -> Self {
+        Self {
+            lookback_days: vec![7, 30],
+            default_model: "last_click".into(),
+            half_life_hours: 168,
+            include_organic: true,
+            include_referral: true,
+        }
+    }
+}
+
+/// 읽기 전용: 행이 없으면 기본값을 돌려주고 쓰지 않는다 (리포트처럼 viewer도 부르는 읽기 경로용).
+pub async fn get_or_default(pool: &PgPool, project_id: i32) -> anyhow::Result<AttributionSettings> {
     Ok(sqlx::query_as::<_, AttributionSettings>(
         "SELECT lookback_days, default_model, half_life_hours, include_organic, include_referral \
          FROM attribution_settings WHERE project_id = $1",
     )
     .bind(project_id)
-    .fetch_one(pool)
-    .await?)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or_default())
 }
 
 pub async fn put(

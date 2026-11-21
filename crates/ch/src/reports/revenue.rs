@@ -100,9 +100,26 @@ fn build(
     orders: u64,
     spend: &HashMap<String, i64>,
 ) -> RevenueReport {
-    let raw_sum: i64 = rows.iter().map(|r| r.raw_claimed).sum();
-    let deduplicated: i64 = rows.iter().map(|r| r.attributed).sum();
-    let spend_of = |c: &str| spend.get(c).copied().unwrap_or(0).max(0);
+    let raw_sum: i64 = rows
+        .iter()
+        .fold(0i64, |a, r| a.saturating_add(r.raw_claimed));
+    let deduplicated: i64 = rows
+        .iter()
+        .fold(0i64, |a, r| a.saturating_add(r.attributed));
+    // 광고비는 채널 이름의 소문자로 맞춘다 (CSV는 소문자로 저장, 옛 채널 규칙은 대소문자 혼용).
+    // 같은 소문자 키가 여러 번 오면 합치고, 합계는 넘치지 않게 포화시킨다.
+    let mut spend_lc: HashMap<String, i64> = HashMap::new();
+    for (c, s) in spend {
+        let e = spend_lc.entry(c.to_lowercase()).or_insert(0);
+        *e = e.saturating_add((*s).max(0));
+    }
+    // 매출 행 중 같은 소문자 이름의 첫 행에만 광고비를 붙인다 (두 번 세지 않게).
+    let mut claimed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut spend_of = |c: &str| {
+        let k = c.to_lowercase();
+        let s = spend_lc.get(&k).copied().unwrap_or(0);
+        if claimed.insert(k) { s } else { 0 }
+    };
     let roas = |rev: i64, cost: i64| (cost > 0).then(|| rev as f64 / cost as f64);
 
     let mut channels: Vec<ChannelRevenueRow> = rows
@@ -120,20 +137,23 @@ fn build(
             }
         })
         .collect();
-    // 광고비만 있는 채널
-    for c in spend.keys() {
-        if !channels.iter().any(|r| &r.channel == c) {
-            let s = spend_of(c);
-            channels.push(ChannelRevenueRow {
-                channel: c.clone(),
-                raw_claimed: 0,
-                attributed: 0,
-                share: 0.0,
-                assists: 0,
-                spend: s,
-                roas: roas(0, s),
-            });
-        }
+    // 광고비만 있는 채널 (매출 행과 대소문자만 다른 것은 위에서 이미 붙였다)
+    let mut spend_only: Vec<(String, i64)> = spend_lc
+        .iter()
+        .filter(|(k, _)| !claimed.contains(*k))
+        .map(|(k, s)| (k.clone(), *s))
+        .collect();
+    spend_only.sort();
+    for (channel, s) in spend_only {
+        channels.push(ChannelRevenueRow {
+            channel,
+            raw_claimed: 0,
+            attributed: 0,
+            share: 0.0,
+            assists: 0,
+            spend: s,
+            roas: roas(0, s),
+        });
     }
     channels.sort_by(|a, b| {
         b.attributed
@@ -142,8 +162,8 @@ fn build(
             .then_with(|| a.channel.cmp(&b.channel))
     });
 
-    let spend_total: i64 = channels.iter().map(|c| c.spend).sum();
-    let duplicate_amount = (raw_sum - deduplicated).max(0);
+    let spend_total: i64 = channels.iter().fold(0i64, |a, c| a.saturating_add(c.spend));
+    let duplicate_amount = raw_sum.saturating_sub(deduplicated).max(0);
     RevenueReport {
         range: range.to_dto(),
         model,
