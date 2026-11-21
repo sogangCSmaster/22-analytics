@@ -3,6 +3,7 @@
 use crate::AppState;
 use analytics_core::Event;
 use analytics_core::edge_auth::{self, HEADER_SIGNATURE, HEADER_TIMESTAMP};
+use analytics_core::timeutil::now_ms;
 use axum::{
     Router,
     body::Bytes,
@@ -67,10 +68,6 @@ fn verify_collect(secret: &[u8], headers: &HeaderMap, body: &[u8], now_ms: i64) 
         sig,
         now_ms,
     )
-}
-
-pub fn now_ms() -> i64 {
-    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
 }
 
 #[cfg(test)]

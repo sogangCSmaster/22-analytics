@@ -11,6 +11,7 @@
 
 use crate::ProjectScope;
 use analytics_core::orders::{OrderEvent, OrderEventType, OrderSource, OrderState, OrderStatus};
+use analytics_core::timeutil::{dt_to_ms, ms_to_dt};
 use clickhouse::Row;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -54,15 +55,6 @@ pub struct OrderRow {
     #[serde(with = "clickhouse::serde::time::datetime64::millis")]
     pub ordered_at: OffsetDateTime,
     pub version: u64,
-}
-
-fn ms_to_dt(ms: i64) -> OffsetDateTime {
-    OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000)
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH)
-}
-
-fn dt_to_ms(t: OffsetDateTime) -> i64 {
-    (t.unix_timestamp_nanos() / 1_000_000) as i64
 }
 
 impl From<&OrderEvent> for OrderEventRow {

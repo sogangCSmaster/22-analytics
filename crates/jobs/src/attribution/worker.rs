@@ -8,8 +8,7 @@ use std::future::Future;
 use std::time::Duration;
 use tokio::time::Instant;
 
-/// KST = UTC+9 (서머타임 없음).
-pub const KST_OFFSET_MS: i64 = 9 * 60 * 60 * 1000;
+pub use analytics_core::timeutil::KST_OFFSET_MS;
 
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {

@@ -243,10 +243,4 @@ pub async fn conservation_check(
     Ok(out)
 }
 
-/// 현재 시각 (epoch ms).
-pub fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
+pub use analytics_core::timeutil::now_ms;

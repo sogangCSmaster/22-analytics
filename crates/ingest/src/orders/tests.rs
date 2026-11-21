@@ -663,7 +663,7 @@ async fn recheck_rewrites_when_events_changed_after_projection() {
         },
         &refund("RC", 5_000, "2026-11-20T12:00:00Z"),
         None,
-        crate::internal::now_ms(),
+        analytics_core::timeutil::now_ms(),
     )
     .unwrap();
     ch_orders::insert_order_event(&h.db.ch, &v.event)
@@ -905,7 +905,7 @@ async fn internal_signature_covers_forwarded_headers_and_path() {
     let h = setup().await;
     let body = confirm("X1", 1).to_string().into_bytes();
     let auth = format!("Bearer {}", h.key);
-    let now = crate::internal::now_ms();
+    let now = analytics_core::timeutil::now_ms();
 
     // 단건 경로로 서명한 요청을 일괄 경로로 바꿔 보낼 수 없다
     let (ts, sig) = signed_for(SECRET, &body, now, "/v1/orders", &auth, "");
@@ -962,7 +962,7 @@ async fn internal_route_with_edge_signature() {
     let h = setup().await;
     let body = confirm("E1", 1234).to_string().into_bytes();
     let auth = format!("Bearer {}", h.key);
-    let now = crate::internal::now_ms();
+    let now = analytics_core::timeutil::now_ms();
     let signed = |body: &[u8], ts: i64| signed_for(SECRET, body, ts, "/v1/orders", &auth, "");
     let (ts, sig) = signed(&body, now);
     let hdr = |ts: &str, sig: &str, path: &str, auth: &str| edge_headers(ts, sig, path, auth);
@@ -1228,7 +1228,7 @@ async fn project_context_lookup() {
 fn ms(rfc3339: &str) -> i64 {
     let t = time::OffsetDateTime::parse(rfc3339, &time::format_description::well_known::Rfc3339)
         .unwrap();
-    (t.unix_timestamp_nanos() / 1_000_000) as i64
+    analytics_core::timeutil::dt_to_ms(t)
 }
 
 fn confirm_at(id: &str, net: i64, at: &str) -> Value {

@@ -1,6 +1,7 @@
 //! ClickHouse 행 타입.
 
 use analytics_core::Event;
+use analytics_core::timeutil::ms_to_dt;
 use clickhouse::Row;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -58,11 +59,6 @@ pub struct EventRow {
     pub items_price: Vec<i64>,
     #[serde(rename = "items.qty")]
     pub items_qty: Vec<u32>,
-}
-
-fn ms_to_dt(ms: i64) -> OffsetDateTime {
-    OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000)
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH)
 }
 
 impl From<&Event> for EventRow {

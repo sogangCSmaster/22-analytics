@@ -567,7 +567,7 @@ fn is_sha256_hex(s: &str) -> bool {
 
 fn parse_rfc3339_ms(s: &str) -> Option<i64> {
     let t = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()?;
-    i64::try_from(t.unix_timestamp_nanos() / 1_000_000).ok()
+    Some(crate::timeutil::dt_to_ms(t))
 }
 
 #[cfg(test)]

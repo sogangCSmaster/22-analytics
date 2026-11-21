@@ -14,12 +14,12 @@
 //! 409 `idempotency_key_reused`: 같은 (이벤트 유형, 멱등 키)로 금액·시각이 다른 요청이 이미 있다.
 
 use super::{OrderService, ProjectCtx};
-use crate::internal::now_ms;
 use analytics_core::edge_auth::{self, HEADER_SIGNATURE, HEADER_TIMESTAMP};
 use analytics_core::orders::{
     self as core_orders, MAX_BATCH_BODY_BYTES, MAX_BATCH_ORDERS, MAX_SINGLE_BODY_BYTES,
     OrderProject,
 };
+use analytics_core::timeutil::now_ms;
 use analytics_pg::api_keys::{self, SCOPE_ORDERS_WRITE};
 use axum::{
     Json, Router,

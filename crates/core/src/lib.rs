@@ -13,6 +13,7 @@ pub mod event;
 pub mod ids;
 pub mod orders;
 pub mod settings;
+pub mod timeutil;
 pub mod urlx;
 
 pub use event::Event;

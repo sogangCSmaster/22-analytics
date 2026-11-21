@@ -103,7 +103,7 @@ impl SegmentWriter {
         fs::create_dir_all(&dir)?;
         let name = format!(
             "{}-{}.ndjson",
-            now.unix_timestamp_nanos() / 1_000_000,
+            analytics_core::timeutil::dt_to_ms(now),
             uuid::Uuid::new_v4()
         );
         let path = dir.join(name);

@@ -3,9 +3,9 @@
 
 use crate::AppState;
 use crate::config::Config;
-use crate::internal::now_ms;
 use analytics_core::collect::{self, ProjectConfig, RequestCtx};
 use analytics_core::event::{MAX_BATCH_BYTES, WireBatch};
+use analytics_core::timeutil::now_ms;
 use axum::{
     Router,
     body::Bytes,

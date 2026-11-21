@@ -232,7 +232,7 @@ impl OrderService {
             }
             let version = ch_orders::next_version(
                 current.as_ref().map(|c| c.version),
-                crate::internal::now_ms(),
+                analytics_core::timeutil::now_ms(),
             );
             ch_orders::insert_order(&self.ch, &OrderRow::from_state(&state, version)).await?;
             wrote = true;

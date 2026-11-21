@@ -8,26 +8,23 @@
 use super::{UNIQ, fmt_date};
 use crate::{Client, ProjectScope};
 use analytics_core::dto::reports::{RealtimeMinute, RealtimePage, RealtimeReport};
+use analytics_core::timeutil::{KST, dt_to_ms, kst_date};
 use clickhouse::Row;
 use serde::Deserialize;
 use std::collections::HashMap;
-use time::{
-    Duration, OffsetDateTime, UtcOffset,
-    macros::{format_description, offset},
-};
+use time::{Duration, OffsetDateTime, macros::format_description};
 
 /// 실시간 상위 페이지 수.
 pub const REALTIME_TOP_PAGES: u32 = 10;
 const MINUTES: i64 = 30;
 const MINUTE_MS: i64 = 60_000;
-const KST: UtcOffset = offset!(+9);
+
 /// SQL 조각: 정렬키 일자 조건 (바인딩 2개: 시작일, 종료일).
 const DAY_COND: &str = "toDate(ts, 'Asia/Seoul') BETWEEN toDate(?) AND toDate(?)";
 
 /// Unix ms → Asia/Seoul 일자 `YYYY-MM-DD`.
 fn kst_ymd(ms: i64) -> String {
-    let t = OffsetDateTime::UNIX_EPOCH + Duration::milliseconds(ms);
-    fmt_date(t.to_offset(KST).date())
+    fmt_date(kst_date(ms))
 }
 
 #[derive(Row, Deserialize)]
@@ -53,7 +50,7 @@ pub async fn realtime(
     scope: ProjectScope,
     now: OffsetDateTime,
 ) -> anyhow::Result<RealtimeReport> {
-    let now_ms = (now.unix_timestamp_nanos() / 1_000_000) as i64;
+    let now_ms = dt_to_ms(now);
     let p = scope.project_id();
     let since_30m = now_ms - MINUTES * MINUTE_MS;
     // 첫 구간 시작: now가 속한 분의 시작 − 29분 (30분 창 시작보다 늦거나 같다)
