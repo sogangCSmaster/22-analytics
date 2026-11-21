@@ -3,7 +3,7 @@ COMPOSE := docker compose -f infra/compose/docker-compose.yml
 export DATABASE_URL ?= postgres://analytics:analytics@localhost:5432/analytics
 export CLICKHOUSE_URL ?= http://localhost:8123
 
-.PHONY: up down reset migrate seed tracker ingest api web test e2e lint fmt check
+.PHONY: up down reset migrate seed tracker ingest api web web-release test e2e lint fmt check
 
 up:        ## DB 기동 (ClickHouse, Postgres)
 	$(COMPOSE) up -d --wait
@@ -31,6 +31,9 @@ api:       ## API 서버 → http://localhost:8082
 
 web:       ## 대시보드 개발 서버 → http://localhost:8080
 	dx serve --platform web --package analytics-web
+
+web-release:  ## 대시보드 배포용 번들 (wasm-release 프로필: opt-level z, fat LTO + wasm-opt -Oz)
+	dx bundle --platform web --package analytics-web --release --profile wasm-release
 
 test:      ## 전체 테스트 (DB 필요: make up migrate)
 	cargo test --workspace --exclude analytics-web --exclude analytics-edge

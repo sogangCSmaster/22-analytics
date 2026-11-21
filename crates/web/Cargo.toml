@@ -7,7 +7,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-dioxus = { version = "0.7", features = ["router"] }
+# logger 기본 기능은 빼서 wasm 크기를 줄인다 (tracing 구독자를 쓰지 않는다).
+dioxus = { version = "0.7", default-features = false, features = ["router", "launch", "devtools", "lib"] }
 analytics-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

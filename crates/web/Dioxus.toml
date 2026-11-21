@@ -10,3 +10,7 @@ title = "22 Analytics"
 [web.watcher]
 reload_html = true
 watch_path = ["src", "assets"]
+
+# 배포 빌드(dx bundle --release)에서 wasm-opt로 크기 우선 최적화
+[web.wasm_opt]
+level = "z"
