@@ -104,6 +104,7 @@ mod tests {
         assert_eq!(channel("direct"), "직접 방문");
         assert_eq!(channel("organic_search"), "자연 검색");
         assert_eq!(channel("my_partner"), "my_partner");
+        assert_eq!(channel("(unattributed)"), "미귀속");
         assert_eq!(channel(""), "(알 수 없음)");
         assert_eq!(channel("<b>x</b>"), "<b>x</b>");
     }

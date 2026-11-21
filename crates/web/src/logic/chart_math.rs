@@ -212,7 +212,10 @@ mod tests {
 
     #[test]
     fn tick_values() {
-        assert_eq!(ticks(80.0, 4), vec![0.0, 25.0, 50.0, 75.0, 100.0]);
+        assert_eq!(ticks(80.0, 4), vec![0.0, 20.0, 40.0, 60.0, 80.0]);
+        // 4칸이면 400까지 늘어나므로 5칸(50 간격)을 고른다
+        assert_eq!(ticks(230.0, 4), vec![0.0, 50.0, 100.0, 150.0, 200.0, 250.0]);
+        assert!(ticks(12_830.0, 4).iter().all(|t| t.fract() == 0.0));
         assert_eq!(ticks(0.0, 2), vec![0.0, 0.5, 1.0]);
         assert_eq!(ticks(10.0, 0), vec![0.0, 10.0]);
     }

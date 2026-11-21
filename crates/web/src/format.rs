@@ -112,6 +112,11 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// 퍼센트 인코딩된 경로를 사람이 읽는 형태로 (화면 표시 전용, 텍스트로만 그린다).
+pub fn path(s: &str) -> String {
+    todo!()
+}
+
 pub(crate) fn trim_float(v: f64, digits: usize) -> String {
     let s = format!("{v:.digits$}");
     let s = if s.contains('.') {
@@ -172,6 +177,16 @@ mod tests {
         assert_eq!(compact(150_000_000), "1.5억");
         assert_eq!(compact(1_000_000_000_000), "10,000억");
         assert!(compact(u64::MAX).ends_with('억'));
+    }
+
+    #[test]
+    fn decodes_paths_for_display() {
+        assert_eq!(path("/dev/%EC%83%81%ED%92%88"), "/dev/상품");
+        assert_eq!(path("/a%20b?q=%3Cscript%3E"), "/a b?q=<script>");
+        // 잘못된 인코딩·UTF-8이 아닌 바이트는 원문 유지
+        assert_eq!(path("/bad%ZZ%"), "/bad%ZZ%");
+        assert_eq!(path("/x%FF"), "/x%FF");
+        assert_eq!(path(""), "");
     }
 
     #[test]

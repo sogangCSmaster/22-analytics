@@ -327,7 +327,11 @@ mod tests {
     #[test]
     fn datetime_display() {
         assert_eq!(datetime_kr("2026-11-21T14:03:59+09:00"), "11월 21일 14:03");
-        assert_eq!(datetime_kr("2026-01-05T09:00:00Z"), "1월 5일 09:00");
+        // UTC·다른 오프셋은 서울 시각으로 바꾼다
+        assert_eq!(datetime_kr("2026-01-05T09:00:00Z"), "1월 5일 18:00");
+        assert_eq!(datetime_kr("2026-11-21T01:53:31.409821Z"), "11월 21일 10:53");
+        assert_eq!(datetime_kr("2026-12-31T23:30:00+00:00"), "1월 1일 08:30");
+        assert_eq!(datetime_kr("2026-11-21T00:10:00-05:00"), "11월 21일 14:10");
         assert_eq!(datetime_kr("나쁜값<script>"), "나쁜값<script>");
         assert_eq!(datetime_kr(""), "");
     }
