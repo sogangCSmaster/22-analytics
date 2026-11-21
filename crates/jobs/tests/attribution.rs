@@ -850,6 +850,76 @@ async fn full_run_respects_since_days() {
     );
 }
 
+/// 같은 시각 주문(키셋 동률), 기간 밖 주문, 터치 있는/없는 주문이 섞인 픽스처.
+async fn paging_fixture(db: &TestDb, p: u32) -> usize {
+    let mut touches = Vec::new();
+    let mut orders = Vec::new();
+    let n = 23;
+    for i in 0..n {
+        let v = Uuid::new_v4();
+        if i % 3 != 0 {
+            touches.push(TouchFixture::utm(p, v, ORDER_AT - 2 * DAY_MS, "naver", "cpc", ""));
+        }
+        // 4건씩 같은 ordered_at: 페이지 경계가 동률 한가운데에 걸린다
+        let at = ORDER_AT - i64::from(i / 4) * MIN;
+        orders.push(OrderFixture::confirmed(
+            p,
+            &format!("PG{:02}", (i * 7) % n),
+            Some(v),
+            1_000 + i64::from(i),
+            at,
+            100 + u64::from(i),
+        ));
+    }
+    orders.push(OrderFixture::confirmed(p, "OLD", None, 5, NOW - 40 * DAY_MS, 1));
+    insert_touches(&db.ch, &touches).await.unwrap();
+    insert_orders(&db.ch, &orders).await.unwrap();
+    n as usize
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn full_run_pages_orders_and_matches_unpaged_result() {
+    // 전체 재연산은 주문을 한 번에 다 읽지 않고 (ordered_at, order_id) 키셋 페이지로 읽는다
+    let db = TestDb::new().await;
+    let (paged, whole) = (project(&db.pg).await, project(&db.pg).await);
+    let n = paging_fixture(&db, paged).await;
+    paging_fixture(&db, whole).await;
+    let full = Mode::Full { since_days: 35 };
+    let tiny = job::Limits {
+        page_orders: 5,
+        batch_orders: 2,
+    };
+    let rep = job::run_project_with(&db.ch, &db.pg, paged, &full, NOW, tiny)
+        .await
+        .unwrap();
+    assert_eq!(rep.orders_seen, n, "기간 안 주문을 빠짐없이, 한 번씩");
+    assert_eq!(rep.pages, n.div_ceil(5), "페이지 수");
+    let base = job::run_project(&db.ch, &db.pg, whole, &full, NOW)
+        .await
+        .unwrap();
+    assert_eq!(base.orders_seen, n);
+    assert_eq!(base.pages, 1, "기본 페이지(2000건)면 한 번에 끝난다");
+    assert_eq!(rep.orders_written, base.orders_written);
+    assert_eq!(rep.rows_written, base.rows_written);
+    assert_eq!(finals(&db, paged).await, finals(&db, whole).await);
+    assert!(finals(&db, paged).await.iter().all(|r| r.order_id != "OLD"));
+
+    // 다시 돌려도(작은 페이지) 바뀌는 것이 없다
+    let again = job::run_project_with(&db.ch, &db.pg, paged, &full, NOW, tiny)
+        .await
+        .unwrap();
+    assert_eq!((again.orders_seen, again.rows_written), (n, 0));
+    // 페이지 크기로 나누어떨어지면 빈 마지막 페이지 한 번으로 끝을 안다
+    let exact = job::Limits {
+        page_orders: 23,
+        batch_orders: 500,
+    };
+    let rep = job::run_project_with(&db.ch, &db.pg, paged, &full, NOW, exact)
+        .await
+        .unwrap();
+    assert_eq!((rep.orders_seen, rep.pages), (n, 2));
+}
+
 // ---------------------------------------------------------------- 테넌트 격리
 
 #[tokio::test(flavor = "multi_thread")]
