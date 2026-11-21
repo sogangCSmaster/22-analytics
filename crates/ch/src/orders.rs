@@ -65,50 +65,112 @@ fn dt_to_ms(t: OffsetDateTime) -> i64 {
 
 impl From<&OrderEvent> for OrderEventRow {
     fn from(e: &OrderEvent) -> Self {
-        let _ = (e, ms_to_dt(0));
-        todo!()
+        Self {
+            project_id: e.project_id,
+            order_id: e.order_id.clone(),
+            event_type: e.event_type.as_str().to_owned(),
+            source: e.source.as_str().to_owned(),
+            idempotency_key: e.idempotency_key.clone(),
+            visitor_id: e.visitor_id,
+            member_hash: e.member_hash.clone(),
+            currency: e.currency.clone(),
+            gross_amount: e.gross_amount,
+            net_amount: e.net_amount,
+            refund_amount: e.refund_amount,
+            occurred_at: ms_to_dt(e.occurred_at_ms),
+            received_at: ms_to_dt(e.received_at_ms),
+            raw: e.raw.clone(),
+        }
     }
 }
 
 impl OrderEventRow {
     /// 알 수 없는 event_type/source 값이면 `None`.
     pub fn to_event(&self) -> Option<OrderEvent> {
-        let _ = (OrderEventType::parse(""), OrderSource::parse(""), dt_to_ms);
-        todo!()
+        Some(OrderEvent {
+            project_id: self.project_id,
+            order_id: self.order_id.clone(),
+            event_type: OrderEventType::parse(&self.event_type)?,
+            source: OrderSource::parse(&self.source)?,
+            idempotency_key: self.idempotency_key.clone(),
+            visitor_id: self.visitor_id,
+            member_hash: self.member_hash.clone(),
+            currency: self.currency.clone(),
+            gross_amount: self.gross_amount,
+            net_amount: self.net_amount,
+            refund_amount: self.refund_amount,
+            occurred_at_ms: dt_to_ms(self.occurred_at),
+            received_at_ms: dt_to_ms(self.received_at),
+            raw: self.raw.clone(),
+        })
     }
 }
 
 impl OrderRow {
     pub fn from_state(s: &OrderState, version: u64) -> Self {
-        let _ = (s, version);
-        todo!()
+        Self {
+            project_id: s.project_id,
+            order_id: s.order_id.clone(),
+            source: s.source.as_str().to_owned(),
+            status: s.status.as_str().to_owned(),
+            visitor_id: s.visitor_id,
+            member_hash: s.member_hash.clone(),
+            currency: s.currency.clone(),
+            gross_amount: s.gross_amount,
+            net_amount: s.net_amount,
+            refunded_amount: s.refunded_amount,
+            effective_amount: s.effective_amount,
+            ordered_at: ms_to_dt(s.ordered_at_ms),
+            version,
+        }
     }
 
     pub fn to_state(&self) -> Option<OrderState> {
-        let _ = OrderStatus::parse("");
-        todo!()
+        Some(OrderState {
+            project_id: self.project_id,
+            order_id: self.order_id.clone(),
+            source: OrderSource::parse(&self.source)?,
+            status: OrderStatus::parse(&self.status)?,
+            visitor_id: self.visitor_id,
+            member_hash: self.member_hash.clone(),
+            currency: self.currency.clone(),
+            gross_amount: self.gross_amount,
+            net_amount: self.net_amount,
+            refunded_amount: self.refunded_amount,
+            effective_amount: self.effective_amount,
+            ordered_at_ms: dt_to_ms(self.ordered_at),
+        })
     }
 }
 
 /// 다음 `version`: `max(prev + 1, now_ms)`. 시계가 뒤로 가도 단조 증가한다.
 pub fn next_version(prev: Option<u64>, now_ms: i64) -> u64 {
-    let _ = (prev, now_ms);
-    todo!()
+    let floor = prev.map_or(1, |p| p.saturating_add(1));
+    floor.max(u64::try_from(now_ms).unwrap_or(0))
 }
 
 pub async fn insert_order_event(client: &clickhouse::Client, e: &OrderEvent) -> anyhow::Result<()> {
-    let _ = (client, e);
-    todo!()
+    let mut insert = client.insert::<OrderEventRow>("order_events").await?;
+    insert.write(&OrderEventRow::from(e)).await?;
+    insert.end().await?;
+    Ok(())
 }
 
 /// 한 주문의 모든 이벤트 (중복 행 포함, 정렬 안 됨).
+/// `FINAL`을 쓰지 않는다: 엔진은 같은 키 중 늦게 받은 행을 남기지만,
+/// 투영은 먼저 받은 행을 기준으로 하므로 중복 제거는 `fold`에 맡긴다.
 pub async fn order_events(
     client: &clickhouse::Client,
     scope: ProjectScope,
     order_id: &str,
 ) -> anyhow::Result<Vec<OrderEvent>> {
-    let _ = (client, scope, order_id);
-    todo!()
+    let rows: Vec<OrderEventRow> = client
+        .query("SELECT ?fields FROM order_events WHERE project_id = ? AND order_id = ?")
+        .bind(scope.project_id())
+        .bind(order_id)
+        .fetch_all()
+        .await?;
+    Ok(rows.iter().filter_map(OrderEventRow::to_event).collect())
 }
 
 /// 주문 현재 상태 (`FINAL`).
@@ -117,13 +179,19 @@ pub async fn current_order(
     scope: ProjectScope,
     order_id: &str,
 ) -> anyhow::Result<Option<OrderRow>> {
-    let _ = (client, scope, order_id);
-    todo!()
+    Ok(client
+        .query("SELECT ?fields FROM orders FINAL WHERE project_id = ? AND order_id = ?")
+        .bind(scope.project_id())
+        .bind(order_id)
+        .fetch_optional()
+        .await?)
 }
 
 pub async fn insert_order(client: &clickhouse::Client, row: &OrderRow) -> anyhow::Result<()> {
-    let _ = (client, row);
-    todo!()
+    let mut insert = client.insert::<OrderRow>("orders").await?;
+    insert.write(row).await?;
+    insert.end().await?;
+    Ok(())
 }
 
 /// `version > watermark`인 주문 (`FINAL`, version 오름차순).
@@ -132,8 +200,15 @@ pub async fn orders_changed_since(
     scope: ProjectScope,
     watermark: u64,
 ) -> anyhow::Result<Vec<OrderRow>> {
-    let _ = (client, scope, watermark);
-    todo!()
+    Ok(client
+        .query(
+            "SELECT ?fields FROM orders FINAL WHERE project_id = ? AND version > ? \
+             ORDER BY version, order_id",
+        )
+        .bind(scope.project_id())
+        .bind(watermark)
+        .fetch_all()
+        .await?)
 }
 
 #[cfg(test)]
