@@ -1,4 +1,6 @@
+pub mod brand;
 pub mod chart;
+pub mod icon;
 pub mod shell;
 pub mod ui;
 
@@ -59,5 +61,27 @@ mod render_tests {
         assert_escaped(&html);
         assert!(html.contains("▼ 50%"));
         assert!(!html.contains("NaN"));
+    }
+
+    /// 메뉴 아이콘은 이모지·유니코드 기호가 아니라 장식용 SVG여야 한다 (스크린리더에서 숨김).
+    #[test]
+    fn nav_icons_are_decorative_svgs() {
+        use super::icon::{Icon, IconName};
+        for name in IconName::ALL {
+            let html = dioxus_ssr::render_element(rsx! { Icon { name } });
+            assert!(html.starts_with("<svg"), "{name:?}: {html}");
+            assert!(html.contains("aria-hidden=\"true\""), "{name:?}: {html}");
+            assert!(html.contains("stroke=\"currentColor\""), "{name:?}: {html}");
+            assert!(!html.chars().any(|c| (c as u32) > 0x2000), "{name:?}: 기호·이모지 금지: {html}");
+        }
+    }
+
+    /// 22Brix 로고는 대체 텍스트가 있는 이미지로 그린다.
+    #[test]
+    fn brand_logo_has_alt_text() {
+        use super::brand::{BrandLogo, BrandSymbol};
+        let html = dioxus_ssr::render_element(rsx! { BrandLogo {} BrandSymbol { size: 32 } });
+        assert!(html.contains("alt=\"22Brix\""), "{html}");
+        assert!(html.contains("Analytics"), "{html}");
     }
 }
