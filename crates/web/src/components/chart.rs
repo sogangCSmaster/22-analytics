@@ -64,7 +64,8 @@ pub fn LineChart(
         .flat_map(|s| s.values.iter().copied())
         .filter(|v| v.is_finite())
         .fold(0.0f64, f64::max);
-    let grid = ticks(max, 4);
+    // 작은 수에서 0.25 같은 소수 눈금이 생기지 않게
+    let grid = ticks(max.max(4.0), 4);
     let top = *grid.last().unwrap_or(&1.0);
     let step = label_step(n, 7);
     let zones = hover_zones(&f, n);
@@ -211,7 +212,7 @@ pub fn ColumnChart(
         .copied()
         .filter(|v| v.is_finite())
         .fold(0.0f64, f64::max);
-    let grid = ticks(max, 3);
+    let grid = ticks(max.max(3.0), 3);
     let top = *grid.last().unwrap_or(&1.0);
     let geo = bars(&values, &f, top, 0.3);
     let step = label_step(n, 6);

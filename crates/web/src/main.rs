@@ -23,6 +23,7 @@ use pages::{
 
 const TOKENS_CSS: Asset = asset!("/assets/tokens.css");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
+const APP_CSS: Asset = asset!("/assets/app.css");
 const PRETENDARD: &str = "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css";
 
 #[derive(Routable, Clone, PartialEq, Debug)]
@@ -119,6 +120,7 @@ fn App() -> Element {
         document::Link { rel: "stylesheet", href: PRETENDARD }
         document::Stylesheet { href: TOKENS_CSS }
         document::Stylesheet { href: MAIN_CSS }
+        document::Stylesheet { href: APP_CSS }
         Router::<Route> {}
         components::ui::ToastHost {}
     }
