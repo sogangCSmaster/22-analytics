@@ -1,6 +1,7 @@
-//! 페이지별 지표.
+//! 페이지별 지표 (`daily_pages`). 방문자는 그 경로에서 페이지뷰를 낸 방문자다.
+//! 호스트가 여러 개면 경로 기준으로 합친다.
 
-use super::{DateRange, clamp_limit};
+use super::{DateRange, UNIQ_MERGE, clamp_limit};
 use crate::{Client, ProjectScope};
 use analytics_core::dto::reports::PageRow;
 use clickhouse::Row;
@@ -27,10 +28,10 @@ pub async fn pages(
     let filter = path_contains.filter(|s| !s.is_empty());
     let sql = format!(
         "SELECT path,
-                sum(pageviews)      AS pageviews,
-                uniqMerge(visitors) AS visitors,
-                sum(entrances)      AS entrances
-         FROM daily_stats
+                sum(pageviews)         AS pageviews,
+                {UNIQ_MERGE}(visitors) AS visitors,
+                sum(entrances)         AS entrances
+         FROM daily_pages
          WHERE project_id = ? AND day BETWEEN toDate(?) AND toDate(?) {path_cond}
          GROUP BY path
          HAVING pageviews > 0

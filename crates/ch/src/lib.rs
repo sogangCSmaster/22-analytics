@@ -9,6 +9,9 @@ pub mod rows;
 use anyhow::Context;
 pub use clickhouse::Client;
 
+/// [`ChConfig::client`] 쿼리 실행 시간 제한 (초).
+pub const MAX_EXECUTION_SECS: u32 = 10;
+
 #[derive(Debug, Clone)]
 pub struct ChConfig {
     pub url: String,
@@ -37,8 +40,13 @@ impl ChConfig {
     }
 
     /// 데이터베이스가 지정된 클라이언트.
+    ///
+    /// 쿼리 실행 시간은 [`MAX_EXECUTION_SECS`]초로 제한한다 (대시보드 폭주 쿼리 차단).
+    /// 긴 작업(마이그레이션 백필 등)은 `with_setting("max_execution_time", "0")`으로 푼다.
     pub fn client(&self) -> Client {
-        self.base().with_database(&self.database)
+        self.base()
+            .with_database(&self.database)
+            .with_setting("max_execution_time", MAX_EXECUTION_SECS.to_string())
     }
 
     /// 데이터베이스 지정 없는 클라이언트 (DB 생성용).

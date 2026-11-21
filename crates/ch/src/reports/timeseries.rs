@@ -1,6 +1,6 @@
 //! 일별 추이.
 
-use super::{DateRange, fmt_date};
+use super::{DateRange, UNIQ_MERGE, fmt_date};
 use crate::{Client, ProjectScope};
 use analytics_core::dto::reports::{TimeseriesPoint, TimeseriesReport};
 use clickhouse::Row;
@@ -22,15 +22,15 @@ pub async fn timeseries(
     range: DateRange,
 ) -> anyhow::Result<TimeseriesReport> {
     let rows: Vec<DayRow> = client
-        .query(
-            "SELECT toString(day)       AS date,
-                    uniqMerge(visitors) AS visitors,
-                    uniqMerge(sessions) AS sessions,
-                    sum(pageviews)      AS pageviews
-             FROM daily_stats
+        .query(&format!(
+            "SELECT toString(day)          AS date,
+                    {UNIQ_MERGE}(visitors) AS visitors,
+                    {UNIQ_MERGE}(sessions) AS sessions,
+                    sum(pageviews)         AS pageviews
+             FROM daily_channel
              WHERE project_id = ? AND day BETWEEN toDate(?) AND toDate(?)
-             GROUP BY day",
-        )
+             GROUP BY day"
+        ))
         .bind(scope.project_id())
         .bind(range.from_ymd())
         .bind(range.to_ymd())

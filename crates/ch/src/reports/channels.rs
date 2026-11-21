@@ -1,6 +1,6 @@
 //! 채널별 유입. 채널은 세션 범위 값이라 세션의 모든 이벤트가 같은 채널을 갖는다.
 
-use super::DateRange;
+use super::{DateRange, UNIQ_MERGE};
 use crate::{Client, ProjectScope};
 use analytics_core::dto::reports::ChannelTrafficRow;
 use clickhouse::Row;
@@ -22,17 +22,17 @@ pub async fn channels(
     range: DateRange,
 ) -> anyhow::Result<Vec<ChannelTrafficRow>> {
     let rows: Vec<Raw> = client
-        .query(
-            "SELECT toString(channel)   AS channel,
-                    uniqMerge(sessions) AS sessions,
-                    sum(entrances)      AS entrances,
-                    uniqMerge(visitors) AS visitors,
-                    sum(pageviews)      AS pageviews
-             FROM daily_stats
+        .query(&format!(
+            "SELECT toString(channel)      AS channel,
+                    {UNIQ_MERGE}(sessions) AS sessions,
+                    sum(entrances)         AS entrances,
+                    {UNIQ_MERGE}(visitors) AS visitors,
+                    sum(pageviews)         AS pageviews
+             FROM daily_channel
              WHERE project_id = ? AND day BETWEEN toDate(?) AND toDate(?)
              GROUP BY channel
-             ORDER BY sessions DESC, pageviews DESC, channel ASC",
-        )
+             ORDER BY sessions DESC, pageviews DESC, channel ASC"
+        ))
         .bind(scope.project_id())
         .bind(range.from_ymd())
         .bind(range.to_ymd())
