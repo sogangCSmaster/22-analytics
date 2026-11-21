@@ -6,6 +6,9 @@ name: analytics
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:25.8
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "2" }
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -26,6 +29,9 @@ services:
 
   postgres:
     image: postgres:17-alpine
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "2" }
     ports:
       - "5432:5432"
     environment:

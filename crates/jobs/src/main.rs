@@ -43,6 +43,8 @@ enum Cmd {
         #[arg(long)]
         project: Option<u32>,
     },
+    /// 만료된 대시보드 로그인 세션 삭제 (cron 등으로 주기 실행)
+    CleanupSessions,
     /// 상주 워커: 증분(ATTRIBUTION_INTERVAL_SECS, 기본 300초), 전체(매일 04:00 KST), 보존 검증(매시간)
     Worker,
     /// 슈퍼 관리자(대행사 관리자) 계정 부트스트랩.
@@ -58,6 +60,11 @@ enum Cmd {
         #[arg(long)]
         reset_password: bool,
     },
+}
+
+/// `cleanup-sessions` 본체. 지운 세션 수.
+async fn cleanup_sessions(pool: &analytics_pg::PgPool) -> anyhow::Result<u64> {
+    analytics_pg::sessions::delete_expired(pool).await
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -197,6 +204,11 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Cmd::CleanupSessions => {
+            let pool = analytics_pg::connect(&cli.database_url).await?;
+            let n = cleanup_sessions(&pool).await?;
+            println!("만료 세션 {n}건 삭제");
+        }
         Cmd::Worker => {
             let pool = analytics_pg::connect(&cli.database_url).await?;
             let ch = analytics_ch::ChConfig::from_env().client();
@@ -238,6 +250,43 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleanup_sessions_subcommand_parses() {
+        let cli = Cli::try_parse_from(["analytics-jobs", "cleanup-sessions"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::CleanupSessions));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cleanup_sessions_removes_only_expired() {
+        let db = analytics_testkit::TestDb::new().await;
+        let u = analytics_pg::users::create(
+            &db.pg,
+            &analytics_pg::users::NewUser {
+                email: "a@agency.test".into(),
+                password_hash: analytics_pg::users::hash_password("password!!").unwrap(),
+                name: String::new(),
+                is_super_admin: false,
+            },
+        )
+        .await
+        .unwrap();
+        let live = analytics_pg::sessions::create(&db.pg, u.id).await.unwrap();
+        let dead = analytics_pg::sessions::create(&db.pg, u.id).await.unwrap();
+        sqlx::query("UPDATE sessions SET expires_at = now() - interval '1 second' WHERE id = $1")
+            .bind(analytics_pg::sessions::token_hash(&dead))
+            .execute(&db.pg)
+            .await
+            .unwrap();
+        assert_eq!(cleanup_sessions(&db.pg).await.unwrap(), 1);
+        assert_eq!(cleanup_sessions(&db.pg).await.unwrap(), 0, "멱등");
+        assert!(
+            analytics_pg::sessions::lookup(&db.pg, &live)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn create_admin_is_idempotent_and_promotes() {

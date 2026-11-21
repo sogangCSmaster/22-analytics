@@ -75,3 +75,10 @@ inherits = "release"
 opt-level = "z"
 lto = "fat"
 panic = "abort"
+
+# 디스크·빌드 시간 절약: 개발·테스트 빌드는 디버그 정보 없이 (백트레이스 줄 번호만 유지)
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

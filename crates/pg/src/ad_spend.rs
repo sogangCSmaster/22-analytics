@@ -57,3 +57,23 @@ pub async fn list(
     .fetch_all(pool)
     .await?)
 }
+
+/// `from..=to` 기간의 채널별 광고비 합계 (실제 매출 리포트의 ROAS용).
+pub async fn sum_by_channel(
+    pool: &PgPool,
+    project_id: i32,
+    from: Date,
+    to: Date,
+) -> anyhow::Result<std::collections::HashMap<String, i64>> {
+    // BIGINT의 sum은 NUMERIC이다. 넘치면 오류로 끝나게 BIGINT로 되돌린다.
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT channel, sum(amount)::bigint FROM ad_spend \
+         WHERE project_id = $1 AND day BETWEEN $2 AND $3 GROUP BY channel",
+    )
+    .bind(project_id)
+    .bind(from)
+    .bind(to)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
+}

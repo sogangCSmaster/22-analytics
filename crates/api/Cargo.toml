@@ -30,3 +30,4 @@ csv = "1"
 analytics-testkit.workspace = true
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+uuid.workspace = true

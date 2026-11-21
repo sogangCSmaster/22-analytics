@@ -7,8 +7,9 @@
 //! - 접근할 수 없는 광고주·프로젝트는 404, 역할이 부족하면 403.
 //! - 변경 요청은 CSRF 검사([`security`]): 허용 Origin + JSON(또는 CSV) Content-Type.
 //!
-//! 리포트 엔드포인트는 별도 모듈(WP6)에서 추가한다.
+//! 리포트(`routes::reports`)는 모든 멤버 역할이 읽는다. ClickHouse 장애는 503 `storage_unavailable`.
 
+pub mod clock;
 pub mod config;
 pub mod error;
 pub mod extract;
@@ -22,8 +23,9 @@ pub use config::{ApiConfig, LoginLimitConfig};
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router, extract::State, http::StatusCode};
+use clock::{Clock, SystemClock};
 use ratelimit::LoginLimiter;
-use routes::{ad_spend, auth, orgs, project_config, projects, users};
+use routes::{ad_spend, api_keys, auth, orgs, project_config, projects, reports, users};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -36,6 +38,8 @@ pub struct AppState {
     pub ch: analytics_ch::Client,
     pub config: Arc<ApiConfig>,
     pub limiter: Arc<LoginLimiter>,
+    /// 리포트 기준 시각. 테스트에서 [`AppState::with_clock`]으로 고정한다.
+    pub clock: Arc<dyn Clock>,
 }
 
 impl AppState {
@@ -46,7 +50,13 @@ impl AppState {
             ch,
             config: Arc::new(config),
             limiter,
+            clock: Arc::new(SystemClock),
         }
+    }
+
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 }
 
@@ -108,6 +118,61 @@ pub fn build_router(state: AppState) -> Router {
             get(ad_spend::list)
                 .post(ad_spend::upload)
                 .layer(DefaultBodyLimit::max(ad_spend::MAX_BODY_BYTES)),
+        )
+        // S2S 비밀 키
+        .route(
+            "/projects/{project_id}/api-keys",
+            get(api_keys::list).post(api_keys::create),
+        )
+        .route(
+            "/projects/{project_id}/api-keys/{key_id}",
+            delete(api_keys::revoke),
+        )
+        // 리포트
+        .route(
+            "/projects/{project_id}/reports/overview",
+            get(reports::overview),
+        )
+        .route(
+            "/projects/{project_id}/reports/timeseries",
+            get(reports::timeseries),
+        )
+        .route(
+            "/projects/{project_id}/reports/channels",
+            get(reports::channels),
+        )
+        .route("/projects/{project_id}/reports/pages", get(reports::pages))
+        .route(
+            "/projects/{project_id}/reports/events",
+            get(reports::events),
+        )
+        .route(
+            "/projects/{project_id}/reports/events/{event_name}/properties/{prop_key}",
+            get(reports::event_properties),
+        )
+        .route(
+            "/projects/{project_id}/reports/realtime",
+            get(reports::realtime),
+        )
+        .route(
+            "/projects/{project_id}/reports/funnel",
+            get(reports::funnel),
+        )
+        .route(
+            "/projects/{project_id}/reports/revenue",
+            get(reports::revenue),
+        )
+        .route(
+            "/projects/{project_id}/reports/overlap",
+            get(reports::overlap),
+        )
+        .route(
+            "/projects/{project_id}/reports/orders",
+            get(reports::orders),
+        )
+        .route(
+            "/projects/{project_id}/reports/orders/{order_id}",
+            get(reports::order_detail),
         );
 
     Router::new()

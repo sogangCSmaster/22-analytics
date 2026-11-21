@@ -5,7 +5,8 @@
 //! 2. `Content-Type`이 `application/json` (광고비 CSV는 `text/csv`) — HTML form이 보낼 수 없는
 //!    타입이라 브라우저가 반드시 CORS preflight를 거친다.
 //!
-//! 위반 시 403 `csrf_rejected`. 모든 응답에 `Cache-Control: no-store`와 `nosniff`를 붙인다.
+//! 위반 시 403 `csrf_rejected`. 모든 응답에 `nosniff`를 붙이고, 핸들러가 `Cache-Control`을
+//! 정하지 않은 응답에는 `no-store`를 붙인다 (닫힌 기간 리포트만 `private, max-age=60`).
 
 use crate::AppState;
 use crate::error::ApiError;
@@ -63,7 +64,8 @@ pub async fn csrf_guard(State(state): State<AppState>, req: Request, next: Next)
 
 fn with_security_headers(mut res: Response) -> Response {
     let h = res.headers_mut();
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    h.entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
