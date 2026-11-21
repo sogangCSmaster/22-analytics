@@ -152,6 +152,62 @@ pub fn Shell() -> Element {
     }
 }
 
+/// 사이드바 메뉴 한 구역.
+#[derive(Clone, PartialEq, Debug)]
+pub struct NavSection {
+    pub title: &'static str,
+    pub items: Vec<NavItem>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct NavItem {
+    pub to: Route,
+    pub label: &'static str,
+    pub icon: IconName,
+}
+
+/// 사이드바 메뉴: 프로젝트가 있으면 리포트·설정, 관리자면 관리.
+pub fn nav_sections(pid: Option<i32>, show_admin: bool) -> Vec<NavSection> {
+    let item = |to, label, icon| NavItem { to, label, icon };
+    let mut out = vec![];
+    if let Some(p) = pid {
+        out.push(NavSection {
+            title: "리포트",
+            items: vec![
+                item(Route::Overview { pid: p }, "개요", IconName::Overview),
+                item(Route::Realtime { pid: p }, "실시간", IconName::Realtime),
+                item(Route::Acquisition { pid: p }, "유입", IconName::Acquisition),
+                item(Route::Pages { pid: p }, "페이지", IconName::Pages),
+                item(Route::Events { pid: p }, "이벤트", IconName::Events),
+                item(Route::Funnel { pid: p }, "전자상거래", IconName::Funnel),
+                item(Route::Revenue { pid: p }, "실제 매출", IconName::Revenue),
+            ],
+        });
+        out.push(NavSection {
+            title: "설정",
+            items: vec![item(
+                Route::Settings {
+                    pid: p,
+                    tab: String::new(),
+                },
+                "설치·수집 설정",
+                IconName::Settings,
+            )],
+        });
+    }
+    if show_admin {
+        out.push(NavSection {
+            title: "관리",
+            items: vec![item(Route::Admin {}, "광고주·사용자", IconName::Admin)],
+        });
+    }
+    out.push(NavSection {
+        title: "개발",
+        items: vec![item(Route::Gallery {}, "컴포넌트", IconName::Components)],
+    });
+    out
+}
+
 #[component]
 fn NavLink(to: Route, label: String, icon: IconName) -> Element {
     rsx! {

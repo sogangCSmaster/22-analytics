@@ -116,7 +116,7 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
         }
 
         {load(overview, rsx! { SkeletonCards {} }, |o| {
-            let d = |c: u64, p: u64| format::delta(c as f64, p as f64);
+            let d = |c: u64, p: u64| crate::logic::compare::change(c as f64, Some(p as f64));
             let empty = o.current.events == 0 && o.previous.events == 0;
             rsx! {
                 if empty {
@@ -132,14 +132,13 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                     }
                 }
                 div { class: "grid grid-4",
-                    StatCard { label: "방문자", value: format::count(o.current.visitors), delta: d(o.current.visitors, o.previous.visitors), show_delta: true, sub: format!("이전 {}", format::compact(o.previous.visitors)), spark: sv.clone() }
-                    StatCard { label: "세션", value: format::count(o.current.sessions), delta: d(o.current.sessions, o.previous.sessions), show_delta: true, sub: format!("이전 {}", format::compact(o.previous.sessions)), spark: ss.clone() }
-                    StatCard { label: "페이지뷰", value: format::count(o.current.pageviews), delta: d(o.current.pageviews, o.previous.pageviews), show_delta: true, sub: format!("세션당 {}", per(o.current.pageviews, o.current.sessions)), spark: sp.clone() }
+                    StatCard { label: "방문자", value: format::count(o.current.visitors), change: d(o.current.visitors, o.previous.visitors), sub: format!("이전 {}", format::compact(o.previous.visitors)), spark: sv.clone() }
+                    StatCard { label: "세션", value: format::count(o.current.sessions), change: d(o.current.sessions, o.previous.sessions), sub: format!("이전 {}", format::compact(o.previous.sessions)), spark: ss.clone() }
+                    StatCard { label: "페이지뷰", value: format::count(o.current.pageviews), change: d(o.current.pageviews, o.previous.pageviews), sub: format!("세션당 {}", per(o.current.pageviews, o.current.sessions)), spark: sp.clone() }
                     StatCard {
                         label: "매출",
                         value: format::won_short(o.current.revenue),
-                        delta: format::delta(o.current.revenue as f64, o.previous.revenue as f64),
-                        show_delta: true,
+                        change: crate::logic::compare::change(o.current.revenue as f64, Some(o.previous.revenue as f64)),
                         sub: format!("주문 {}건", format::count(o.current.orders)),
                         style: StatStyle::Plain,
                     }

@@ -85,6 +85,12 @@ fn pick(
 }
 
 #[component]
+pub fn ChannelRevenueTable(report: RevenueReport, prev: Option<RevenueReport>) -> Element {
+    let _ = (report, prev);
+    rsx! {}
+}
+
+#[component]
 pub fn Revenue(pid: ReadSignal<i32>) -> Element {
     let ctx = use_app();
     let mut model = use_signal(|| None::<Model>);

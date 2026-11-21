@@ -44,7 +44,7 @@ pub fn Gallery() -> Element {
         div { class: "grid grid-3",
             StatCard { label: "매체 합산 매출", value: "2억 원", sub: "ROAS 500%", style: StatStyle::Struck }
             StatCard { label: "실제 매출", value: "1.3억 원", sub: "주문번호 기준", style: StatStyle::Hero }
-            StatCard { label: "방문자", value: "48,210", delta: 0.082, sub: "지난 기간 대비", spark: vec![3.0, 5.0, 4.0, 6.0, 8.0, 7.0, 9.0] }
+            StatCard { label: "방문자", value: "48,210", change: crate::logic::compare::Change::Pct(0.082), sub: "지난 기간 대비", spark: vec![3.0, 5.0, 4.0, 6.0, 8.0, 7.0, 9.0] }
         }
 
         div { class: "grid grid-2",

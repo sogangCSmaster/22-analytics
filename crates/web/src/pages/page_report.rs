@@ -13,11 +13,21 @@ use dioxus::prelude::*;
 pub const LIMIT: u32 = 200;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum Col {
+pub enum Col {
     Path,
     Pageviews,
     Visitors,
     Entrances,
+}
+
+#[component]
+pub fn PagesTable(
+    rows: Vec<(PageRow, Option<PageRow>)>,
+    compare: bool,
+    sort: Signal<Sort<Col>>,
+) -> Element {
+    let _ = (rows, compare, sort);
+    rsx! {}
 }
 
 #[component]

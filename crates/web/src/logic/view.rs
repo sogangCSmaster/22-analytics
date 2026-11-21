@@ -87,11 +87,22 @@ impl Poller {
 pub struct ToastState {
     pub generation: u64,
     pub message: Option<String>,
+    /// 떠 있는 시간 (ms)
+    pub duration_ms: u32,
 }
+
+/// 보통 알림이 떠 있는 시간
+pub const TOAST_MS: u32 = 3_000;
 
 impl ToastState {
     /// 새 알림을 띄우고 그 세대를 돌려준다.
     pub fn show(&mut self, msg: String) -> u64 {
+        self.show_for(msg, TOAST_MS)
+    }
+
+    /// `ms` 동안 떠 있는 알림.
+    pub fn show_for(&mut self, msg: String, ms: u32) -> u64 {
+        let _ = ms;
         self.generation = self.generation.wrapping_add(1);
         self.message = Some(msg);
         self.generation
@@ -103,6 +114,19 @@ impl ToastState {
             self.message = None;
         }
     }
+}
+
+/// 데모 안내 알림을 이 브라우저 세션에서 이미 보였는지 기록하는 sessionStorage 키
+pub const DEMO_TOAST_KEY: &str = "ba.demo-toast-shown";
+pub const DEMO_TOAST: &str = "데모 화면입니다 · 모든 숫자는 예시 데이터예요";
+/// 데모 안내 알림이 떠 있는 시간
+pub const DEMO_TOAST_MS: u32 = 4_000;
+
+/// 데모 안내 알림을 띄울지: 데모 빌드에서, 이 브라우저 세션에 처음 들어왔을 때 한 번만.
+/// `shown`은 sessionStorage에 남긴 기록.
+pub fn should_show_demo_toast(is_demo: bool, shown: Option<&str>) -> bool {
+    let _ = (is_demo, shown);
+    false
 }
 
 /// 버튼처럼 동작하는 행(tr)에서 실행 키인지 (Enter, Space)
@@ -180,6 +204,31 @@ mod tests {
         assert_eq!(t.message.as_deref(), Some("B"));
         t.expire(b);
         assert_eq!(t.message, None);
+    }
+
+    #[test]
+    fn toast_duration() {
+        let mut t = ToastState::default();
+        t.show("A".into());
+        assert_eq!(t.duration_ms, TOAST_MS);
+        let g = t.show_for(DEMO_TOAST.into(), DEMO_TOAST_MS);
+        assert_eq!(t.duration_ms, 4_000);
+        // 닫기 버튼 = 지금 세대를 닫는다
+        t.expire(g);
+        assert_eq!(t.message, None);
+    }
+
+    #[test]
+    fn demo_toast_once_per_session_and_only_in_demo() {
+        // 세션에서 처음 → 보인다
+        assert!(should_show_demo_toast(true, None));
+        // 한 번 보인 뒤에는 → 보이지 않는다
+        assert!(!should_show_demo_toast(true, Some("1")));
+        assert!(!should_show_demo_toast(true, Some("")));
+        // 데모가 아닌 빌드 → 절대 보이지 않는다
+        assert!(!should_show_demo_toast(false, None));
+        assert!(!should_show_demo_toast(false, Some("1")));
+        assert!(DEMO_TOAST.contains("예시 데이터"));
     }
 
     #[test]

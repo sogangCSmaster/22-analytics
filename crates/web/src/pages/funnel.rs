@@ -28,6 +28,12 @@ fn step_name(e: &str) -> String {
 }
 
 #[component]
+pub fn FunnelTable(steps: Vec<(FunnelStep, Option<FunnelStep>)>, compare: bool) -> Element {
+    let _ = (steps, compare);
+    rsx! {}
+}
+
+#[component]
 pub fn Funnel(pid: ReadSignal<i32>) -> Element {
     let ctx = use_app();
     let res = use_resource(move || {

@@ -1,5 +1,6 @@
 //! 기본 UI 컴포넌트. 스타일은 assets/main.css, 값은 assets/tokens.css.
 
+use crate::logic::compare::Change;
 use dioxus::prelude::*;
 
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
@@ -121,11 +122,8 @@ pub fn StatCard(
     label: String,
     value: String,
     sub: Option<String>,
-    /// 증감 비율 (예: 0.12 = +12%)
-    delta: Option<f64>,
-    /// 증감을 보여줄지 (이전 값이 0이라 delta가 None이어도 `–`를 표시)
-    #[props(default)]
-    show_delta: bool,
+    /// 이전 기간 대비 변화. None이면 (비교를 껐으면) 증감을 그리지 않는다.
+    change: Option<Change>,
     /// 작은 추이선
     spark: Option<Vec<f64>>,
     #[props(default)] style: StatStyle,
@@ -135,13 +133,7 @@ pub fn StatCard(
         StatStyle::Hero => ("card primary stat", "stat-value xl"),
         StatStyle::Struck => ("card filled stat", "stat-value strike"),
     };
-    let show_delta = show_delta || delta.is_some();
-    let (dtext, dir) = crate::format::delta_label(delta);
-    let dclass = match dir {
-        1 => "delta up",
-        -1 => "delta down",
-        _ => "delta flat",
-    };
+    let _ = change;
     rsx! {
         div { class: "{card}",
             div { class: "stat-top",
@@ -151,18 +143,20 @@ pub fn StatCard(
                 }
             }
             div { class: "{value_class}", "{value}" }
-            if sub.is_some() || show_delta {
+            if let Some(s) = sub {
                 div { class: "stat-sub",
-                    if show_delta {
-                        span { class: "{dclass}", aria_label: "이전 기간 대비 {dtext}", "{dtext}" }
-                    }
-                    if let Some(s) = sub {
-                        span { "{s}" }
-                    }
+                    span { "{s}" }
                 }
             }
         }
     }
+}
+
+/// 이전 기간 대비 변화 표시 (▲ 12% / ▼ 4% / 신규 / –).
+#[component]
+pub fn ChangeTag(change: Change, #[props(default)] class: String) -> Element {
+    let _ = (change, class);
+    rsx! {}
 }
 
 /// 세그먼트 컨트롤. 옵션은 (값, 라벨).
@@ -427,7 +421,8 @@ pub fn ProjectScope(pid: i32, children: Element) -> Element {
 pub use crate::platform::sleep_ms;
 
 #[component]
-pub fn Toast(message: String) -> Element {
+pub fn Toast(message: String, onclose: Option<EventHandler<()>>) -> Element {
+    let _ = onclose;
     rsx! { div { class: "toast", role: "status", "{message}" } }
 }
 

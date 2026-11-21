@@ -31,10 +31,21 @@ pub fn suggested_props(event: &str) -> &'static [&'static str] {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum Col {
+pub enum Col {
     Name,
     Count,
     Visitors,
+}
+
+#[component]
+pub fn EventsTable(
+    rows: Vec<(EventCountRow, Option<EventCountRow>)>,
+    compare: bool,
+    sort: Signal<Sort<Col>>,
+    onselect: EventHandler<String>,
+) -> Element {
+    let _ = (rows, compare, sort, onselect);
+    rsx! {}
 }
 
 #[component]

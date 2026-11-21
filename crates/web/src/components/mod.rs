@@ -55,7 +55,7 @@ mod render_tests {
             BarList { items: vec![] }
             ShareBar { parts: vec![("a".to_string(), 0)] }
             FunnelChart { steps: vec![] }
-            StatCard { label: EVIL, value: "1,844경", delta: -0.5, spark: vec![] }
+            StatCard { label: EVIL, value: "1,844경", change: crate::logic::compare::Change::Pct(-0.5), spark: vec![] }
             EmptyState { icon: crate::components::icon::IconName::Search, title: EVIL, desc: "" }
         });
         assert_escaped(&html);
@@ -208,5 +208,283 @@ mod render_tests {
             let ratio = attr("width") / attr("height");
             assert!((ratio - 1815.0 / 167.0).abs() < 0.1, "비율 {ratio}: {html}");
         }
+    }
+
+    // -------------------------------------------------------------------
+    // 이전 기간 비교: 끄면 증감·이전 값 표시가 하나도 없고, 켜면 보인다.
+    // -------------------------------------------------------------------
+
+    use crate::logic::compare::Change;
+    use analytics_core::dto::reports::{
+        ChannelRevenueRow, ChannelTrafficRow, EventCountRow, FunnelStep, PageRow, ReportRange,
+        RevenueReport,
+    };
+
+    /// 비교 표시 흔적 (증감 기호, 이전 기간 열, 변화 열)
+    fn has_compare_markup(html: &str) -> bool {
+        html.contains("▲")
+            || html.contains("▼")
+            || html.contains("신규")
+            || html.contains("이전 기간")
+            || html.contains("class=\"chg")
+            || html.contains("cmp-")
+    }
+
+    #[test]
+    fn stat_card_shows_delta_only_with_change() {
+        let off = dioxus_ssr::render_element(rsx! {
+            StatCard { label: "방문자", value: "1,000", sub: "세션당 2" }
+        });
+        assert!(!off.contains("delta"), "{off}");
+        assert!(!has_compare_markup(&off), "{off}");
+        let on = dioxus_ssr::render_element(rsx! {
+            StatCard { label: "방문자", value: "1,000", change: Change::Pct(0.25), sub: "이전 800" }
+        });
+        assert!(on.contains("class=\"delta up\""), "{on}");
+        assert!(on.contains("▲ 25%"), "{on}");
+        assert!(on.contains("이전 800"), "{on}");
+        let pp = dioxus_ssr::render_element(rsx! {
+            StatCard { label: "중복률", value: "30%", change: crate::logic::compare::pp(0.30, Some(0.35)) }
+        });
+        assert!(pp.contains("▼ 5%p"), "{pp}");
+    }
+
+    #[test]
+    fn change_tag_says_new_instead_of_infinity() {
+        use super::ui::ChangeTag;
+        let html = dioxus_ssr::render_element(rsx! { ChangeTag { change: Change::New } });
+        assert!(html.contains("신규"), "{html}");
+        assert!(html.contains("chg new"), "{html}");
+        assert!(!html.contains('∞') && !html.contains("inf"), "{html}");
+        assert!(
+            html.contains("aria-label=\"이전 기간 대비 신규\""),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn barlist_shows_previous_change_only_when_given() {
+        let items = vec![("네이버".to_string(), 120), ("메타".to_string(), 30)];
+        let off = dioxus_ssr::render_element(rsx! { BarList { items: items.clone() } });
+        assert!(!has_compare_markup(&off), "{off}");
+        let on = dioxus_ssr::render_element(rsx! {
+            BarList { items: items.clone(), prev: vec![Some(100), Some(0)] }
+        });
+        assert!(on.contains("▲ 20%"), "{on}");
+        assert!(on.contains("신규"), "{on}");
+    }
+
+    fn ch(channel: &str, sessions: u64, visitors: u64) -> ChannelTrafficRow {
+        ChannelTrafficRow {
+            channel: channel.into(),
+            sessions,
+            entrances: sessions,
+            visitors,
+            pageviews: sessions * 2,
+        }
+    }
+
+    #[test]
+    fn acquisition_table_compare_columns() {
+        use crate::logic::table::Sort;
+        use crate::pages::acquisition::{ChannelTable, Col};
+        let off = render_app(|| {
+            let sort = use_signal(|| Sort::desc(Col::Sessions));
+            rsx! { ChannelTable { rows: vec![(ch("naver_sa", 100, 80), None)], compare: false, sort } }
+        });
+        assert!(off.contains("네이버"), "{off}");
+        assert!(!has_compare_markup(&off), "{off}");
+        let on = render_app(|| {
+            let sort = use_signal(|| Sort::desc(Col::Sessions));
+            rsx! {
+                ChannelTable {
+                    rows: vec![
+                        (ch("naver_sa", 120, 90), Some(ch("naver_sa", 100, 80))),
+                        (ch("tiktok", 5, 5), Some(ch("tiktok", 0, 0))),
+                    ],
+                    compare: true,
+                    sort,
+                }
+            }
+        });
+        assert!(on.contains(">이전 기간<"), "{on}");
+        assert!(on.contains("변화"), "{on}");
+        assert!(on.contains("▲ 20%"), "{on}");
+        assert!(on.contains("신규"), "{on}");
+        // 모바일 카드 행: 칸마다 이름표
+        assert!(on.contains("data-label=\"세션\""), "{on}");
+    }
+
+    #[test]
+    fn pages_and_events_tables_compare_columns() {
+        use crate::logic::table::Sort;
+        use crate::pages::events::{Col as ECol, EventsTable};
+        use crate::pages::page_report::{Col as PCol, PagesTable};
+        fn pr(path: &str, pageviews: u64) -> PageRow {
+            PageRow {
+                path: path.into(),
+                pageviews,
+                visitors: 1,
+                entrances: 1,
+            }
+        }
+        fn ev(n: &str, count: u64) -> EventCountRow {
+            EventCountRow {
+                event_name: n.into(),
+                count,
+                visitors: 5,
+            }
+        }
+        let off = render_app(|| {
+            let s1 = use_signal(|| Sort::desc(PCol::Pageviews));
+            let s2 = use_signal(|| Sort::desc(ECol::Count));
+            rsx! {
+                PagesTable { rows: vec![(pr("/a", 10), None)], compare: false, sort: s1 }
+                EventsTable { rows: vec![(ev("click", 10), None)], compare: false, sort: s2, onselect: |_| {} }
+            }
+        });
+        assert!(off.contains("/a") && off.contains("click"), "{off}");
+        assert!(!has_compare_markup(&off), "{off}");
+        let on = render_app(|| {
+            let s1 = use_signal(|| Sort::desc(PCol::Pageviews));
+            let s2 = use_signal(|| Sort::desc(ECol::Count));
+            rsx! {
+                PagesTable {
+                    // /b: 이전 목록이 잘려 이전 값을 모름
+                    rows: vec![(pr("/a", 10), Some(pr("/a", 20))), (pr("/b", 3), None)],
+                    compare: true,
+                    sort: s1,
+                }
+                EventsTable { rows: vec![(ev("click", 15), Some(ev("click", 10)))], compare: true, sort: s2, onselect: |_| {} }
+            }
+        });
+        assert!(on.contains("▼ 50%"), "{on}");
+        assert!(on.contains("▲ 50%"), "{on}");
+        assert_eq!(on.matches(">이전 기간<").count(), 2, "{on}");
+    }
+
+    fn step(n: &str, visitors: u64, rate: f64) -> FunnelStep {
+        FunnelStep {
+            event_name: n.into(),
+            visitors,
+            rate_from_prev: rate,
+            rate_from_first: rate,
+        }
+    }
+
+    #[test]
+    fn funnel_table_shows_previous_conversion_in_pp() {
+        use crate::pages::funnel::FunnelTable;
+        let off = render_app(|| {
+            rsx! {
+                FunnelTable { steps: vec![(step("view_item", 100, 1.0), None), (step("purchase", 12, 0.12), None)], compare: false }
+            }
+        });
+        assert!(!has_compare_markup(&off), "{off}");
+        let on = render_app(|| {
+            rsx! {
+                FunnelTable {
+                    steps: vec![
+                        (step("view_item", 100, 1.0), Some(step("view_item", 80, 1.0))),
+                        (step("purchase", 12, 0.12), Some(step("purchase", 8, 0.10))),
+                    ],
+                    compare: true,
+                }
+            }
+        });
+        assert!(on.contains("이전 전환율"), "{on}");
+        assert!(on.contains("▲ 2%p"), "{on}");
+        assert!(on.contains("▲ 25%"), "{on}");
+        assert!(on.contains(">10%<"), "{on}");
+    }
+
+    fn rev(attr: i64, spend: i64) -> RevenueReport {
+        let roas = (spend > 0).then(|| attr as f64 / spend as f64);
+        RevenueReport {
+            range: ReportRange {
+                from: "2026-11-01".into(),
+                to: "2026-11-07".into(),
+            },
+            model: analytics_core::attribution::Model::LastClick,
+            lookback_days: 7,
+            raw_sum: attr * 2,
+            deduplicated: attr,
+            duplicate_amount: attr,
+            duplicate_rate: 0.5,
+            orders: 3,
+            spend_total: spend,
+            roas,
+            channels: vec![ChannelRevenueRow {
+                channel: "meta".into(),
+                raw_claimed: attr * 2,
+                attributed: attr,
+                share: 1.0,
+                assists: 1,
+                spend,
+                roas,
+            }],
+        }
+    }
+
+    #[test]
+    fn revenue_channel_table_compare_columns() {
+        use crate::pages::revenue::ChannelRevenueTable;
+        let off = render_app(|| rsx! { ChannelRevenueTable { report: rev(300, 100), prev: None } });
+        assert!(off.contains("메타"), "{off}");
+        assert!(!has_compare_markup(&off), "{off}");
+        let on = render_app(
+            || rsx! { ChannelRevenueTable { report: rev(300, 100), prev: rev(200, 100) } },
+        );
+        assert!(on.contains(">이전 기간<"), "{on}");
+        assert!(on.contains("▲ 50%"), "{on}");
+        // ROAS 200% → 300%
+        assert!(on.contains("ROAS 변화"), "{on}");
+        assert!(on.contains("▲ 100%p"), "{on}");
+        // 모바일 카드 행에서는 매체·기여 매출·비중·ROAS만 남긴다
+        assert!(on.contains("m-hide"), "{on}");
+    }
+
+    #[test]
+    fn toast_is_polite_live_region_with_close_button() {
+        use super::ui::Toast;
+        let html = render_app(|| rsx! { Toast { message: "데모 화면입니다", onclose: |_| {} } });
+        assert!(html.contains("aria-live=\"polite\""), "{html}");
+        assert!(html.contains("aria-label=\"알림 닫기\""), "{html}");
+        assert!(html.contains("데모 화면입니다"), "{html}");
+    }
+
+    /// 사이드바에 개발용 "컴포넌트" 메뉴(개발 구역)가 없어야 한다.
+    #[test]
+    fn sidebar_has_no_component_gallery_link() {
+        use super::shell::nav_sections;
+        for (pid, admin) in [
+            (Some(1), true),
+            (Some(1), false),
+            (None, true),
+            (None, false),
+        ] {
+            let secs = nav_sections(pid, admin);
+            assert!(secs.iter().all(|s| s.title != "개발"), "{pid:?} {admin}");
+            for s in &secs {
+                for item in &s.items {
+                    assert_ne!(item.label, "컴포넌트");
+                    assert_ne!(item.to, crate::Route::Gallery {});
+                }
+            }
+        }
+        let secs = nav_sections(Some(1), true);
+        let labels: Vec<&str> = secs
+            .iter()
+            .flat_map(|s| s.items.iter().map(|i| i.label))
+            .collect();
+        assert!(
+            labels.contains(&"개요") && labels.contains(&"광고주·사용자"),
+            "{labels:?}"
+        );
+        assert!(
+            !nav_sections(Some(1), false)
+                .iter()
+                .any(|s| s.title == "관리")
+        );
     }
 }

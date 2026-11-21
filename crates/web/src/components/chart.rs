@@ -278,8 +278,11 @@ pub fn BarList(
     /// 오른쪽에 전체 대비 비중(%) 표시
     #[props(default)]
     show_share: bool,
+    /// 이전 기간 값 (항목과 같은 순서). 주면 오른쪽에 변화를 보인다.
+    prev: Option<Vec<Option<i64>>>,
     onselect: Option<EventHandler<usize>>,
 ) -> Element {
+    let _ = prev;
     let max = items.iter().map(|(_, v)| *v).max().unwrap_or(0) as f64;
     let total: i64 = items.iter().map(|(_, v)| (*v).max(0)).sum();
     let clickable = onselect.is_some();

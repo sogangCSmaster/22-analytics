@@ -12,12 +12,23 @@ use analytics_core::dto::reports::ChannelTrafficRow;
 use dioxus::prelude::*;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum Col {
+pub enum Col {
     Channel,
     Sessions,
     Visitors,
     Pageviews,
     PerSession,
+}
+
+/// 채널 상세 표 (비교를 켜면 이전 기간·변화 열이 붙는다).
+#[component]
+pub fn ChannelTable(
+    rows: Vec<(ChannelTrafficRow, Option<ChannelTrafficRow>)>,
+    compare: bool,
+    sort: Signal<Sort<Col>>,
+) -> Element {
+    let _ = (rows, compare, sort);
+    rsx! {}
 }
 
 #[component]

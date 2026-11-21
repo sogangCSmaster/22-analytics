@@ -117,6 +117,38 @@ fn main() {
     dioxus::launch(App);
 }
 
+#[cfg(test)]
+mod route_tests {
+    use super::Route;
+
+    /// 기간 선택·이전 기간 비교 토글은 기간이 의미 있는 화면에만 보인다.
+    #[test]
+    fn range_and_compare_only_on_report_pages() {
+        for r in [
+            Route::Overview { pid: 1 },
+            Route::Acquisition { pid: 1 },
+            Route::Pages { pid: 1 },
+            Route::Events { pid: 1 },
+            Route::Funnel { pid: 1 },
+            Route::Revenue { pid: 1 },
+        ] {
+            assert!(r.uses_range(), "{r:?}");
+        }
+        for r in [
+            Route::Realtime { pid: 1 },
+            Route::Settings {
+                pid: 1,
+                tab: String::new(),
+            },
+            Route::Admin {},
+            Route::Gallery {},
+            Route::Home {},
+        ] {
+            assert!(!r.uses_range(), "{r:?}");
+        }
+    }
+}
+
 #[component]
 fn App() -> Element {
     state::AppCtx::provide();
