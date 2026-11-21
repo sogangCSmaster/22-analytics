@@ -556,6 +556,35 @@ mod tests {
     }
 
     #[test]
+    fn overlong_referer_is_ignored_like_edge() {
+        // 엣지와 에뮬레이터가 같게: URL 한도 두 배를 넘는 Referer는 없는 것으로 친다
+        let mut c = ctx(CHROME);
+        c.origin = None;
+        let long = format!(
+            "https://www.client.com/{}",
+            "a".repeat(crate::event::MAX_URL_LEN * 2)
+        );
+        c.referer = Some(&long);
+        let b = batch(vec![ev("page_view", "https://client.com/")]);
+        assert_eq!(
+            process(&c, &cfg(), b.clone(), counter()),
+            Err(Reject::OriginNotAllowed)
+        );
+        let ok = format!("https://www.client.com/{}", "a".repeat(100));
+        c.referer = Some(&ok);
+        assert!(process(&c, &cfg(), b, counter()).is_ok());
+    }
+
+    #[test]
+    fn user_agent_is_clipped_before_parsing() {
+        // UA 파서에는 앞 1024바이트만 넘긴다 (엣지와 같음): 그 뒤의 문자열은 판정에 쓰지 않는다
+        let ua = format!("{CHROME}{}bot", " ".repeat(1100));
+        let b = batch(vec![ev("page_view", "https://client.com/")]);
+        let out = process(&ctx(&ua), &cfg(), b, counter()).unwrap();
+        assert_eq!(out.events[0].browser, "Chrome");
+    }
+
+    #[test]
     fn present_but_invalid_origin_does_not_fall_back_to_referer() {
         // `Origin: null`(sandbox iframe, file:// 등)이나 해석할 수 없는 Origin은 거부한다.
         // Referer로 대신하는 것은 Origin 헤더가 아예 없을 때뿐이다.
