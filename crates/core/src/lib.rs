@@ -11,6 +11,7 @@ pub mod dto;
 pub mod edge_auth;
 pub mod event;
 pub mod ids;
+pub mod orders;
 pub mod settings;
 pub mod urlx;
 
