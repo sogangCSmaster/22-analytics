@@ -42,6 +42,9 @@ enum Cmd {
     ConservationCheck {
         #[arg(long)]
         project: Option<u32>,
+        /// 전체 기간 검사 (기본: 최근 40일 주문만)
+        #[arg(long)]
+        full: bool,
     },
     /// 만료된 대시보드 로그인 세션 삭제 (cron 등으로 주기 실행)
     CleanupSessions,
@@ -169,10 +172,19 @@ async fn main() -> anyhow::Result<()> {
                 r.projects, r.orders_seen, r.orders_written, r.rows_written
             );
         }
-        Cmd::ConservationCheck { project } => {
+        Cmd::ConservationCheck { project, full } => {
             let pool = analytics_pg::connect(&cli.database_url).await?;
             let ch = analytics_ch::ChConfig::from_env().client();
-            let broken = attribution::conservation_check(&ch, &pool, project).await?;
+            let window = if full {
+                attribution::ConservationWindow::Full
+            } else {
+                attribution::ConservationWindow::Recent {
+                    days: attribution::DEFAULT_CONSERVATION_DAYS,
+                    now_ms: attribution::now_ms(),
+                }
+            };
+            let broken =
+                attribution::conservation_check_window(&ch, &pool, project, window).await?;
             if broken.is_empty() {
                 println!("매출 보존 검증 통과");
                 return Ok(());

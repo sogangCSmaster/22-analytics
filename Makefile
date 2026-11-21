@@ -3,7 +3,7 @@ COMPOSE := docker compose -f infra/compose/docker-compose.yml
 export DATABASE_URL ?= postgres://analytics:analytics@localhost:5432/analytics
 export CLICKHOUSE_URL ?= http://localhost:8123
 
-.PHONY: up down reset migrate seed tracker ingest api web test lint fmt check
+.PHONY: up down reset migrate seed tracker ingest api web test e2e lint fmt check
 
 up:        ## DB 기동 (ClickHouse, Postgres)
 	$(COMPOSE) up -d --wait
@@ -36,7 +36,10 @@ test:      ## 전체 테스트 (DB 필요: make up migrate)
 	cargo test --workspace --exclude analytics-web --exclude analytics-edge
 	cargo test -p analytics-edge
 	cargo test -p analytics-web --no-default-features
-	cd tracker && npm run -s check
+	cd tracker && npm run -s check && npm test
+
+e2e:       ## 매뉴얼 1.A 시나리오 E2E (실제 프로세스 + 브라우저, DB 필요)
+	cd e2e && npm test
 
 lint:
 	cargo fmt --all -- --check

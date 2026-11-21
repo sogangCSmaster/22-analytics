@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>E2E 상품 페이지</title>
+  <script>window.at=window.at||function(){(at.q=at.q||[]).push(arguments)};</script>
+  <script>
+    // E2E: ?k=<public key>로 프로젝트를 지정한다.
+    (function () {
+      var k = new URLSearchParams(location.search).get("k");
+      var s = document.createElement("script");
+      s.async = true; s.src = "/t.js"; s.setAttribute("data-key", k);
+      document.head.appendChild(s);
+    })();
+  </script>
+</head>
+<body><h1>겨울 패딩</h1></body>
+</html>

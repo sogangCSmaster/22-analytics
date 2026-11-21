@@ -1,0 +1,9 @@
+{
+  "name": "@22analytics/e2e",
+  "private": true,
+  "type": "module",
+  "description": "실제 프로세스(ingest·api·jobs) + 브라우저로 돌리는 E2E 테스트",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --test-timeout=900000 *.test.mjs"
+  }
+}

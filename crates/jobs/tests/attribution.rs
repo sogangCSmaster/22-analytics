@@ -1175,3 +1175,56 @@ async fn cli_attribution_and_conservation_check() {
         "{stdout}"
     );
 }
+
+/// CLI 보존 검증: 기본은 최근 40일만, `--full`은 전체 기간을 본다.
+#[tokio::test(flavor = "multi_thread")]
+async fn cli_conservation_check_is_bounded_by_default_and_full_with_flag() {
+    let db = TestDb::new().await;
+    let p = project(&db.pg).await;
+    let now = job::now_ms();
+    let old = now - 60 * 24 * 60 * MIN; // 60일 전 주문
+    let v = Uuid::new_v4();
+    insert_touches(
+        &db.ch,
+        &[TouchFixture::utm(p, v, old - 10 * MIN, "naver", "cpc", "")],
+    )
+    .await
+    .unwrap();
+    insert_orders(
+        &db.ch,
+        &[OrderFixture::confirmed(p, "OLD1", Some(v), 7_000, old, 1)],
+    )
+    .await
+    .unwrap();
+    let out = cli(&db, &["attribution", "--full", "--since-days", "90"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // 오래된 주문의 배분을 일부러 깨뜨린다
+    db.ch
+        .query(
+            "INSERT INTO attributed_revenue \
+             SELECT project_id, model, lookback_days, order_id, touch_index, channel, utm_campaign, \
+                    touch_ts, ordered_at, amount + 1, is_assist, computed_at + 1000, is_deleted \
+             FROM attributed_revenue FINAL WHERE model = 'linear' AND lookback_days = 7",
+        )
+        .execute()
+        .await
+        .unwrap();
+
+    let recent = cli(&db, &["conservation-check", "--project", &p.to_string()]);
+    assert!(
+        recent.status.success(),
+        "기본(최근 40일) 검사는 60일 전 주문을 보지 않는다: {}",
+        String::from_utf8_lossy(&recent.stdout)
+    );
+    let full = cli(
+        &db,
+        &["conservation-check", "--project", &p.to_string(), "--full"],
+    );
+    assert!(!full.status.success(), "--full은 전체 기간을 검사해야 한다");
+    assert!(String::from_utf8_lossy(&full.stdout).contains("OLD1"));
+}
