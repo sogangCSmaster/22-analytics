@@ -58,8 +58,12 @@ test("브라우저: 네이버 검색광고 → 메타 광고 순서로 두 번 �
   await trackerReady(page);
   await page.goto("about:blank"); // pagehide → sendBeacon으로 남은 이벤트 전송
 
-  const cookies = await page.context().cookies(INGEST);
-  const vid = cookies.find((c) => c.name === "_at_vid");
+  // pagehide에 보낸 sendBeacon 응답(Set-Cookie)은 비동기로 도착하므로 기다린다
+  let vid;
+  await waitFor(async () => {
+    vid = (await page.context().cookies(INGEST)).find((c) => c.name === "_at_vid");
+    return !!vid;
+  }, "방문자 쿠키", 10000).catch(() => {});
   assert.ok(vid, "서버가 HttpOnly 방문자 쿠키를 발급해야 한다");
   assert.equal(vid.httpOnly, true);
   ctx.visitorId = vid.value;
