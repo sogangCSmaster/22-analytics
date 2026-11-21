@@ -603,6 +603,83 @@ async fn concurrent_requests_for_same_order_do_not_race() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn two_ingest_writers_converge_after_recheck() {
+    // 줄무늬 잠금은 프로세스 안에서만 직렬화한다. ingest 두 대(서로 다른 OrderService)가 같은 주문을
+    // 동시에 처리해도, 투영 후 이벤트를 다시 읽어 확인하므로 마지막 상태는 모든 이벤트를 반영한다.
+    let h = setup().await;
+    let other = app_for(Arc::new(OrderService::new(
+        h.db.pg.clone(),
+        h.db.ch.clone(),
+    )));
+    let ids: Vec<String> = (0..4).map(|i| format!("R{i}")).collect();
+    for id in &ids {
+        h.post(&confirm(id, 1_000_000)).await;
+    }
+    let mut tasks = vec![];
+    for id in &ids {
+        for i in 0..8 {
+            let app = if i % 2 == 0 {
+                h.app.clone()
+            } else {
+                other.clone()
+            };
+            let auth = format!("Bearer {}", h.key);
+            let body = refund(id, 1_000, &format!("2026-11-20T12:00:{i:02}Z")).to_string();
+            tasks.push(tokio::spawn(async move {
+                send(
+                    &app,
+                    "/v1/orders",
+                    &[("authorization", &auth)],
+                    body.into_bytes(),
+                )
+                .await
+                .0
+            }));
+        }
+    }
+    for t in tasks {
+        assert_eq!(t.await.unwrap(), StatusCode::ACCEPTED);
+    }
+    for id in &ids {
+        let o = h.order(id).await.unwrap();
+        assert_eq!(
+            o.refunded_amount, 8_000,
+            "{id}: 다른 프로세스의 환불도 반영"
+        );
+        assert_eq!(o.effective_amount, 992_000);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recheck_rewrites_when_events_changed_after_projection() {
+    // 투영 직후 다른 writer가 이벤트를 추가한 상황을 직접 만든다: 이벤트만 넣고 투영은 쓰지 않는다.
+    let h = setup().await;
+    h.post(&confirm("RC", 100_000)).await;
+    let v = analytics_core::orders::validate(
+        &analytics_core::orders::OrderProject {
+            project_id: h.project as u32,
+            currency: "KRW",
+            salt_hex: &h.salt,
+        },
+        &refund("RC", 5_000, "2026-11-20T12:00:00Z"),
+        None,
+        crate::internal::now_ms(),
+    )
+    .unwrap();
+    ch_orders::insert_order_event(&h.db.ch, &v.event)
+        .await
+        .unwrap();
+    assert_eq!(h.order("RC").await.unwrap().effective_amount, 100_000);
+    let changed = h.svc.reproject(h.scope(), "RC").await.unwrap();
+    assert!(changed, "이벤트와 투영이 다르면 다시 쓴다");
+    assert_eq!(h.order("RC").await.unwrap().effective_amount, 95_000);
+    assert!(
+        !h.svc.reproject(h.scope(), "RC").await.unwrap(),
+        "같으면 쓰지 않는다"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn same_ms_events_in_one_batch() {
     let h = setup().await;
     let at = "2026-11-20T12:00:00.000Z";
