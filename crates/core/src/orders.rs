@@ -428,7 +428,8 @@ pub const PURCHASE_EVENT: &str = "purchase";
 /// - 같은 멱등 키는 가장 먼저 받은 것 하나만 반영한다.
 /// - (occurred_at, received_at, 멱등 키) 순으로 정렬해 계산하므로 입력 순서와 무관하다.
 /// - S2S 이벤트가 하나라도 있으면 클라이언트 이벤트는 무시한다 (S2S 우선).
-/// - 확정이 여러 번이면 가장 늦은 확정의 금액을 쓴다 (매출은 한 번만).
+/// - 확정이 여러 번이면 S2S는 가장 늦은 확정, 클라이언트만 있으면 가장 이른 확정의 금액을 쓴다
+///   (매출은 한 번만).
 /// - 취소가 있으면 도착 순서와 관계없이 CANCELLED (effective 0).
 /// - 환불은 모두 합산한다. 합계가 net 이상이면 CANCELLED와 같게 취급한다.
 pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
@@ -463,7 +464,14 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
     let first = *evs.first()?;
 
     let is_confirm = |e: &&&OrderEvent| e.event_type == OrderEventType::PurchaseConfirmed;
-    let last_confirm = evs.iter().rev().find(is_confirm).copied();
+    // 반영할 확정 순서: S2S는 늦은 확정 우선(금액 정정), 클라이언트만 있으면 첫 확정 우선
+    // (공개 키만 있으면 누구나 purchase를 보낼 수 있으므로 나중 이벤트가 금액을 바꾸지 못하게 한다).
+    let confirms: Vec<&OrderEvent> = if has_s2s {
+        evs.iter().rev().filter(is_confirm).copied().collect()
+    } else {
+        evs.iter().filter(is_confirm).copied().collect()
+    };
+    let chosen_confirm = confirms.first().copied();
     let cancelled = evs
         .iter()
         .any(|e| e.event_type == OrderEventType::OrderCancelled);
@@ -472,15 +480,15 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
         .filter(|e| e.event_type == OrderEventType::OrderRefunded)
         .fold(0i64, |acc, e| acc.saturating_add(e.refund_amount));
 
-    // 식별자: 늦은 확정 이벤트 우선, 없으면 다른 이벤트 중 가장 늦은 값.
-    let mut by_priority = evs.iter().rev().filter(is_confirm).chain(evs.iter().rev());
+    // 식별자: 반영한 확정 순서대로, 없으면 다른 이벤트 중 가장 늦은 값.
+    let mut by_priority = confirms.iter().chain(evs.iter().rev());
     let visitor_id = by_priority.clone().find_map(|e| e.visitor_id);
     let member_hash = by_priority
         .find(|e| !e.member_hash.is_empty())
         .map(|e| e.member_hash.clone())
         .unwrap_or_default();
 
-    let (net_amount, gross_amount, ordered_at_ms, currency) = match last_confirm {
+    let (net_amount, gross_amount, ordered_at_ms, currency) = match chosen_confirm {
         Some(c) => (
             c.net_amount,
             c.gross_amount,
@@ -491,7 +499,7 @@ pub fn fold(events: &[OrderEvent]) -> Option<OrderState> {
     };
     let (status, refunded_amount, effective_amount) = if cancelled {
         (OrderStatus::Cancelled, refunds.max(net_amount), 0)
-    } else if last_confirm.is_none() {
+    } else if chosen_confirm.is_none() {
         (OrderStatus::Pending, refunds, 0)
     } else if net_amount > 0 && refunds >= net_amount {
         (OrderStatus::Cancelled, refunds, 0)

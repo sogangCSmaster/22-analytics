@@ -2,7 +2,9 @@
 //!
 //! 주문 이벤트 1건 처리 순서 ([`OrderService::apply`]):
 //! 1. 같은 주문의 처리를 직렬화한다 (order_id 해시로 고른 잠금).
-//! 2. 주문의 기존 이벤트를 읽는다. 같은 멱등 키가 이미 있으면 append하지 않는다.
+//! 2. 주문의 기존 이벤트를 읽는다. 같은 멱등 키가 이미 있으면 append하지 않는다
+//!    (내용이 다르면 아무것도 쓰지 않고 `conflict`를 돌려준다 → 409).
+//!    클라이언트 이벤트는 주문당 [`MAX_CLIENT_EVENTS_PER_ORDER`]건까지만 받는다.
 //! 3. 새 이벤트를 `order_events`에 append한다.
 //! 4. 전체 이벤트로 상태를 계산하고([`project`]: fold + 이전 행의 `ordered_at` 유지), 현재 `orders`
 //!    행과 다르면 새 version으로 insert한다. `ordered_at`은 처음 투영한 값으로 고정되므로 한 주문의
@@ -18,17 +20,24 @@ mod tests;
 use analytics_ch::ProjectScope;
 use analytics_ch::orders::{self as ch_orders, OrderRow};
 use analytics_core::Event;
-use analytics_core::orders::{OrderEvent, client_purchase_event, project};
+use analytics_core::orders::{OrderEvent, OrderSource, client_purchase_event, project};
 use analytics_core::settings::TrackingSettings;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 
 /// 같은 주문 처리를 직렬화하는 잠금 개수. 서로 다른 주문이 같은 잠금을 공유해도 정확성에는 문제없다.
 const LOCK_STRIPES: usize = 1024;
 const PROJECT_TTL: Duration = Duration::from_secs(60);
+/// 클라이언트 purchase 투영을 동시에 돌리는 백그라운드 작업 수. 넘치면 버리고 지표로 센다.
+pub const CLIENT_CONCURRENCY: usize = 64;
+/// 주문 하나에 받는 클라이언트 이벤트 상한. 넘는 이벤트는 무시한다
+/// (반영할 때마다 주문의 전체 이벤트를 다시 읽으므로 무한히 쌓이면 비용이 제곱으로 는다).
+pub const MAX_CLIENT_EVENTS_PER_ORDER: usize = 50;
 
 /// 주문 처리에 필요한 프로젝트 정보.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +50,7 @@ pub struct ProjectCtx {
 }
 
 /// [`OrderService::apply`] 결과.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Applied {
     /// 같은 멱등 키 이벤트가 이미 있었다.
     pub duplicate: bool,
@@ -49,6 +58,29 @@ pub struct Applied {
     pub projected: bool,
     /// 같은 멱등 키 이벤트가 있는데 내용(금액·시각)이 다르다. 아무것도 쓰지 않았다.
     pub conflict: bool,
+    /// 클라이언트 이벤트 상한을 넘어 무시했다. 아무것도 쓰지 않았다.
+    pub capped: bool,
+}
+
+/// [`OrderService::client_purchases`] 결과.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClientPurchases {
+    pub applied: usize,
+    /// 저장소 오류로 실패한 건 (나머지는 계속 처리한다)
+    pub failed: usize,
+    /// 주문당 상한을 넘어 무시한 건
+    pub capped: usize,
+}
+
+/// 주문 처리 지표 (`/metrics`).
+#[derive(Debug, Default)]
+pub struct OrderMetrics {
+    /// 동시 작업 한도를 넘어 버린 클라이언트 purchase 수
+    pub client_dropped: AtomicU64,
+    /// 투영에 실패한 클라이언트 purchase 수
+    pub client_failed: AtomicU64,
+    /// 주문당 상한을 넘어 무시한 클라이언트 purchase 수
+    pub client_capped: AtomicU64,
 }
 
 pub struct OrderService {
@@ -56,15 +88,24 @@ pub struct OrderService {
     ch: analytics_ch::Client,
     locks: Vec<Mutex<()>>,
     projects: RwLock<HashMap<u32, (Instant, Option<ProjectCtx>)>>,
+    client_permits: Arc<Semaphore>,
+    pub metrics: OrderMetrics,
 }
 
 impl OrderService {
     pub fn new(pg: PgPool, ch: analytics_ch::Client) -> Self {
+        Self::with_client_concurrency(pg, ch, CLIENT_CONCURRENCY)
+    }
+
+    /// 클라이언트 purchase 백그라운드 작업 한도를 지정한다.
+    pub fn with_client_concurrency(pg: PgPool, ch: analytics_ch::Client, n: usize) -> Self {
         Self {
             pg,
             ch,
             locks: (0..LOCK_STRIPES).map(|_| Mutex::new(())).collect(),
             projects: RwLock::new(HashMap::new()),
+            client_permits: Arc::new(Semaphore::new(n)),
+            metrics: OrderMetrics::default(),
         }
     }
 
@@ -122,11 +163,24 @@ impl OrderService {
             // 같은 키로 다른 내용: 조용히 버리지 않고 호출자에게 알린다 (409)
             return Ok(Applied {
                 duplicate: true,
-                projected: false,
                 conflict: true,
+                ..Applied::default()
             });
         }
         let duplicate = same_key.is_some();
+        if !duplicate
+            && ev.source == OrderSource::Client
+            && events
+                .iter()
+                .filter(|e| e.source == OrderSource::Client)
+                .count()
+                >= MAX_CLIENT_EVENTS_PER_ORDER
+        {
+            return Ok(Applied {
+                capped: true,
+                ..Applied::default()
+            });
+        }
         let order_id = ev.order_id.clone();
         if !duplicate {
             ch_orders::insert_order_event(&self.ch, &ev).await?;
@@ -139,8 +193,7 @@ impl OrderService {
         if prev.as_ref() == Some(&state) {
             return Ok(Applied {
                 duplicate,
-                projected: false,
-                conflict: false,
+                ..Applied::default()
             });
         }
         let version =
@@ -149,35 +202,57 @@ impl OrderService {
         Ok(Applied {
             duplicate,
             projected: true,
-            conflict: false,
+            ..Applied::default()
         })
     }
 
     /// 수집 파이프라인의 `purchase` 이벤트를 클라이언트 주문으로 투영한다
-    /// (`client_purchase_as_order`가 켜진 프로젝트만). 반영한 이벤트 수를 돌려준다.
+    /// (`client_purchase_as_order`가 켜진 프로젝트만).
     /// 같은 order_id의 S2S 주문이 있으면 `fold`가 S2S만 보므로 상태는 바뀌지 않는다.
-    pub async fn client_purchases(&self, events: &[Event]) -> anyhow::Result<usize> {
-        let mut n = 0;
+    /// 한 건이 실패해도 나머지는 계속 처리하고 실패 수를 지표로 남긴다.
+    pub async fn client_purchases(&self, events: &[Event]) -> ClientPurchases {
+        let mut r = ClientPurchases::default();
         for e in events
             .iter()
             .filter(|e| e.event_name == analytics_core::orders::PURCHASE_EVENT)
         {
-            let Some(p) = self.project(e.project_id).await? else {
-                continue;
+            let p = match self.project(e.project_id).await {
+                Ok(Some(p)) => p,
+                Ok(None) => continue,
+                Err(err) => {
+                    tracing::error!(error = %err, "클라이언트 purchase: 프로젝트 조회 실패");
+                    r.failed += 1;
+                    continue;
+                }
             };
             if !p.active || !p.client_purchase_as_order {
                 continue;
             }
-            if let Some(oe) = client_purchase_event(&p.currency, e) {
-                self.apply(oe).await?;
-                n += 1;
+            let Some(oe) = client_purchase_event(&p.currency, e) else {
+                continue;
+            };
+            match self.apply(oe).await {
+                Ok(a) if a.capped => r.capped += 1,
+                Ok(_) => r.applied += 1,
+                Err(err) => {
+                    tracing::error!(error = %err, "클라이언트 purchase 주문 투영 실패");
+                    r.failed += 1;
+                }
             }
         }
-        Ok(n)
+        self.metrics
+            .client_failed
+            .fetch_add(r.failed as u64, Relaxed);
+        self.metrics
+            .client_capped
+            .fetch_add(r.capped as u64, Relaxed);
+        r
     }
 
     /// 백그라운드에서 [`Self::client_purchases`]를 실행한다 (수집 응답을 늦추지 않기 위해).
-    pub fn spawn_client_purchases(self: &std::sync::Arc<Self>, events: &[Event]) {
+    /// 동시 작업은 [`CLIENT_CONCURRENCY`]개까지이고, 넘치면 버리고 `client_dropped`로 센다
+    /// (클라이언트 주문은 원래 "유실 가능" 기준이다, §5.3).
+    pub fn spawn_client_purchases(self: &Arc<Self>, events: &[Event]) {
         let purchases: Vec<Event> = events
             .iter()
             .filter(|e| e.event_name == analytics_core::orders::PURCHASE_EVENT)
@@ -186,11 +261,20 @@ impl OrderService {
         if purchases.is_empty() {
             return;
         }
+        let Ok(permit) = self.client_permits.clone().try_acquire_owned() else {
+            self.metrics
+                .client_dropped
+                .fetch_add(purchases.len() as u64, Relaxed);
+            tracing::warn!(
+                n = purchases.len(),
+                "클라이언트 purchase 투영 작업이 가득 차 버림"
+            );
+            return;
+        };
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.client_purchases(&purchases).await {
-                tracing::error!(error = %e, "클라이언트 purchase 주문 투영 실패");
-            }
+            let _permit = permit;
+            svc.client_purchases(&purchases).await;
         });
     }
 }

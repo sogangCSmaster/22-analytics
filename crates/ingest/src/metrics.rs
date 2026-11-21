@@ -22,6 +22,18 @@ pub async fn handler(State(s): State<crate::AppState>) -> String {
         ("ingest_rows_inserted_total", &m.rows_inserted),
         ("ingest_insert_errors_total", &m.insert_errors),
         ("ingest_archive_errors_total", &m.archive_errors),
+        (
+            "ingest_client_purchases_dropped_total",
+            &s.orders.metrics.client_dropped,
+        ),
+        (
+            "ingest_client_purchases_failed_total",
+            &s.orders.metrics.client_failed,
+        ),
+        (
+            "ingest_client_purchases_capped_total",
+            &s.orders.metrics.client_capped,
+        ),
     ] {
         let _ = writeln!(out, "# TYPE {name} counter\n{name} {}", v.load(Relaxed));
     }

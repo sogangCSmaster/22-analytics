@@ -317,7 +317,12 @@ Idempotency-Key: <선택. 없으면 order_id + event_type + 금액으로 계산>
 
 ### 5.3 S2S가 없는 프로젝트
 
-`client_purchase_as_order = on`이면 트래커의 `purchase` 이벤트(`order_id` 필수)를 `source='client'`인 주문으로 투영합니다. 같은 `order_id`의 S2S 주문이 들어오면 S2S가 우선합니다. 대시보드에는 **"클라이언트 기준: 유실 가능"** 배지를 표시합니다(FIM-04).
+`client_purchase_as_order = on`이면 트래커의 `purchase` 이벤트(`order_id` 필수)를 `source='client'`인 주문으로 투영합니다. 같은 `order_id`의 S2S 주문이 들어오면 S2S가 우선합니다.
+
+- 공개 키(`pk_`)만 있으면 누구나 `purchase`를 보낼 수 있으므로, 클라이언트 주문은 **첫 확정**의 금액·식별자를
+  씁니다(S2S는 가장 늦은 확정이 정정으로 이깁니다). 주문당 클라이언트 이벤트는 50건까지만 받습니다.
+- 투영은 수집 응답을 늦추지 않도록 백그라운드에서 하며, 동시 작업은 64개까지입니다. 넘치면 버리고
+  `ingest_client_purchases_dropped_total`로 셉니다(실패·상한 초과는 `_failed_total`, `_capped_total`). 대시보드에는 **"클라이언트 기준: 유실 가능"** 배지를 표시합니다(FIM-04).
 
 ---
 
