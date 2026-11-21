@@ -4,6 +4,7 @@ use crate::api::ApiResult;
 use crate::logic::dates::{DateRange, Day};
 use crate::logic::errors::ApiError;
 use crate::logic::prefs::{self, Prefs, Selection};
+use crate::logic::view::ToastState;
 use crate::platform;
 use analytics_core::dto::admin::{MeResponse, Role};
 use dioxus::prelude::*;
@@ -12,31 +13,41 @@ use dioxus::prelude::*;
 pub struct AppCtx {
     pub me: Signal<Option<MeResponse>>,
     pub prefs: Signal<Prefs>,
-    pub toast: Signal<Option<String>>,
+    pub toast: Signal<ToastState>,
+    /// 기간·비교는 설정 전체가 아니라 각자 값이 바뀔 때만 알린다.
+    /// (비교 토글·최근 프로젝트 기록이 모든 리포트를 다시 부르지 않게)
+    range: Memo<DateRange>,
+    compare: Memo<bool>,
 }
 
 impl AppCtx {
     pub fn provide() -> AppCtx {
-        let prefs = Prefs::decode(platform::storage_get(prefs::STORAGE_KEY).as_deref());
-        let ctx = AppCtx {
-            me: Signal::new(None),
-            prefs: Signal::new(prefs),
-            toast: Signal::new(None),
-        };
-        use_context_provider(|| ctx)
+        let prefs =
+            use_signal(|| Prefs::decode(platform::storage_get(prefs::STORAGE_KEY).as_deref()));
+        let range = use_memo(move || prefs.read().range(Self::today()));
+        let compare = use_memo(move || prefs.read().compare);
+        let me = use_signal(|| None);
+        let toast = use_signal(ToastState::default);
+        use_context_provider(|| AppCtx {
+            me,
+            prefs,
+            toast,
+            range,
+            compare,
+        })
     }
 
     pub fn today() -> Day {
         Day::seoul_today(platform::now_ms())
     }
 
-    /// 현재 기간 (구독: 기간이 바뀌면 다시 읽는 곳이 갱신된다).
+    /// 현재 기간 (구독: 기간이 바뀔 때만 다시 읽는 곳이 갱신된다).
     pub fn range(&self) -> DateRange {
-        self.prefs.read().range(Self::today())
+        (self.range)()
     }
 
     pub fn compare(&self) -> bool {
-        self.prefs.read().compare
+        (self.compare)()
     }
 
     pub fn update_prefs(&mut self, f: impl FnOnce(&mut Prefs)) {
@@ -67,7 +78,9 @@ impl AppCtx {
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
-        self.toast.set(Some(msg.into()));
+        self.toast.with_mut(|t| {
+            t.show(msg.into());
+        });
     }
 
     /// 변경 요청 결과를 알림으로 보여주고 성공 여부를 돌려준다.

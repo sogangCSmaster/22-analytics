@@ -7,6 +7,7 @@ use crate::components::ui::{
 };
 use crate::format;
 use crate::logic::table::{Sort, cmp_text, sort_rows};
+use crate::logic::view::{is_activation_key, scoped};
 use crate::logic::{labels, query};
 use crate::platform::sleep_ms;
 use crate::state::use_app;
@@ -40,7 +41,8 @@ enum Col {
 pub fn Events(pid: ReadSignal<i32>) -> Element {
     let ctx = use_app();
     let sort = use_signal(|| Sort::desc(Col::Count));
-    let mut selected = use_signal(|| None::<String>);
+    // 고른 이벤트는 프로젝트에 묶는다 (프로젝트를 바꾸면 패널이 닫힌다)
+    let mut selected = use_signal(|| None::<(i32, String)>);
     let res = use_resource(move || {
         let (p, r) = (pid(), ctx.range());
         async move { api::get::<Vec<EventCountRow>>(&query::events(p, r, LIMIT)).await }
@@ -83,11 +85,14 @@ pub fn Events(pid: ReadSignal<i32>) -> Element {
                                         tabindex: "0",
                                         onclick: {
                                             let n = r.event_name.clone();
-                                            move |_| selected.set(Some(n.clone()))
+                                            move |_| selected.set(Some((pid(), n.clone())))
                                         },
                                         onkeydown: {
                                             let n = r.event_name.clone();
-                                            move |e: KeyboardEvent| if e.key() == Key::Enter { selected.set(Some(n.clone())) }
+                                            move |e: KeyboardEvent| if is_activation_key(&e.key()) {
+                                                e.prevent_default();
+                                                selected.set(Some((pid(), n.clone())));
+                                            }
                                         },
                                         td {
                                             div { class: "cell-title mono", "{r.event_name}" }
@@ -106,29 +111,41 @@ pub fn Events(pid: ReadSignal<i32>) -> Element {
                 }
             })}
         }
-        if let Some(name) = selected() {
+        if let Some(name) = scoped(&selected(), &pid()) {
             PropertyDrawer { pid: pid(), event: name, onclose: move |_| selected.set(None) }
         }
     }
 }
 
 #[component]
-fn PropertyDrawer(pid: i32, event: String, onclose: EventHandler<()>) -> Element {
+fn PropertyDrawer(
+    pid: ReadSignal<i32>,
+    event: ReadSignal<String>,
+    onclose: EventHandler<()>,
+) -> Element {
     let ctx = use_app();
-    let first = suggested_props(&event)[0].to_string();
-    let mut key = use_signal(|| first);
-    let ev = event.clone();
+    // 속성 이름은 이벤트에 묶는다: 다른 이벤트를 고르면 그 이벤트의 추천 속성으로 돌아간다.
+    let mut key = use_signal(|| None::<(String, String)>);
+    let event_sig = event;
+    let current_key = move |ev: &str| {
+        scoped(&key(), &ev.to_string()).unwrap_or_else(|| suggested_props(ev)[0].to_string())
+    };
+    let mut set_key = move |k: String| key.set(Some((event_sig(), k)));
     let res = use_resource(move || {
-        let (k, r, ev) = (key(), ctx.range(), ev.clone());
+        let ev = event_sig();
+        let k = current_key(&ev);
+        let (p, r) = (pid(), ctx.range());
         async move {
             let k = k.trim().to_string();
             if k.is_empty() {
                 return Ok(vec![]);
             }
             sleep_ms(250).await;
-            api::get::<Vec<PropertyValueRow>>(&query::event_property(pid, &ev, &k, r, 20)).await
+            api::get::<Vec<PropertyValueRow>>(&query::event_property(p, &ev, &k, r, 20)).await
         }
     });
+    let event = event_sig();
+    let cur_key = current_key(&event);
     rsx! {
         Drawer { open: true, title: event.clone(), onclose: move |_| onclose.call(()),
             if let Some(h) = labels::event_hint(&event) {
@@ -139,17 +156,18 @@ fn PropertyDrawer(pid: i32, event: String, onclose: EventHandler<()>) -> Element
                     "속성 이름"
                     input {
                         class: "input",
-                        value: "{key}",
+                        value: "{cur_key}",
                         placeholder: "예: item_id",
-                        oninput: move |e| key.set(e.value()),
+                        oninput: move |e| set_key(e.value()),
                     }
                 }
                 div { class: "chips",
                     for s in suggested_props(&event) {
                         button {
                             key: "{s}",
-                            class: if key() == *s { "chip on" } else { "chip" },
-                            onclick: move |_| key.set(s.to_string()),
+                            class: if cur_key == *s { "chip on" } else { "chip" },
+                            aria_pressed: if cur_key == *s { "true" } else { "false" },
+                            onclick: move |_| set_key(s.to_string()),
                             "{s}"
                         }
                     }

@@ -10,10 +10,12 @@ use dioxus::prelude::*;
 
 /// `next`는 같은 사이트 안의 경로만 허용한다 (오픈 리다이렉트 방지).
 pub fn safe_next(next: &str) -> Option<String> {
+    // 역슬래시·제어 문자는 어디에 있든 거부한다 (브라우저가 `\`를 `/`로 바꾸거나 탭·줄바꿈을 지워
+    // `//evil.com`이 되는 경우를 막는다).
     let ok = next.starts_with('/')
         && !next.starts_with("//")
-        && !next.starts_with("/\\")
-        && !next.starts_with("/login");
+        && !next.starts_with("/login")
+        && !next.chars().any(|c| c == '\\' || c.is_control());
     ok.then(|| next.to_owned())
 }
 
@@ -23,8 +25,10 @@ pub const COOKIE_BLOCKED: &str = "로그인은 됐지만 브라우저가 로그�
 /// 로그인 직후 `/v1/auth/me` 확인 결과 → 계속 진행할지, 보여줄 오류.
 /// 401이면 쿠키가 저장되지 않은 것이다. 그 밖의 오류(네트워크 등)는 판단할 수 없으니 진행한다.
 pub fn session_check(r: &crate::api::ApiResult<MeResponse>) -> Result<(), &'static str> {
-    let _ = r;
-    unimplemented!()
+    match r {
+        Err(crate::logic::errors::ApiError::Unauthorized) => Err(COOKIE_BLOCKED),
+        _ => Ok(()),
+    }
 }
 
 #[component]
@@ -58,7 +62,14 @@ pub fn Login(next: String) -> Element {
         spawn(async move {
             match api::send::<_, MeResponse>(Method::Post, LOGIN_PATH, &req).await {
                 Ok(me) => {
-                    ctx.me.set(Some(me));
+                    // 로그인 응답만으로는 쿠키가 저장됐는지 알 수 없다. 쿠키로 한 번 더 확인한다.
+                    let check = api::get::<MeResponse>("/v1/auth/me").await;
+                    if let Err(msg) = session_check(&check) {
+                        error.set(Some(msg.into()));
+                        busy.set(false);
+                        return;
+                    }
+                    ctx.me.set(Some(check.unwrap_or(me)));
                     match safe_next(&next) {
                         Some(p) => {
                             navigator().replace(p);

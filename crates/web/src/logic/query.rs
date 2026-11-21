@@ -66,7 +66,8 @@ impl Query {
     }
 }
 
-/// `base` + `path` (중복 슬래시 없이).
+/// `base` + `path` (중복 슬래시 없이). 브라우저 fetch에서만 쓴다.
+#[cfg(any(target_arch = "wasm32", test))]
 pub fn join(base: &str, path: &str) -> String {
     let b = base.trim_end_matches('/');
     let p = path.trim_start_matches('/');

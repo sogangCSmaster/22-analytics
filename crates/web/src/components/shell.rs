@@ -6,6 +6,7 @@ use crate::components::brand::{BrandLogo, BrandSymbol};
 use crate::components::icon::{Icon, IconName};
 use crate::components::ui::{Button, Size, Skeleton, Toggle, Variant};
 use crate::logic::dates::{Preset, custom_range};
+use crate::logic::view::is_escape;
 use crate::logic::{errors::ApiError, prefs, table::contains_ci};
 use crate::state::{AppCtx, use_app};
 use analytics_core::dto::admin::{MeResponse, Role};
@@ -178,11 +179,22 @@ fn ProjectSwitcher(current: Option<i32>) -> Element {
     };
     let total: usize = tree.iter().map(|(_, ps)| ps.len()).sum();
     rsx! {
-        div { class: "project-switch-wrap",
+        // 바깥을 누르면 닫히도록 투명한 덮개를 깐다 (팝오버보다 아래, 나머지 화면보다 위).
+        if open() {
+            div { class: "pop-backdrop", onclick: move |_| open.set(false) }
+        }
+        div {
+            class: "project-switch-wrap",
+            onkeydown: move |e| {
+                if open() && is_escape(&e.key()) {
+                    e.stop_propagation();
+                    open.set(false);
+                }
+            },
             button {
                 class: "project-switch",
                 aria_haspopup: "listbox",
-                aria_expanded: open(),
+                aria_expanded: if open() { "true" } else { "false" },
                 onclick: move |_| open.toggle(),
                 if let Some((org, name)) = label {
                     span { class: "org", "{org}" }
@@ -294,13 +306,14 @@ fn RangePicker() -> Element {
     let mut err = use_signal(|| None::<&'static str>);
     rsx! {
         div { class: "range-picker",
-            div { class: "segmented", role: "tablist", aria_label: "기간",
+            div { class: "segmented", role: "radiogroup", aria_label: "기간",
                 for p in Preset::ALL {
                     button {
                         key: "{p.label()}",
-                        role: "tab",
+                        r#type: "button",
+                        role: "radio",
                         class: if prefs.preset == p { "on" } else { "" },
-                        aria_selected: prefs.preset == p,
+                        aria_checked: if prefs.preset == p { "true" } else { "false" },
                         onclick: move |_| {
                             if p == Preset::Custom {
                                 let r = ctx.range();

@@ -1,6 +1,7 @@
 //! 실제 매출(중복 소거): 매체 합산 vs 실제 매출 vs 중복률, 모델·lookback 선택, 매체별 기여·ROAS,
 //! 매체 조합 경로, 최근 주문 → 주문 상세(접점 타임라인·모델별 배분) 패널.
 
+use crate::Route;
 use crate::api;
 use crate::components::chart::{BarList, ShareBar};
 use crate::components::ui::{
@@ -8,6 +9,7 @@ use crate::components::ui::{
     SkeletonCards, StatCard, StatStyle, Tone, Variant, copy_to_clipboard, load,
 };
 use crate::format;
+use crate::logic::view::{is_activation_key, pager, scoped};
 use crate::logic::{dates, labels, query};
 use crate::state::use_app;
 use analytics_core::attribution::Model;
@@ -50,8 +52,7 @@ pub fn path_label(channels: &[String]) -> String {
 
 /// 기여 설정을 읽었는데 클릭 인정 기간이 하나도 없으면, 오류 대신 설정으로 안내한다.
 pub fn needs_lookback_setup(settings_ready: bool, lookbacks: &[u8]) -> bool {
-    let _ = (settings_ready, lookbacks);
-    unimplemented!()
+    settings_ready && lookbacks.is_empty()
 }
 
 type SettingsRes = Resource<api::ApiResult<AttributionSettingsDto>>;
@@ -88,8 +89,10 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
     let ctx = use_app();
     let mut model = use_signal(|| None::<Model>);
     let mut lookback = use_signal(|| None::<u8>);
-    let mut offset = use_signal(|| 0u32);
-    let mut order = use_signal(|| None::<String>);
+    // 쪽 번호는 (프로젝트, 기간, lookback)에, 열어 둔 주문은 프로젝트에 묶는다.
+    // 프로젝트·기간을 바꾸면 같은 렌더에서 첫 쪽·닫힌 패널로 돌아간다.
+    let mut offset = use_signal(|| None::<(OrdersKey, u32)>);
+    let mut order = use_signal(|| None::<(i32, String)>);
 
     let settings = use_resource(move || {
         let p = pid();
@@ -116,18 +119,19 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
         }
     });
     let orders = use_resource(move || {
-        let (p, r, (_, lb, _), off) = (
-            pid(),
-            ctx.range(),
-            pick(settings, model, lookback),
-            offset(),
-        );
+        let (p, r, (_, lb, _)) = (pid(), ctx.range(), pick(settings, model, lookback));
+        let off = scoped(&offset(), &(p, r, lb)).unwrap_or(0);
         async move {
             let lb = lb.ok_or(crate::logic::errors::ApiError::NotFound)?;
             api::get::<RecentOrdersReport>(&query::orders(p, r, lb, ORDERS_PAGE, off)).await
         }
     });
     let range = ctx.range();
+    let orders_key: OrdersKey = (pid(), range, cur_lb);
+    let cur_offset = scoped(&offset(), &orders_key).unwrap_or(0);
+    let mut set_offset = move |v: u32| offset.set(Some((orders_key, v)));
+    let cur_order = scoped(&order(), &pid());
+    let mut open_order = move |id: String| order.set(Some((pid(), id)));
 
     rsx! {
         PageHead {
@@ -138,7 +142,7 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                     SegmentedControl {
                         options: lookbacks.iter().map(|d| (*d, format!("{d}일 이내 클릭"))).collect::<Vec<_>>(),
                         value: cur_lb.unwrap_or_default(),
-                        onchange: move |v| { lookback.set(Some(v)); offset.set(0); },
+                        onchange: move |v| lookback.set(Some(v)),
                     }
                 } else if let Some(d) = cur_lb {
                     Badge { "{d}일 이내 클릭 기준" }
@@ -148,6 +152,17 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
 
         if !ready {
             {load(settings, rsx! { SkeletonCards { n: 3 } }, |_| rsx! {})}
+        } else if needs_lookback_setup(ready, &lookbacks) {
+            Card {
+                EmptyState {
+                    icon: crate::components::icon::IconName::Settings,
+                    title: "클릭 인정 기간이 설정되지 않았어요",
+                    desc: "실제 매출은 ‘며칠 이내 클릭’을 기준으로 나눠요. 기여 설정에서 기간(예: 7, 30)을 넣어 주세요.",
+                    action: rsx! {
+                        Link { class: "btn btn-primary", to: Route::Settings { pid: pid(), tab: "attribution".into() }, "기여 설정으로 이동" }
+                    },
+                }
+            }
         } else {
             {load(revenue, rsx! { SkeletonCards { n: 3 } }, |r| rsx! {
                 div { class: "grid grid-3",
@@ -252,8 +267,10 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                 }
                 Card { title: "최근 주문",
                     {load(orders, rsx! { SkeletonBlock { rows: 6 } }, |o| rsx! {
-                        if o.rows.is_empty() {
+                        if o.rows.is_empty() && o.total == 0 {
                             EmptyState { icon: crate::components::icon::IconName::Revenue, title: "이 기간에 주문이 없어요", desc: "주문은 S2S 주문 API로 받은 것만 보여요." }
+                        } else if o.rows.is_empty() {
+                            div { class: "callout", "이 쪽에는 주문이 없어요. 이전 쪽으로 돌아가 보세요." }
                         } else {
                             div { class: "table-wrap",
                                 table { class: "table",
@@ -268,8 +285,14 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                                                 key: "{r.order_id}",
                                                 class: "clickable",
                                                 tabindex: "0",
-                                                onclick: { let id = r.order_id.clone(); move |_| order.set(Some(id.clone())) },
-                                                onkeydown: { let id = r.order_id.clone(); move |e: KeyboardEvent| if e.key() == Key::Enter { order.set(Some(id.clone())) } },
+                                                onclick: { let id = r.order_id.clone(); move |_| open_order(id.clone()) },
+                                                onkeydown: {
+                                                    let id = r.order_id.clone();
+                                                    move |e: KeyboardEvent| if is_activation_key(&e.key()) {
+                                                        e.prevent_default();
+                                                        open_order(id.clone());
+                                                    }
+                                                },
                                                 td {
                                                     div { class: "cell-title mono", "{r.order_id}" }
                                                     div { class: "cell-sub", "{dates::datetime_kr(&r.ordered_at)}" }
@@ -294,10 +317,13 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
                                     }
                                 }
                             }
+                        }
+                        // 현재 쪽이 비어도 전체 건수가 있으면 쪽 넘김을 보여 돌아갈 수 있게 한다.
+                        if let Some(pv) = pager(cur_offset, o.rows.len(), o.total, ORDERS_PAGE) {
                             div { class: "pager",
-                                span { class: "muted", "{offset() + 1}–{offset() as u64 + o.rows.len() as u64} / {format::count(o.total)}건" }
-                                Button { variant: Variant::Ghost, size: Size::Sm, disabled: offset() == 0, onclick: move |_| offset.set(offset().saturating_sub(ORDERS_PAGE)), "이전" }
-                                Button { variant: Variant::Ghost, size: Size::Sm, disabled: (offset() as u64 + ORDERS_PAGE as u64) >= o.total, onclick: move |_| offset.set(offset() + ORDERS_PAGE), "다음" }
+                                span { class: "muted", "{pv.label()}" }
+                                Button { variant: Variant::Ghost, size: Size::Sm, disabled: !pv.has_prev, onclick: move |_| set_offset(cur_offset.saturating_sub(ORDERS_PAGE)), "이전" }
+                                Button { variant: Variant::Ghost, size: Size::Sm, disabled: !pv.has_next, onclick: move |_| set_offset(cur_offset + ORDERS_PAGE), "다음" }
                             }
                         }
                     })}
@@ -305,11 +331,14 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
             }
         }
 
-        if let (Some(id), Some(lb)) = (order(), cur_lb) {
+        if let (Some(id), Some(lb)) = (cur_order, cur_lb) {
             OrderDrawer { pid: pid(), order_id: id, lookback: lb, onclose: move |_| order.set(None) }
         }
     }
 }
+
+/// 최근 주문 쪽 번호를 묶는 맥락: (프로젝트, 기간, lookback)
+type OrdersKey = (i32, dates::DateRange, Option<u8>);
 
 #[component]
 fn ExplainCard(text: String) -> Element {
@@ -334,11 +363,16 @@ fn ExplainCard(text: String) -> Element {
 }
 
 #[component]
-fn OrderDrawer(pid: i32, order_id: String, lookback: u8, onclose: EventHandler<()>) -> Element {
-    let id = order_id.clone();
+fn OrderDrawer(
+    pid: ReadSignal<i32>,
+    order_id: ReadSignal<String>,
+    lookback: ReadSignal<u8>,
+    onclose: EventHandler<()>,
+) -> Element {
+    // 입력을 리소스 안에서 읽어, 다른 주문·lookback으로 바뀌면 다시 불러온다.
     let res = use_resource(move || {
-        let id = id.clone();
-        async move { api::get::<OrderDetail>(&query::order(pid, &id, lookback)).await }
+        let (p, id, lb) = (pid(), order_id(), lookback());
+        async move { api::get::<OrderDetail>(&query::order(p, &id, lb)).await }
     });
     rsx! {
         Drawer { open: true, title: "주문 {order_id}", onclose: move |_| onclose.call(()),

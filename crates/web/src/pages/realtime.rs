@@ -4,39 +4,46 @@ use crate::api;
 use crate::components::chart::{BarList, ColumnChart};
 use crate::components::ui::{Card, EmptyState, ErrorBox, PageHead, SkeletonBlock, SkeletonCards};
 use crate::format;
+use crate::logic::view::{Poller, scoped};
 use crate::logic::{dates, query};
-use crate::platform::sleep_ms;
+use crate::platform::{document_hidden, sleep_ms};
 use analytics_core::dto::reports::RealtimeReport;
 use dioxus::prelude::*;
 
 pub const REFRESH_MS: u32 = 30_000;
+const POLL_TICK_MS: u32 = 1_000;
 
 #[component]
 pub fn Realtime(pid: ReadSignal<i32>) -> Element {
     // 이전 결과를 유지한 채 다시 불러와 화면이 깜빡이지 않게 한다.
-    let mut last = use_signal(|| None::<RealtimeReport>);
+    // 결과는 프로젝트와 함께 기억해, 프로젝트를 바꾸면 이전 프로젝트 숫자를 보여주지 않는다.
+    let mut last = use_signal(|| None::<(i32, RealtimeReport)>);
     let res = use_resource(move || {
         let p = pid();
         async move {
             let r = api::get::<RealtimeReport>(&query::realtime(p)).await;
             if let Ok(v) = &r {
-                last.set(Some(v.clone()));
+                last.set(Some((p, v.clone())));
             }
             r
         }
     });
+    // 1초마다 확인하되, 탭이 숨겨진 동안은 부르지 않고 다시 보이면 바로 새로 고친다.
     use_future(move || async move {
+        let mut poller = Poller::new(REFRESH_MS);
         loop {
-            sleep_ms(REFRESH_MS).await;
-            let mut r = res;
-            r.restart();
+            sleep_ms(POLL_TICK_MS).await;
+            if poller.tick(POLL_TICK_MS, document_hidden()) {
+                let mut r = res;
+                r.restart();
+            }
         }
     });
     let err = match &*res.read() {
         Some(Err(e)) => Some(e.clone()),
         _ => None,
     };
-    let data = last();
+    let data = scoped(&last(), &pid());
 
     rsx! {
         PageHead {

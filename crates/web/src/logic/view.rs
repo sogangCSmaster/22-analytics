@@ -7,8 +7,10 @@ use dioxus::prelude::Key;
 /// 값은 `(저장할 때의 맥락, 값)`으로 들고 있다가, 맥락이 바뀌면 `None`(= 초기 상태)이 된다.
 /// 효과(effect)로 나중에 지우는 방식과 달리, 프로젝트를 바꾼 바로 그 렌더에서 이전 값이 사라진다.
 pub fn scoped<K: PartialEq, V: Clone>(stored: &Option<(K, V)>, key: &K) -> Option<V> {
-    let _ = (stored, key);
-    unimplemented!()
+    stored
+        .as_ref()
+        .filter(|(k, _)| k == key)
+        .map(|(_, v)| v.clone())
 }
 
 /// 목록 아래 쪽 넘김 표시.
@@ -24,14 +26,33 @@ pub struct PagerView {
 
 impl PagerView {
     pub fn label(&self) -> String {
-        unimplemented!()
+        let total = crate::format::count(self.total);
+        if self.from == 0 {
+            format!("이 쪽에는 없어요 · 전체 {total}건")
+        } else {
+            format!("{}–{} / {total}건", self.from, self.to)
+        }
     }
 }
 
 /// 전체 건수가 있으면 (현재 쪽이 비어 있어도) 쪽 넘김을 보여준다.
 pub fn pager(offset: u32, rows: usize, total: u64, page: u32) -> Option<PagerView> {
-    let _ = (offset, rows, total, page);
-    unimplemented!()
+    if total == 0 {
+        return None;
+    }
+    let off = offset as u64;
+    let (from, to) = if rows == 0 {
+        (0, 0)
+    } else {
+        (off + 1, off + rows as u64)
+    };
+    Some(PagerView {
+        from,
+        to,
+        total,
+        has_prev: offset > 0,
+        has_next: off + (page as u64) < total,
+    })
 }
 
 /// 주기적 새로 고침. 탭이 숨겨진 동안은 부르지 않고, 다시 보이면 밀린 새로 고침을 바로 한다.
@@ -51,8 +72,13 @@ impl Poller {
 
     /// `step_ms`만큼 지났을 때 지금 새로 고칠지.
     pub fn tick(&mut self, step_ms: u32, hidden: bool) -> bool {
-        let _ = (step_ms, hidden);
-        unimplemented!()
+        // 숨겨진 동안에도 시간은 쌓아 두었다가, 다시 보이는 첫 틱에 바로 새로 고친다.
+        self.elapsed_ms = self.elapsed_ms.saturating_add(step_ms);
+        if hidden || self.elapsed_ms < self.interval_ms {
+            return false;
+        }
+        self.elapsed_ms = 0;
+        true
     }
 }
 
@@ -66,26 +92,30 @@ pub struct ToastState {
 impl ToastState {
     /// 새 알림을 띄우고 그 세대를 돌려준다.
     pub fn show(&mut self, msg: String) -> u64 {
-        let _ = msg;
-        unimplemented!()
+        self.generation = self.generation.wrapping_add(1);
+        self.message = Some(msg);
+        self.generation
     }
 
     /// `generation` 세대의 알림이 아직 떠 있으면 닫는다.
     pub fn expire(&mut self, generation: u64) {
-        let _ = generation;
-        unimplemented!()
+        if self.generation == generation {
+            self.message = None;
+        }
     }
 }
 
 /// 버튼처럼 동작하는 행(tr)에서 실행 키인지 (Enter, Space)
 pub fn is_activation_key(k: &Key) -> bool {
-    let _ = k;
-    unimplemented!()
+    match k {
+        Key::Enter => true,
+        Key::Character(c) => c == " ",
+        _ => false,
+    }
 }
 
 pub fn is_escape(k: &Key) -> bool {
-    let _ = k;
-    unimplemented!()
+    matches!(k, Key::Escape)
 }
 
 #[cfg(test)]

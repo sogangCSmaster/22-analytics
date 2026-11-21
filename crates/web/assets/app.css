@@ -18,7 +18,9 @@
 .sidebar { overflow-y: auto; }
 .nav-icon { width: 18px; text-align: center; font-size: 13px; opacity: .7; }
 .nav a.active .nav-icon { opacity: 1; }
-.project-switch-wrap { position: relative; }
+.project-switch-wrap { position: relative; z-index: 15; }
+.pop-backdrop { position: fixed; inset: 0; z-index: 14; }
+.drawer:focus { outline: none; }
 .project-switch { width: 100%; border: 0; text-align: left; font: inherit; color: inherit; position: relative; padding-right: 32px; }
 .project-switch:hover { background: var(--line); }
 .project-switch .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

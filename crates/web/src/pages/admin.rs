@@ -6,6 +6,7 @@ use crate::components::ui::{
     SkeletonBlock, TextArea, TextField, Tone, Variant, load,
 };
 use crate::logic::table::contains_ci;
+use crate::logic::view::is_activation_key;
 use crate::logic::{dates, labels, query, validate};
 use crate::state::use_app;
 use analytics_core::dto::admin::{
@@ -18,8 +19,10 @@ use dioxus::prelude::*;
 /// 멤버 추가 실패 문구. 403은 계정이 없거나 다른 광고주 소속이라는 뜻이라 따로 안내하고,
 /// 409(마지막 관리자 등)는 서버 설명을 그대로 보여준다.
 pub fn member_error_message(e: &crate::logic::errors::ApiError) -> String {
-    let _ = e;
-    unimplemented!()
+    match e {
+        crate::logic::errors::ApiError::Forbidden => "이 이메일은 추가할 수 없어요. 계정이 없거나 다른 광고주 소속이면 대행사 관리자에게 요청하세요".into(),
+        e => e.message(),
+    }
 }
 
 /// 멤버 변경이 나 자신에게 해당하는지 (내보내기·역할 변경).
@@ -30,8 +33,17 @@ pub enum MemberChange<'a> {
 }
 
 pub fn affects_me(me: &UserDto, change: MemberChange<'_>) -> bool {
-    let _ = (me, change);
-    unimplemented!()
+    match change {
+        MemberChange::Remove(uid) => uid == me.id,
+        MemberChange::Upsert(email) => email.trim().eq_ignore_ascii_case(me.email.trim()),
+    }
+}
+
+fn is_me(ctx: crate::state::AppCtx, change: MemberChange<'_>) -> bool {
+    ctx.me
+        .peek()
+        .as_ref()
+        .is_some_and(|m| affects_me(&m.user, change))
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -131,6 +143,13 @@ fn OrgsTab(sup: bool) -> Element {
                                             class: "clickable",
                                             tabindex: "0",
                                             onclick: { let o = o.clone(); move |_| open.set(Some(o.clone())) },
+                                            onkeydown: {
+                                                let o = o.clone();
+                                                move |e: KeyboardEvent| if is_activation_key(&e.key()) {
+                                                    e.prevent_default();
+                                                    open.set(Some(o.clone()));
+                                                }
+                                            },
                                             td {
                                                 div { class: "cell-title", "{o.name}" }
                                                 if !o.memo.is_empty() { div { class: "cell-sub", "{o.memo}" } }
@@ -199,6 +218,7 @@ fn OrgDrawer(org: OrgDto, onclose: EventHandler<bool>) -> Element {
             Err(e) => return ferr.set(Some(e.into())),
         };
         ferr.set(None);
+        let is_me = is_me(ctx, MemberChange::Upsert(&e));
         spawn(async move {
             let r = api::send::<_, MemberDto>(
                 Method::Post,
@@ -209,9 +229,20 @@ fn OrgDrawer(org: OrgDto, onclose: EventHandler<bool>) -> Element {
                 },
             )
             .await;
-            if ctx.report(&r, "멤버를 추가했어요") {
-                m_email.set(String::new());
-                members.restart();
+            match r {
+                Ok(_) => {
+                    ctx.notify("멤버를 추가했어요");
+                    changed.set(true);
+                    m_email.set(String::new());
+                    members.restart();
+                    if is_me {
+                        // 내 역할을 바꿨으면 권한이 달라졌으니 내 정보부터 다시 읽고 패널을 닫는다.
+                        refresh_me(ctx).await;
+                        onclose.call(true);
+                    }
+                }
+                Err(crate::logic::errors::ApiError::Unauthorized) => {}
+                Err(e) => ferr.set(Some(member_error_message(&e))),
             }
         });
     };
@@ -326,10 +357,21 @@ fn OrgDrawer(org: OrgDto, onclose: EventHandler<bool>) -> Element {
                                             confirm: "이 광고주에서 뺄까요?",
                                             onconfirm: {
                                                 let uid = m.user_id;
-                                                move |_| { spawn(async move {
-                                                    let r = api::send_empty(Method::Delete, &format!("/v1/orgs/{id}/members/{uid}")).await;
-                                                    if ctx.report(&r, "멤버를 뺐어요") { members.restart(); }
-                                                }); }
+                                                move |_| {
+                                                    let me_out = is_me(ctx, MemberChange::Remove(uid));
+                                                    spawn(async move {
+                                                        let r = api::send_empty(Method::Delete, &format!("/v1/orgs/{id}/members/{uid}")).await;
+                                                        if ctx.report(&r, "멤버를 뺐어요") {
+                                                            changed.set(true);
+                                                            members.restart();
+                                                            if me_out {
+                                                                // 나를 뺐으면 이 광고주를 더는 관리할 수 없다.
+                                                                refresh_me(ctx).await;
+                                                                onclose.call(true);
+                                                            }
+                                                        }
+                                                    });
+                                                }
                                             },
                                         }
                                     }

@@ -5,8 +5,9 @@
 use crate::Route;
 use crate::api::{self, Method};
 use crate::components::ui::{
-    Badge, Button, Card, CodeBlock, ConfirmButton, Drawer, EmptyState, SegmentedControl, Size,
-    SkeletonBlock, TextArea, TextField, ToggleRow, Tone, Variant, copy_to_clipboard, load,
+    Badge, Button, Card, CodeBlock, ConfirmButton, Drawer, EmptyState, ProjectScope,
+    SegmentedControl, Size, SkeletonBlock, TextArea, TextField, ToggleRow, Tone, Variant,
+    copy_to_clipboard, load,
 };
 use crate::format;
 use crate::logic::validate::{self, RuleForm};
@@ -100,13 +101,18 @@ pub fn Settings(pid: ReadSignal<i32>, tab: ReadSignal<String>) -> Element {
         if !can_edit && t != Tab::Install {
             div { class: "callout", "보기 권한이라 설정을 바꿀 수 없어요. 변경이 필요하면 대행사 담당자에게 요청하세요." }
         }
-        match t {
-            Tab::Install => rsx! { InstallTab { pid: p, is_admin: role == Some(Role::Admin) } },
-            Tab::Tracking => rsx! { TrackingTab { pid: p, can_edit } },
-            Tab::Origins => rsx! { OriginsTab { pid: p, can_edit } },
-            Tab::Rules => rsx! { RulesTab { pid: p, can_edit } },
-            Tab::Attribution => rsx! { AttributionTab { pid: p, can_edit } },
-            Tab::Spend => rsx! { SpendTab { pid: p, can_edit } },
+        // 프로젝트를 바꾸면 이 화면은 그대로 남고 pid만 바뀐다. 탭을 프로젝트별로 새로 만들어
+        // 이전 프로젝트의 설정 초안·비밀 키·편집 중인 규칙이 다음 프로젝트로 넘어가지 않게 한다
+        // (저장·폐기 요청도 새 프로젝트로 불러온 값으로만 보낸다).
+        ProjectScope { pid: p,
+            match t {
+                Tab::Install => rsx! { InstallTab { pid: p, is_admin: role == Some(Role::Admin) } },
+                Tab::Tracking => rsx! { TrackingTab { pid: p, can_edit } },
+                Tab::Origins => rsx! { OriginsTab { pid: p, can_edit } },
+                Tab::Rules => rsx! { RulesTab { pid: p, can_edit } },
+                Tab::Attribution => rsx! { AttributionTab { pid: p, can_edit } },
+                Tab::Spend => rsx! { SpendTab { pid: p, can_edit } },
+            }
         }
     }
 }

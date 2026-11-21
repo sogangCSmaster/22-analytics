@@ -171,15 +171,19 @@ pub fn SegmentedControl<T: Clone + PartialEq + 'static>(
     options: Vec<(T, String)>,
     value: T,
     onchange: EventHandler<T>,
+    /// 그룹 이름 (스크린리더)
+    aria_label: Option<String>,
 ) -> Element {
     rsx! {
-        div { class: "segmented", role: "tablist",
+        // 패널을 바꾸는 탭이 아니라 값 하나를 고르는 컨트롤이라 라디오 그룹으로 읽힌다.
+        div { class: "segmented", role: "radiogroup", aria_label,
             for (v, label) in options {
                 button {
                     key: "{label}",
+                    r#type: "button",
                     class: if v == value { "on" } else { "" },
-                    role: "tab",
-                    aria_selected: v == value,
+                    role: "radio",
+                    aria_checked: if v == value { "true" } else { "false" },
                     onclick: {
                         let v = v.clone();
                         move |_| onchange.call(v.clone())
@@ -281,7 +285,7 @@ pub fn EmptyState(
 ) -> Element {
     rsx! {
         div { class: "empty",
-            div { class: "empty-icon", crate::components::icon::Icon { name: icon, size: 26 } }
+            div { class: "empty-icon", aria_hidden: "true", crate::components::icon::Icon { name: icon, size: 26 } }
             div { class: "empty-title", "{title}" }
             div { class: "empty-desc", "{desc}" }
             if let Some(a) = action {
@@ -355,11 +359,49 @@ pub fn Drawer(open: bool, title: String, onclose: EventHandler<()>, children: El
     if !open {
         return rsx! {};
     }
+    rsx! { DrawerPanel { title, onclose, children } }
+}
+
+static DRAWER_SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 열려 있는 동안만 존재하는 패널 본체 (열 때 포커스를 옮기고, 닫히며 원래 자리로 돌려준다).
+#[component]
+fn DrawerPanel(title: String, onclose: EventHandler<()>, children: Element) -> Element {
+    let title_id = use_hook(|| {
+        let n = DRAWER_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("drawer-title-{n}")
+    });
+    // 패널을 연 요소(표의 행 등)를 기억해 둔다. 아직 그려지기 전이라 포커스는 그 요소에 있다.
+    use_hook(|| {
+        let _ = document::eval(
+            "(window.__drawerReturn = window.__drawerReturn || []).push(document.activeElement);",
+        );
+    });
+    use_drop(|| {
+        let _ = document::eval(
+            "const el = (window.__drawerReturn || []).pop();
+             if (el && el.isConnected && typeof el.focus === 'function') el.focus();",
+        );
+    });
     rsx! {
         div { class: "drawer-backdrop", onclick: move |_| onclose.call(()) }
-        aside { class: "drawer", role: "dialog", aria_modal: true,
+        aside {
+            class: "drawer",
+            role: "dialog",
+            aria_modal: "true",
+            aria_labelledby: "{title_id}",
+            tabindex: "-1",
+            onmounted: move |e| async move {
+                let _ = e.set_focus(true).await;
+            },
+            onkeydown: move |e| {
+                if crate::logic::view::is_escape(&e.key()) {
+                    e.stop_propagation();
+                    onclose.call(());
+                }
+            },
             div { class: "drawer-head",
-                div { class: "drawer-title", "{title}" }
+                div { id: "{title_id}", class: "drawer-title", "{title}" }
                 button { class: "icon-btn", aria_label: "닫기", onclick: move |_| onclose.call(()), "✕" }
             }
             div { class: "drawer-body", {children} }
@@ -373,8 +415,13 @@ pub fn Drawer(open: bool, title: String, onclose: EventHandler<()>, children: El
 /// 펼친 비밀 키)가 이전 프로젝트 것으로 남는다. 키를 프로젝트로 묶어 다시 만들게 한다.
 #[component]
 pub fn ProjectScope(pid: i32, children: Element) -> Element {
-    let _ = pid;
-    rsx! { {children} }
+    // 키가 붙은 형제 목록에서만 키를 비교하므로, 원소 하나짜리 목록으로 감싼다.
+    // 키가 바뀌면 이전 자식은 내려가고(spawn한 작업도 함께 취소) 새로 만들어진다.
+    rsx! {
+        for p in std::iter::once(pid) {
+            Fragment { key: "{p}", {children.clone()} }
+        }
+    }
 }
 
 pub use crate::platform::sleep_ms;
@@ -395,11 +442,24 @@ pub fn load<T: Clone + 'static>(
     f: impl FnOnce(T) -> Element,
 ) -> Element {
     let state = res.read().clone();
+    load_state(state, skeleton, f, move || {
+        let mut r = res;
+        r.restart();
+    })
+}
+
+/// [`load`]와 같지만 여러 리소스를 합친 상태처럼 리소스가 아닌 값을 그린다.
+pub fn load_state<T>(
+    state: Option<crate::api::ApiResult<T>>,
+    skeleton: Element,
+    f: impl FnOnce(T) -> Element,
+    mut retry: impl FnMut() + 'static,
+) -> Element {
     match state {
         None => skeleton,
         Some(Ok(v)) => f(v),
         Some(Err(e)) => {
-            rsx! { ErrorBox { error: e, onretry: move |_| { let mut r = res; r.restart(); } } }
+            rsx! { ErrorBox { error: e, onretry: move |_| retry() } }
         }
     }
 }
@@ -563,16 +623,20 @@ pub fn ConfirmButton(
     }
 }
 
-/// 전역 알림: 3초 뒤 사라진다.
+/// 전역 알림: 3초 뒤 사라진다. 그 사이 새 알림이 오면 새 알림이 3초를 온전히 보인다.
 #[component]
 pub fn ToastHost() -> Element {
     let mut ctx = crate::state::use_app();
-    let msg = ctx.toast.read().clone();
+    let msg = ctx.toast.read().message.clone();
     use_effect(move || {
-        if ctx.toast.read().is_some() {
+        let (has, generation) = {
+            let t = ctx.toast.read();
+            (t.message.is_some(), t.generation)
+        };
+        if has {
             spawn(async move {
                 sleep_ms(3000).await;
-                ctx.toast.set(None);
+                ctx.toast.with_mut(|t| t.expire(generation));
             });
         }
     });

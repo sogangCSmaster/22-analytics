@@ -24,6 +24,13 @@ mod imp {
         gloo_timers::future::TimeoutFuture::new(ms).await;
     }
 
+    /// 탭이 숨겨져 있는지 (다른 탭·최소화). 알 수 없으면 보이는 것으로 본다.
+    pub fn document_hidden() -> bool {
+        web_sys::window()
+            .and_then(|w| w.document())
+            .is_some_and(|d| d.hidden())
+    }
+
     /// 현재 경로 + 쿼리 (`/p/1/pages?x=1`)
     pub fn current_path() -> String {
         web_sys::window()
@@ -63,6 +70,11 @@ mod imp {
     pub fn storage_set(_key: &str, _value: &str) {}
 
     pub async fn sleep_ms(_ms: u32) {}
+
+    #[allow(dead_code)]
+    pub fn document_hidden() -> bool {
+        false
+    }
 
     #[allow(dead_code)]
     pub fn current_path() -> String {

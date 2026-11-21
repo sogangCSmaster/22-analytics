@@ -5,6 +5,7 @@ use crate::api;
 use crate::components::chart::{BarList, LineChart, Series, ShareBar};
 use crate::components::ui::{
     Card, EmptyState, SegmentedControl, SkeletonBlock, SkeletonCards, StatCard, StatStyle, load,
+    load_state,
 };
 use crate::format;
 use crate::logic::dates::Day;
@@ -62,25 +63,27 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
         let (p, r) = (pid(), ctx.range());
         async move { api::get::<OverviewReport>(&query::report(p, Report::Overview, r)).await }
     });
-    let series = use_resource(move || {
+    // 선택 기간과 이전 기간 추이는 따로(동시에) 부른다. 비교를 켜고 끌 때는 이전 기간만 다시 부른다.
+    let cur_series = use_resource(move || {
+        let (p, r) = (pid(), ctx.range());
+        async move { api::get::<TimeseriesReport>(&query::report(p, Report::Timeseries, r)).await }
+    });
+    let prev_series = use_resource(move || {
         let (p, r, cmp) = (pid(), ctx.range(), ctx.compare());
         async move {
-            let cur =
-                api::get::<TimeseriesReport>(&query::report(p, Report::Timeseries, r)).await?;
-            let prev = if cmp {
-                Some(
-                    api::get::<TimeseriesReport>(&query::report(
-                        p,
-                        Report::Timeseries,
-                        r.previous(),
-                    ))
-                    .await?,
-                )
-            } else {
-                None
-            };
-            Ok((cur, prev))
+            if !cmp {
+                return Ok(None);
+            }
+            api::get::<TimeseriesReport>(&query::report(p, Report::Timeseries, r.previous()))
+                .await
+                .map(Some)
         }
+    });
+    // 두 결과를 합쳐 기존처럼 (현재, 이전)으로 그린다. 하나라도 로딩 중이면 로딩, 오류면 오류.
+    let series = use_memo(move || {
+        let cur = cur_series.read().clone()?;
+        let prev = prev_series.read().clone()?;
+        Some(cur.and_then(|c| prev.map(|p| (c, p))))
     });
     let channels = use_resource(move || {
         let (p, r) = (pid(), ctx.range());
@@ -153,7 +156,7 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                     onchange: move |m| metric.set(m),
                 }
             },
-            {load(series, rsx! { SkeletonBlock { chart: true } }, |(cur, prev)| {
+            {load_state(series(), rsx! { SkeletonBlock { chart: true } }, |(cur, prev)| {
                 let m = metric();
                 let days: Vec<Day> = cur.points.iter().filter_map(|p| Day::parse(&p.date)).collect();
                 let mut s = vec![Series { name: format!("{} (선택 기간)", m.label()), values: cur.points.iter().map(|p| m.of(p)).collect(), muted: false }];
@@ -173,6 +176,10 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
                         }
                     }
                 }
+            }, move || {
+                let (mut c, mut p) = (cur_series, prev_series);
+                c.restart();
+                p.restart();
             })}
         }
 
