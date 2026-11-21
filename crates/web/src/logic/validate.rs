@@ -76,11 +76,16 @@ pub fn origin(s: &str) -> Result<String, &'static str> {
     }
     let label_ok = |l: &&str| {
         (1..=63).contains(&l.len())
-            && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && l.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
             && !l.starts_with('-')
             && !l.ends_with('-')
     };
-    if labels.iter().all(label_ok) { Ok(t) } else { bad }
+    if labels.iter().all(label_ok) {
+        Ok(t)
+    } else {
+        bad
+    }
 }
 
 /// 쉼표·줄바꿈 구분 목록: 공백 제거, 빈 값 제거, 중복 제거 (순서 유지).
@@ -103,9 +108,13 @@ pub fn param_list(s: &str) -> Result<Vec<String>, String> {
     }
     for p in &list {
         let ok = p.len() <= 100
-            && p.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'[' | b']'));
+            && p.bytes().all(|b| {
+                b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'[' | b']')
+            });
         if !ok {
-            return Err(format!("'{p}': 파라미터 이름은 영문·숫자·_-.[] 만 쓸 수 있습니다"));
+            return Err(format!(
+                "'{p}': 파라미터 이름은 영문·숫자·_-.[] 만 쓸 수 있습니다"
+            ));
         }
     }
     Ok(list)
@@ -218,7 +227,17 @@ mod tests {
     #[test]
     fn emails() {
         assert_eq!(email(" Admin@Example.com "), Ok("admin@example.com".into()));
-        for bad in ["", "a", "a@b", "@b.com", "a@.com", "a@b.com.", "a b@c.com", "a@b..com", "a@b@c.com"] {
+        for bad in [
+            "",
+            "a",
+            "a@b",
+            "@b.com",
+            "a@.com",
+            "a@b.com.",
+            "a b@c.com",
+            "a@b..com",
+            "a@b@c.com",
+        ] {
             assert!(email(bad).is_err(), "{bad}");
         }
     }
@@ -243,10 +262,23 @@ mod tests {
     #[test]
     fn origins() {
         assert_eq!(origin("shop.client.com"), Ok("shop.client.com".into()));
-        assert_eq!(origin(" https://Shop.Client.com/path?x=1 "), Ok("shop.client.com".into()));
+        assert_eq!(
+            origin(" https://Shop.Client.com/path?x=1 "),
+            Ok("shop.client.com".into())
+        );
         assert_eq!(origin("http://localhost"), Ok("localhost".into()));
         assert_eq!(origin("client.com."), Ok("client.com".into()));
-        for bad in ["", "client", "*.client.com", "client.com:8080", "a b.com", "<script>.com", "-a.com", "a..com", "user@client.com"] {
+        for bad in [
+            "",
+            "client",
+            "*.client.com",
+            "client.com:8080",
+            "a b.com",
+            "<script>.com",
+            "-a.com",
+            "a..com",
+            "user@client.com",
+        ] {
             assert!(origin(bad).is_err(), "{bad}");
         }
     }
@@ -255,14 +287,21 @@ mod tests {
     fn lists() {
         assert_eq!(split_list(" a, b\n\nc ,a,"), vec!["a", "b", "c"]);
         assert!(split_list("  ").is_empty());
-        assert_eq!(param_list("gclid, fbclid"), Ok(vec!["gclid".into(), "fbclid".into()]));
+        assert_eq!(
+            param_list("gclid, fbclid"),
+            Ok(vec!["gclid".into(), "fbclid".into()])
+        );
         assert!(param_list("utm source").is_err());
         assert!(param_list("a=b").is_err());
     }
 
     #[test]
     fn rules() {
-        let mut f = RuleForm { channel: "naver_shopping".into(), utm_source: "naver, NAVER2".into(), ..Default::default() };
+        let mut f = RuleForm {
+            channel: "naver_shopping".into(),
+            utm_source: "naver, NAVER2".into(),
+            ..Default::default()
+        };
         let r = rule(&f).unwrap();
         assert_eq!(r.channel, "naver_shopping");
         assert_eq!(r.when.utm_source, vec!["naver", "NAVER2"]);
@@ -297,7 +336,14 @@ mod tests {
     fn csv_check() {
         let ok = "day,channel,campaign,amount\n2026-11-01,meta,brand,10000\n";
         assert_eq!(ad_spend_csv("spend.csv", 100, ok), Ok(1));
-        assert_eq!(ad_spend_csv("spend.CSV", 100, "2026-11-01,meta,brand,1\n\n2026-11-02,meta,brand,1"), Ok(2));
+        assert_eq!(
+            ad_spend_csv(
+                "spend.CSV",
+                100,
+                "2026-11-01,meta,brand,1\n\n2026-11-02,meta,brand,1"
+            ),
+            Ok(2)
+        );
         assert!(ad_spend_csv("spend.xlsx", 100, ok).is_err());
         assert!(ad_spend_csv("spend.csv", MAX_CSV_BYTES + 1, ok).is_err());
         assert!(ad_spend_csv("spend.csv", 0, "").is_err());

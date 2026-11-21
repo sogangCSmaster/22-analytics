@@ -22,7 +22,9 @@ pub fn suggested_props(event: &str) -> &'static [&'static str] {
         "outbound_click" => &["url", "domain"],
         "file_download" => &["url", "file_ext"],
         "scroll" => &["percent", "path"],
-        e if analytics_core::event::names::is_ecommerce(e) => &["item_id", "item_name", "currency", "value"],
+        e if analytics_core::event::names::is_ecommerce(e) => {
+            &["item_id", "item_name", "currency", "value"]
+        }
         _ => &["value", "label", "category"],
     }
 }

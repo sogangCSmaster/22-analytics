@@ -66,7 +66,9 @@ impl ApiError {
             ApiError::Invalid(_) => "입력값을 확인해 주세요".into(),
             ApiError::Conflict(m) if !m.is_empty() => m.clone(),
             ApiError::Conflict(_) => "이미 같은 항목이 있습니다".into(),
-            ApiError::Csrf => "보안 확인에 실패했습니다. 페이지를 새로 고친 뒤 다시 시도해 주세요".into(),
+            ApiError::Csrf => {
+                "보안 확인에 실패했습니다. 페이지를 새로 고친 뒤 다시 시도해 주세요".into()
+            }
             ApiError::RateLimited => "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요".into(),
             ApiError::TooLarge => "파일이 너무 큽니다 (최대 5MB)".into(),
             ApiError::Server => "일시적인 서버 오류입니다. 잠시 후 다시 시도해 주세요".into(),
@@ -76,7 +78,10 @@ impl ApiError {
 
     /// 다시 시도하면 나아질 수 있는 오류인지 (재시도 버튼 노출).
     pub fn retryable(&self) -> bool {
-        matches!(self, ApiError::Network | ApiError::Server | ApiError::RateLimited | ApiError::Decode)
+        matches!(
+            self,
+            ApiError::Network | ApiError::Server | ApiError::RateLimited | ApiError::Decode
+        )
     }
 }
 
@@ -101,17 +106,32 @@ mod tests {
 
     #[test]
     fn maps_status_and_code() {
-        assert_eq!(ApiError::from_response(401, &body("unauthorized", "x")), ApiError::Unauthorized);
+        assert_eq!(
+            ApiError::from_response(401, &body("unauthorized", "x")),
+            ApiError::Unauthorized
+        );
         assert_eq!(
             ApiError::from_response(401, &body("invalid_credentials", "x")),
             ApiError::InvalidCredentials
         );
-        assert_eq!(ApiError::from_response(403, &body("forbidden", "x")), ApiError::Forbidden);
-        assert_eq!(ApiError::from_response(403, &body("csrf_rejected", "x")), ApiError::Csrf);
+        assert_eq!(
+            ApiError::from_response(403, &body("forbidden", "x")),
+            ApiError::Forbidden
+        );
+        assert_eq!(
+            ApiError::from_response(403, &body("csrf_rejected", "x")),
+            ApiError::Csrf
+        );
         assert_eq!(ApiError::from_response(404, ""), ApiError::NotFound);
-        assert_eq!(ApiError::from_response(429, &body("too_many_requests", "x")), ApiError::RateLimited);
+        assert_eq!(
+            ApiError::from_response(429, &body("too_many_requests", "x")),
+            ApiError::RateLimited
+        );
         assert_eq!(ApiError::from_response(413, ""), ApiError::TooLarge);
-        assert_eq!(ApiError::from_response(500, "<html>oops</html>"), ApiError::Server);
+        assert_eq!(
+            ApiError::from_response(500, "<html>oops</html>"),
+            ApiError::Server
+        );
         assert_eq!(ApiError::from_response(502, ""), ApiError::Server);
     }
 
@@ -126,19 +146,43 @@ mod tests {
 
     #[test]
     fn unparseable_or_empty_400_gets_generic_text() {
-        assert_eq!(ApiError::from_response(400, "not json").message(), "입력값을 확인해 주세요");
-        assert_eq!(ApiError::from_response(400, &body("invalid_input", "  ")).message(), "입력값을 확인해 주세요");
+        assert_eq!(
+            ApiError::from_response(400, "not json").message(),
+            "입력값을 확인해 주세요"
+        );
+        assert_eq!(
+            ApiError::from_response(400, &body("invalid_input", "  ")).message(),
+            "입력값을 확인해 주세요"
+        );
     }
 
     #[test]
     fn korean_messages() {
-        assert_eq!(ApiError::Network.message(), "서버에 연결할 수 없습니다. 네트워크를 확인해 주세요");
+        assert_eq!(
+            ApiError::Network.message(),
+            "서버에 연결할 수 없습니다. 네트워크를 확인해 주세요"
+        );
         assert_eq!(ApiError::Unauthorized.message(), "로그인이 필요합니다");
-        assert_eq!(ApiError::InvalidCredentials.message(), "이메일 또는 비밀번호가 올바르지 않습니다");
-        assert_eq!(ApiError::Forbidden.message(), "이 작업을 할 권한이 없습니다");
-        assert_eq!(ApiError::NotFound.message(), "요청한 데이터를 찾을 수 없습니다");
-        assert_eq!(ApiError::RateLimited.message(), "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요");
-        assert_eq!(ApiError::Server.message(), "일시적인 서버 오류입니다. 잠시 후 다시 시도해 주세요");
+        assert_eq!(
+            ApiError::InvalidCredentials.message(),
+            "이메일 또는 비밀번호가 올바르지 않습니다"
+        );
+        assert_eq!(
+            ApiError::Forbidden.message(),
+            "이 작업을 할 권한이 없습니다"
+        );
+        assert_eq!(
+            ApiError::NotFound.message(),
+            "요청한 데이터를 찾을 수 없습니다"
+        );
+        assert_eq!(
+            ApiError::RateLimited.message(),
+            "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요"
+        );
+        assert_eq!(
+            ApiError::Server.message(),
+            "일시적인 서버 오류입니다. 잠시 후 다시 시도해 주세요"
+        );
         assert!(ApiError::Server.retryable() && !ApiError::Forbidden.retryable());
     }
 

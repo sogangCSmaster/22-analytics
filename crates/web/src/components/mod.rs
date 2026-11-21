@@ -14,7 +14,10 @@ mod render_tests {
     fn assert_escaped(html: &str) {
         assert!(!html.contains("<script>"), "raw script tag leaked: {html}");
         assert!(!html.contains("<img"), "raw img tag leaked: {html}");
-        assert!(html.contains("&#60;script&#62;"), "escaped text missing: {html}");
+        assert!(
+            html.contains("&#60;script&#62;"),
+            "escaped text missing: {html}"
+        );
     }
 
     #[test]

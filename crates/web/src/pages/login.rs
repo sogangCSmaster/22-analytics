@@ -10,7 +10,10 @@ use dioxus::prelude::*;
 
 /// `next`는 같은 사이트 안의 경로만 허용한다 (오픈 리다이렉트 방지).
 pub fn safe_next(next: &str) -> Option<String> {
-    let ok = next.starts_with('/') && !next.starts_with("//") && !next.starts_with("/\\") && !next.starts_with("/login");
+    let ok = next.starts_with('/')
+        && !next.starts_with("//")
+        && !next.starts_with("/\\")
+        && !next.starts_with("/login");
     ok.then(|| next.to_owned())
 }
 
@@ -23,7 +26,8 @@ pub fn Login(next: String) -> Element {
     let mut busy = use_signal(|| false);
     let mut touched = use_signal(|| false);
 
-    let email_err = (touched() && validate::email(&email()).is_err()).then(|| "올바른 이메일 주소를 입력하세요".to_string());
+    let email_err = (touched() && validate::email(&email()).is_err())
+        .then(|| "올바른 이메일 주소를 입력하세요".to_string());
 
     let mut submit = move || {
         touched.set(true);
@@ -36,7 +40,10 @@ pub fn Login(next: String) -> Element {
         }
         busy.set(true);
         error.set(None);
-        let req = LoginRequest { email: e, password: password() };
+        let req = LoginRequest {
+            email: e,
+            password: password(),
+        };
         let next = next.clone();
         spawn(async move {
             match api::send::<_, MeResponse>(Method::Post, LOGIN_PATH, &req).await {
@@ -105,7 +112,10 @@ mod tests {
 
     #[test]
     fn next_must_be_local_path() {
-        assert_eq!(safe_next("/p/1/pages?x=1").as_deref(), Some("/p/1/pages?x=1"));
+        assert_eq!(
+            safe_next("/p/1/pages?x=1").as_deref(),
+            Some("/p/1/pages?x=1")
+        );
         assert_eq!(safe_next("https://evil.com"), None);
         assert_eq!(safe_next("//evil.com"), None);
         assert_eq!(safe_next("/\\evil.com"), None);

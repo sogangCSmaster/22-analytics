@@ -16,7 +16,10 @@ pub struct Sort<K> {
 
 impl<K: PartialEq + Copy> Sort<K> {
     pub fn desc(key: K) -> Self {
-        Sort { key, dir: Dir::Desc }
+        Sort {
+            key,
+            dir: Dir::Desc,
+        }
     }
 
     /// 같은 열을 누르면 방향을 바꾸고, 다른 열이면 내림차순부터.
@@ -72,7 +75,9 @@ pub fn contains_ci(hay: &str, needle: &str) -> bool {
 
 /// 문자열 비교 (대소문자 무시, 같으면 원문 순).
 pub fn cmp_text(a: &str, b: &str) -> Ordering {
-    a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b))
+    a.to_lowercase()
+        .cmp(&b.to_lowercase())
+        .then_with(|| a.cmp(b))
 }
 
 /// CSV (RFC 4180). 스프레드시트 수식 주입을 막기 위해 `= + - @`로 시작하는 문자열 칸 앞에 `'`를 붙인다
@@ -81,7 +86,8 @@ pub fn to_csv(headers: &[&str], rows: &[Vec<String>]) -> String {
     fn is_number(s: &str) -> bool {
         let t = s.strip_prefix('-').unwrap_or(s);
         !t.is_empty()
-            && t.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b',')
+            && t.bytes()
+                .all(|b| b.is_ascii_digit() || b == b'.' || b == b',')
             && t.bytes().next().is_some_and(|b| b.is_ascii_digit())
     }
     fn cell(s: &str) -> String {
@@ -138,10 +144,27 @@ mod tests {
         };
         sort_rows(&mut v, Sort::desc(K::N), cmp);
         assert_eq!(v, vec![("가", 3), ("b", 2), ("a", 2), ("c", 1)]);
-        sort_rows(&mut v, Sort { key: K::N, dir: Dir::Asc }, cmp);
+        sort_rows(
+            &mut v,
+            Sort {
+                key: K::N,
+                dir: Dir::Asc,
+            },
+            cmp,
+        );
         assert_eq!(v, vec![("c", 1), ("b", 2), ("a", 2), ("가", 3)]);
-        sort_rows(&mut v, Sort { key: K::Name, dir: Dir::Asc }, cmp);
-        assert_eq!(v.iter().map(|x| x.0).collect::<Vec<_>>(), ["a", "b", "c", "가"]);
+        sort_rows(
+            &mut v,
+            Sort {
+                key: K::Name,
+                dir: Dir::Asc,
+            },
+            cmp,
+        );
+        assert_eq!(
+            v.iter().map(|x| x.0).collect::<Vec<_>>(),
+            ["a", "b", "c", "가"]
+        );
         let mut empty: Vec<(&str, i32)> = vec![];
         sort_rows(&mut empty, Sort::desc(K::N), cmp);
     }

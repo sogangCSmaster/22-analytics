@@ -31,7 +31,14 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [Tab::Install, Tab::Tracking, Tab::Origins, Tab::Rules, Tab::Attribution, Tab::Spend];
+    pub const ALL: [Tab; 6] = [
+        Tab::Install,
+        Tab::Tracking,
+        Tab::Origins,
+        Tab::Rules,
+        Tab::Attribution,
+        Tab::Spend,
+    ];
 
     pub fn slug(self) -> &'static str {
         match self {
@@ -45,7 +52,10 @@ impl Tab {
     }
 
     pub fn parse(s: &str) -> Tab {
-        Tab::ALL.into_iter().find(|t| t.slug() == s).unwrap_or(Tab::Install)
+        Tab::ALL
+            .into_iter()
+            .find(|t| t.slug() == s)
+            .unwrap_or(Tab::Install)
     }
 
     pub fn label(self) -> &'static str {
@@ -107,7 +117,9 @@ const S2S_EXAMPLE: &str = "POST {TRACKER}/v1/orders\nAuthorization: Bearer sk_li
 
 #[component]
 fn InstallTab(pid: i32, is_admin: bool) -> Element {
-    let snippet = use_resource(move || async move { api::get::<SnippetResponse>(&format!("/v1/projects/{pid}/snippet")).await });
+    let snippet = use_resource(move || async move {
+        api::get::<SnippetResponse>(&format!("/v1/projects/{pid}/snippet")).await
+    });
     rsx! {
         Card { title: "1. 스크립트 넣기",
             p { class: "page-desc", style: "margin: 0 0 16px;",
@@ -139,7 +151,9 @@ fn InstallTab(pid: i32, is_admin: bool) -> Element {
 #[component]
 fn ApiKeys(pid: i32, is_admin: bool) -> Element {
     let mut ctx = use_app();
-    let mut keys = use_resource(move || async move { api::get::<Vec<ApiKeyDto>>(&format!("/v1/projects/{pid}/api-keys")).await });
+    let mut keys = use_resource(move || async move {
+        api::get::<Vec<ApiKeyDto>>(&format!("/v1/projects/{pid}/api-keys")).await
+    });
     let mut revealed = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     rsx! {
@@ -249,14 +263,22 @@ fn TrackingTab(pid: i32, can_edit: bool) -> Element {
     let res = use_resource(move || async move {
         let r = api::get::<ProjectSettingsResponse>(&format!("/v1/projects/{pid}/settings")).await;
         if let Ok(v) = &r {
-            lists.set((v.settings.click_id_params.join(", "), v.settings.capture_query_params.join(", "), v.settings.strip_query_params.join(", ")));
+            lists.set((
+                v.settings.click_id_params.join(", "),
+                v.settings.capture_query_params.join(", "),
+                v.settings.strip_query_params.join(", "),
+            ));
             version.set(v.settings_version);
             draft.set(Some(v.settings.clone()));
         }
         r
     });
     let Some(s) = draft() else {
-        return load(res, rsx! { Card { SkeletonBlock { rows: 6 } } }, |_| rsx! {});
+        return load(
+            res,
+            rsx! { Card { SkeletonBlock { rows: 6 } } },
+            |_| rsx! {},
+        );
     };
     let toggle = move |f: fn(&mut TrackingSettings, bool)| {
         move |v: bool| {
@@ -268,7 +290,11 @@ fn TrackingTab(pid: i32, can_edit: bool) -> Element {
     let save = move |_| {
         let Some(mut s) = draft() else { return };
         let (a, b, c) = lists();
-        match (validate::param_list(&a), validate::param_list(&b), validate::param_list(&c)) {
+        match (
+            validate::param_list(&a),
+            validate::param_list(&b),
+            validate::param_list(&c),
+        ) {
             (Ok(a), Ok(b), Ok(c)) => {
                 s.click_id_params = a;
                 s.capture_query_params = b;
@@ -282,7 +308,12 @@ fn TrackingTab(pid: i32, can_edit: bool) -> Element {
         err.set(None);
         saving.set(true);
         spawn(async move {
-            let r = api::send::<_, ProjectSettingsResponse>(Method::Put, &format!("/v1/projects/{pid}/settings"), &s).await;
+            let r = api::send::<_, ProjectSettingsResponse>(
+                Method::Put,
+                &format!("/v1/projects/{pid}/settings"),
+                &s,
+            )
+            .await;
             if let Ok(v) = &r {
                 version.set(v.settings_version);
                 draft.set(Some(v.settings.clone()));
@@ -328,21 +359,26 @@ fn OriginsTab(pid: i32, can_edit: bool) -> Element {
     let mut ctx = use_app();
     let mut input = use_signal(String::new);
     let mut err = use_signal(|| None::<String>);
-    let mut res = use_resource(move || async move { api::get::<OriginsResponse>(&format!("/v1/projects/{pid}/origins")).await });
-    let mut add = move || {
-        match validate::origin(&input()) {
-            Ok(o) => {
-                err.set(None);
-                spawn(async move {
-                    let r = api::send::<_, OriginsResponse>(Method::Post, &format!("/v1/projects/{pid}/origins"), &AddOriginRequest { origin: o.clone() }).await;
-                    if ctx.report(&r, &format!("{o}을(를) 추가했어요")) {
-                        input.set(String::new());
-                        res.restart();
-                    }
-                });
-            }
-            Err(e) => err.set(Some(e.into())),
+    let mut res = use_resource(move || async move {
+        api::get::<OriginsResponse>(&format!("/v1/projects/{pid}/origins")).await
+    });
+    let mut add = move || match validate::origin(&input()) {
+        Ok(o) => {
+            err.set(None);
+            spawn(async move {
+                let r = api::send::<_, OriginsResponse>(
+                    Method::Post,
+                    &format!("/v1/projects/{pid}/origins"),
+                    &AddOriginRequest { origin: o.clone() },
+                )
+                .await;
+                if ctx.report(&r, &format!("{o}을(를) 추가했어요")) {
+                    input.set(String::new());
+                    res.restart();
+                }
+            });
         }
+        Err(e) => err.set(Some(e.into())),
     };
     rsx! {
         Card { title: "수집 허용 도메인",
@@ -423,7 +459,9 @@ fn rule_form(r: &ChannelRuleDto) -> RuleForm {
 #[component]
 fn RulesTab(pid: i32, can_edit: bool) -> Element {
     let mut ctx = use_app();
-    let mut res = use_resource(move || async move { api::get::<Vec<ChannelRuleDto>>(&format!("/v1/projects/{pid}/channel-rules")).await });
+    let mut res = use_resource(move || async move {
+        api::get::<Vec<ChannelRuleDto>>(&format!("/v1/projects/{pid}/channel-rules")).await
+    });
     // (편집 중인 규칙 id, 폼). id None = 새 규칙
     let mut editing = use_signal(|| None::<(Option<i64>, RuleForm)>);
     rsx! {
@@ -492,7 +530,10 @@ fn RuleDrawer(pid: i32, id: Option<i64>, form: RuleForm, onclose: EventHandler<b
     let mut ctx = use_app();
     let mut f = use_signal(|| form);
     let mut err = use_signal(|| None::<String>);
-    let field = move |label: &'static str, get: fn(&RuleForm) -> String, set: fn(&mut RuleForm, String), hint: &'static str| {
+    let field = move |label: &'static str,
+                      get: fn(&RuleForm) -> String,
+                      set: fn(&mut RuleForm, String),
+                      hint: &'static str| {
         rsx! {
             TextField { label, value: get(&f()), hint, oninput: move |v| set(&mut f.write(), v) }
         }
@@ -504,12 +545,27 @@ fn RuleDrawer(pid: i32, id: Option<i64>, form: RuleForm, onclose: EventHandler<b
             spawn(async move {
                 let ok = match id {
                     None => {
-                        let r = api::send::<_, ChannelRuleDto>(Method::Post, &format!("/v1/projects/{pid}/channel-rules"), &req).await;
+                        let r = api::send::<_, ChannelRuleDto>(
+                            Method::Post,
+                            &format!("/v1/projects/{pid}/channel-rules"),
+                            &req,
+                        )
+                        .await;
                         ctx.report(&r, "규칙을 추가했어요")
                     }
                     Some(rid) => {
-                        let patch = UpdateChannelRuleRequest { channel: Some(req.channel), when: Some(req.when), priority: req.priority, label: Some(req.label) };
-                        let r = api::send::<_, ChannelRuleDto>(Method::Patch, &format!("/v1/projects/{pid}/channel-rules/{rid}"), &patch).await;
+                        let patch = UpdateChannelRuleRequest {
+                            channel: Some(req.channel),
+                            when: Some(req.when),
+                            priority: req.priority,
+                            label: Some(req.label),
+                        };
+                        let r = api::send::<_, ChannelRuleDto>(
+                            Method::Patch,
+                            &format!("/v1/projects/{pid}/channel-rules/{rid}"),
+                            &patch,
+                        )
+                        .await;
                         ctx.report(&r, "규칙을 저장했어요")
                     }
                 };
@@ -553,20 +609,35 @@ fn AttributionTab(pid: i32, can_edit: bool) -> Element {
     let mut half = use_signal(String::new);
     let mut err = use_signal(|| None::<String>);
     let res = use_resource(move || async move {
-        let r = api::get::<AttributionSettingsDto>(&format!("/v1/projects/{pid}/attribution-settings")).await;
+        let r =
+            api::get::<AttributionSettingsDto>(&format!("/v1/projects/{pid}/attribution-settings"))
+                .await;
         if let Ok(v) = &r {
-            lookbacks.set(v.lookback_days.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", "));
+            lookbacks.set(
+                v.lookback_days
+                    .iter()
+                    .map(|d| d.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
             half.set(v.half_life_hours.to_string());
             draft.set(Some(v.clone()));
         }
         r
     });
     let Some(s) = draft() else {
-        return load(res, rsx! { Card { SkeletonBlock { rows: 5 } } }, |_| rsx! {});
+        return load(
+            res,
+            rsx! { Card { SkeletonBlock { rows: 5 } } },
+            |_| rsx! {},
+        );
     };
     let save = move |_| {
         let Some(mut d) = draft() else { return };
-        match (validate::lookbacks(&lookbacks()), validate::half_life(&half())) {
+        match (
+            validate::lookbacks(&lookbacks()),
+            validate::half_life(&half()),
+        ) {
             (Ok(l), Ok(h)) => {
                 d.lookback_days = l;
                 d.half_life_hours = h;
@@ -578,7 +649,12 @@ fn AttributionTab(pid: i32, can_edit: bool) -> Element {
         }
         err.set(None);
         spawn(async move {
-            let r = api::send::<_, AttributionSettingsDto>(Method::Put, &format!("/v1/projects/{pid}/attribution-settings"), &d).await;
+            let r = api::send::<_, AttributionSettingsDto>(
+                Method::Put,
+                &format!("/v1/projects/{pid}/attribution-settings"),
+                &d,
+            )
+            .await;
             if let Ok(v) = &r {
                 draft.set(Some(v.clone()));
             }
@@ -730,10 +806,17 @@ mod tests {
             id: 1,
             priority: 10,
             channel: "naver_shopping".into(),
-            when: RuleMatch { utm_source: vec!["naver".into(), "nv".into()], utm_campaign_prefix: vec!["shop_".into()], ..Default::default() },
+            when: RuleMatch {
+                utm_source: vec!["naver".into(), "nv".into()],
+                utm_campaign_prefix: vec!["shop_".into()],
+                ..Default::default()
+            },
             label: String::new(),
         };
-        assert_eq!(rule_summary(&r), "utm_source = naver 또는 nv 그리고 캠페인 접두어 = shop_");
+        assert_eq!(
+            rule_summary(&r),
+            "utm_source = naver 또는 nv 그리고 캠페인 접두어 = shop_"
+        );
         let f = rule_form(&r);
         assert_eq!(f.utm_source, "naver, nv");
         assert_eq!(validate::rule(&f).unwrap().when, r.when);
@@ -741,7 +824,12 @@ mod tests {
 
     #[test]
     fn sums_spend_by_channel() {
-        let row = |c: &str, a| AdSpendRow { day: "2026-11-01".into(), channel: c.into(), campaign: "x".into(), amount: a };
+        let row = |c: &str, a| AdSpendRow {
+            day: "2026-11-01".into(),
+            channel: c.into(),
+            campaign: "x".into(),
+            amount: a,
+        };
         let v = spend_by_channel(&[row("meta", 5), row("naver_sa", 7), row("meta", 4)]);
         assert_eq!(v, vec![("meta".into(), 9), ("naver_sa".into(), 7)]);
         assert!(spend_by_channel(&[]).is_empty());

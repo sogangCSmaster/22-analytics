@@ -24,7 +24,11 @@ pub fn nice_ceil(v: f64) -> f64 {
 /// 0부터 `nice_ceil(max)`까지 `count`등분 눈금 (count+1개).
 /// 간격은 1·2·2.5·5×10ⁿ. 칸 수는 `count`, `count+1`, `count-1` 중 위쪽 여백이 가장 작은 것.
 pub fn ticks(max: f64, count: usize) -> Vec<f64> {
-    let max = if max.is_finite() && max > 0.0 { max } else { 1.0 };
+    let max = if max.is_finite() && max > 0.0 {
+        max
+    } else {
+        1.0
+    };
     let count = count.max(1);
     let (step, n) = [count, count + 1, count.saturating_sub(1).max(1)]
         .into_iter()
@@ -205,7 +209,14 @@ pub fn ratio_pct(v: f64, max: f64) -> f64 {
 mod tests {
     use super::*;
 
-    const F: Frame = Frame { w: 100.0, h: 50.0, pad_l: 10.0, pad_r: 10.0, pad_t: 0.0, pad_b: 10.0 };
+    const F: Frame = Frame {
+        w: 100.0,
+        h: 50.0,
+        pad_l: 10.0,
+        pad_r: 10.0,
+        pad_t: 0.0,
+        pad_b: 10.0,
+    };
 
     #[test]
     fn nice_ceiling() {
@@ -248,9 +259,15 @@ mod tests {
         // 점 하나: 가운데 짧은 수평선
         assert_eq!(line_path(&[5.0], &F, 10.0), "M46.0,20.0L54.0,20.0");
         assert_eq!(area_path(&[], &F, 10.0), "");
-        assert_eq!(area_path(&[0.0, 10.0], &F, 10.0), "M10.0,40.0L90.0,0.0L90.0,40.0L10.0,40.0Z");
+        assert_eq!(
+            area_path(&[0.0, 10.0], &F, 10.0),
+            "M10.0,40.0L90.0,0.0L90.0,40.0L10.0,40.0Z"
+        );
         // NaN·무한대는 0으로
-        assert_eq!(line_path(&[f64::NAN, f64::INFINITY], &F, 10.0), "M10.0,40.0L90.0,40.0");
+        assert_eq!(
+            line_path(&[f64::NAN, f64::INFINITY], &F, 10.0),
+            "M10.0,40.0L90.0,40.0"
+        );
     }
 
     #[test]
@@ -295,7 +312,10 @@ mod tests {
     fn hover_zones_split_at_midpoints() {
         assert!(hover_zones(&F, 0).is_empty());
         assert_eq!(hover_zones(&F, 1), vec![(0.0, 100.0)]);
-        assert_eq!(hover_zones(&F, 3), vec![(0.0, 30.0), (30.0, 40.0), (70.0, 30.0)]);
+        assert_eq!(
+            hover_zones(&F, 3),
+            vec![(0.0, 30.0), (30.0, 40.0), (70.0, 30.0)]
+        );
         let z = hover_zones(&F, 90);
         let total: f64 = z.iter().map(|(_, w)| w).sum();
         assert!((total - 100.0).abs() < 1e-9);

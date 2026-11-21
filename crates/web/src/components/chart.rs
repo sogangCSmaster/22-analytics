@@ -210,7 +210,11 @@ pub fn ColumnChart(
     let step = label_step(n, 6);
     let center = |i: usize| (geo[i].0 + geo[i].2 / 2.0) / f.w * 100.0;
     // 막대 가운데를 점으로 보는 프레임 (마우스 감지 구간 계산용)
-    let half_slot = if n > 0 { f.plot_w() / n as f64 / 2.0 } else { 0.0 };
+    let half_slot = if n > 0 {
+        f.plot_w() / n as f64 / 2.0
+    } else {
+        0.0
+    };
     let centers = Frame {
         pad_l: f.pad_l + half_slot,
         pad_r: f.pad_r + half_slot,

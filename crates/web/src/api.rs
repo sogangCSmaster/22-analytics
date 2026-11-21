@@ -20,7 +20,11 @@ pub enum Method {
 }
 
 /// (상태 코드, 본문)
-async fn raw(method: Method, path: &str, body: Option<(String, &'static str)>) -> ApiResult<(u16, String)> {
+async fn raw(
+    method: Method,
+    path: &str,
+    body: Option<(String, &'static str)>,
+) -> ApiResult<(u16, String)> {
     let (status, text) = imp::fetch(method, path, body).await?;
     if status == 401 && path != LOGIN_PATH {
         crate::platform::redirect_to_login();

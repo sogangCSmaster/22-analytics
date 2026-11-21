@@ -22,7 +22,9 @@ pub fn biggest_drop(steps: &[FunnelStep]) -> Option<(usize, f64)> {
 }
 
 fn step_name(e: &str) -> String {
-    labels::event_hint(e).map(str::to_owned).unwrap_or_else(|| e.to_owned())
+    labels::event_hint(e)
+        .map(str::to_owned)
+        .unwrap_or_else(|| e.to_owned())
 }
 
 #[component]
@@ -99,7 +101,12 @@ mod tests {
     use super::*;
 
     fn s(v: u64, prev: f64) -> FunnelStep {
-        FunnelStep { event_name: "x".into(), visitors: v, rate_from_prev: prev, rate_from_first: 0.0 }
+        FunnelStep {
+            event_name: "x".into(),
+            visitors: v,
+            rate_from_prev: prev,
+            rate_from_first: 0.0,
+        }
     }
 
     #[test]

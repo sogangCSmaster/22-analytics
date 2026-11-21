@@ -383,12 +383,17 @@ pub fn load<T: Clone + 'static>(
     match state {
         None => skeleton,
         Some(Ok(v)) => f(v),
-        Some(Err(e)) => rsx! { ErrorBox { error: e, onretry: move |_| { let mut r = res; r.restart(); } } },
+        Some(Err(e)) => {
+            rsx! { ErrorBox { error: e, onretry: move |_| { let mut r = res; r.restart(); } } }
+        }
     }
 }
 
 #[component]
-pub fn ErrorBox(error: crate::logic::errors::ApiError, onretry: Option<EventHandler<()>>) -> Element {
+pub fn ErrorBox(
+    error: crate::logic::errors::ApiError,
+    onretry: Option<EventHandler<()>>,
+) -> Element {
     let retry = error.retryable() || matches!(error, crate::logic::errors::ApiError::NotFound);
     rsx! {
         div { class: "error-box", role: "alert",

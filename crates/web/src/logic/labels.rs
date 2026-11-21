@@ -64,16 +64,29 @@ pub fn model(m: Model) -> &'static str {
 
 pub fn model_help(m: Model) -> &'static str {
     match m {
-        Model::LastClick => "구매 직전 클릭에 매출을 모두 줍니다. 단기 효율을 빠르게 판단할 때 씁니다.",
-        Model::FirstClick => "처음 데려온 매체에 매출을 모두 줍니다. 신규 고객 확보가 목표일 때 씁니다.",
+        Model::LastClick => {
+            "구매 직전 클릭에 매출을 모두 줍니다. 단기 효율을 빠르게 판단할 때 씁니다."
+        }
+        Model::FirstClick => {
+            "처음 데려온 매체에 매출을 모두 줍니다. 신규 고객 확보가 목표일 때 씁니다."
+        }
         Model::Linear => "거쳐 간 매체에 똑같이 나눕니다. 여러 매체를 함께 운영할 때 씁니다.",
-        Model::TimeDecay => "구매에 가까운 클릭일수록 더 줍니다. 오래 고민하는 고관여 상품에 씁니다.",
-        Model::RawSum => "매체마다 주문 금액 전액을 자기 성과로 셉니다. 중복이 그대로 남아 있습니다.",
+        Model::TimeDecay => {
+            "구매에 가까운 클릭일수록 더 줍니다. 오래 고민하는 고관여 상품에 씁니다."
+        }
+        Model::RawSum => {
+            "매체마다 주문 금액 전액을 자기 성과로 셉니다. 중복이 그대로 남아 있습니다."
+        }
     }
 }
 
 /// 매출 보존 모델 (세그먼트 컨트롤 순서)
-pub const MODELS: [Model; 4] = [Model::LastClick, Model::FirstClick, Model::Linear, Model::TimeDecay];
+pub const MODELS: [Model; 4] = [
+    Model::LastClick,
+    Model::FirstClick,
+    Model::Linear,
+    Model::TimeDecay,
+];
 
 pub fn role(r: Role) -> &'static str {
     match r {

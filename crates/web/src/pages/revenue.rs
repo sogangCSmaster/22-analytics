@@ -41,22 +41,39 @@ pub fn explain(r: &RevenueReport) -> Option<String> {
 }
 
 pub fn path_label(channels: &[String]) -> String {
-    channels.iter().map(|c| labels::channel(c)).collect::<Vec<_>>().join(" → ")
+    channels
+        .iter()
+        .map(|c| labels::channel(c))
+        .collect::<Vec<_>>()
+        .join(" → ")
 }
 
 type SettingsRes = Resource<api::ApiResult<AttributionSettingsDto>>;
 
 /// 선택된 모델·lookback (사용자가 고르지 않았으면 프로젝트 기본값) 과 선택 가능한 lookback 목록.
-fn pick(settings: SettingsRes, model: Signal<Option<Model>>, lookback: Signal<Option<u8>>) -> (Model, Option<u8>, Vec<u8>) {
+fn pick(
+    settings: SettingsRes,
+    model: Signal<Option<Model>>,
+    lookback: Signal<Option<u8>>,
+) -> (Model, Option<u8>, Vec<u8>) {
     let (lookbacks, default_model) = match &*settings.read() {
         Some(Ok(s)) => (
-            s.lookback_days.iter().filter_map(|d| u8::try_from(*d).ok()).collect::<Vec<_>>(),
+            s.lookback_days
+                .iter()
+                .filter_map(|d| u8::try_from(*d).ok())
+                .collect::<Vec<_>>(),
             s.default_model,
         ),
         _ => (vec![], Model::LastClick),
     };
-    let m = model().unwrap_or(if default_model.conserves_revenue() { default_model } else { Model::LastClick });
-    let lb = lookback().filter(|l| lookbacks.contains(l)).or(lookbacks.first().copied());
+    let m = model().unwrap_or(if default_model.conserves_revenue() {
+        default_model
+    } else {
+        Model::LastClick
+    });
+    let lb = lookback()
+        .filter(|l| lookbacks.contains(l))
+        .or(lookbacks.first().copied());
     (m, lb, lookbacks)
 }
 
@@ -70,7 +87,10 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
 
     let settings = use_resource(move || {
         let p = pid();
-        async move { api::get::<AttributionSettingsDto>(&format!("/v1/projects/{p}/attribution-settings")).await }
+        async move {
+            api::get::<AttributionSettingsDto>(&format!("/v1/projects/{p}/attribution-settings"))
+                .await
+        }
     });
     let (cur_model, cur_lb, lookbacks) = pick(settings, model, lookback);
     let ready = settings.read().as_ref().is_some_and(|r| r.is_ok());
@@ -90,7 +110,12 @@ pub fn Revenue(pid: ReadSignal<i32>) -> Element {
         }
     });
     let orders = use_resource(move || {
-        let (p, r, (_, lb, _), off) = (pid(), ctx.range(), pick(settings, model, lookback), offset());
+        let (p, r, (_, lb, _), off) = (
+            pid(),
+            ctx.range(),
+            pick(settings, model, lookback),
+            offset(),
+        );
         async move {
             let lb = lb.ok_or(crate::logic::errors::ApiError::NotFound)?;
             api::get::<RecentOrdersReport>(&query::orders(p, r, lb, ORDERS_PAGE, off)).await
@@ -388,13 +413,20 @@ mod tests {
 
     fn report(raw: i64, dedup: i64, spend: i64) -> RevenueReport {
         RevenueReport {
-            range: ReportRange { from: "2026-11-01".into(), to: "2026-11-07".into() },
+            range: ReportRange {
+                from: "2026-11-01".into(),
+                to: "2026-11-07".into(),
+            },
             model: Model::LastClick,
             lookback_days: 7,
             raw_sum: raw,
             deduplicated: dedup,
             duplicate_amount: (raw - dedup).max(0),
-            duplicate_rate: if raw > 0 { (raw - dedup).max(0) as f64 / raw as f64 } else { 0.0 },
+            duplicate_rate: if raw > 0 {
+                (raw - dedup).max(0) as f64 / raw as f64
+            } else {
+                0.0
+            },
             orders: 3,
             spend_total: spend,
             roas: (spend > 0).then(|| dedup as f64 / spend as f64),
@@ -408,14 +440,20 @@ mod tests {
         assert!(m.contains("ROAS 500%가 325%로"), "{m}");
         assert!(m.contains("35%"));
         let m = explain(&report(200_000_000, 130_000_000, 0)).unwrap();
-        assert!(m.contains("2억 원이 실제 매출 1.3억 원로") || m.contains("2억 원"), "{m}");
+        assert!(
+            m.contains("2억 원이 실제 매출 1.3억 원로") || m.contains("2억 원"),
+            "{m}"
+        );
         assert_eq!(explain(&report(100, 100, 0)), None);
         assert_eq!(explain(&report(0, 0, 0)), None);
     }
 
     #[test]
     fn overlap_path_labels() {
-        assert_eq!(path_label(&["naver_sa".into(), "meta".into()]), "네이버 검색광고 → 메타");
+        assert_eq!(
+            path_label(&["naver_sa".into(), "meta".into()]),
+            "네이버 검색광고 → 메타"
+        );
         assert_eq!(path_label(&[]), "");
     }
 }

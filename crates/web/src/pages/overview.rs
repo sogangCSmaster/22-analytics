@@ -65,9 +65,17 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
     let series = use_resource(move || {
         let (p, r, cmp) = (pid(), ctx.range(), ctx.compare());
         async move {
-            let cur = api::get::<TimeseriesReport>(&query::report(p, Report::Timeseries, r)).await?;
+            let cur =
+                api::get::<TimeseriesReport>(&query::report(p, Report::Timeseries, r)).await?;
             let prev = if cmp {
-                Some(api::get::<TimeseriesReport>(&query::report(p, Report::Timeseries, r.previous())).await?)
+                Some(
+                    api::get::<TimeseriesReport>(&query::report(
+                        p,
+                        Report::Timeseries,
+                        r.previous(),
+                    ))
+                    .await?,
+                )
             } else {
                 None
             };
@@ -86,11 +94,17 @@ pub fn Overview(pid: ReadSignal<i32>) -> Element {
     let range = ctx.range();
     let spark = |m: Metric| -> Option<Vec<f64>> {
         match &*series.read() {
-            Some(Ok((cur, _))) if cur.points.len() > 1 => Some(cur.points.iter().map(|p| m.of(p)).collect()),
+            Some(Ok((cur, _))) if cur.points.len() > 1 => {
+                Some(cur.points.iter().map(|p| m.of(p)).collect())
+            }
             _ => None,
         }
     };
-    let (sv, ss, sp) = (spark(Metric::Visitors), spark(Metric::Sessions), spark(Metric::Pageviews));
+    let (sv, ss, sp) = (
+        spark(Metric::Visitors),
+        spark(Metric::Sessions),
+        spark(Metric::Pageviews),
+    );
 
     rsx! {
         crate::components::ui::PageHead {

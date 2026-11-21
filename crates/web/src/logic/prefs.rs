@@ -30,7 +30,8 @@ impl Prefs {
             m: &serde_json::Map<String, serde_json::Value>,
             k: &str,
         ) -> Option<T> {
-            m.get(k).and_then(|v| serde_json::from_value(v.clone()).ok())
+            m.get(k)
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
         }
         Prefs {
             project_id: field(&m, "project_id"),
@@ -111,7 +112,11 @@ mod tests {
     use analytics_core::dto::admin::{OrgAccess, ProjectSummary, UserDto};
 
     fn me() -> MeResponse {
-        let p = |id, name: &str, status| ProjectSummary { id, name: name.into(), status };
+        let p = |id, name: &str, status| ProjectSummary {
+            id,
+            name: name.into(),
+            status,
+        };
         MeResponse {
             user: UserDto {
                 id: 1,
@@ -126,7 +131,10 @@ mod tests {
                     id: 10,
                     name: "광고주A".into(),
                     role: Role::Viewer,
-                    projects: vec![p(1, "정지됨", ProjectStatus::Paused), p(2, "운영", ProjectStatus::Active)],
+                    projects: vec![
+                        p(1, "정지됨", ProjectStatus::Paused),
+                        p(2, "운영", ProjectStatus::Active),
+                    ],
                 },
                 OrgAccess {
                     id: 20,
@@ -159,14 +167,25 @@ mod tests {
         // 모르는 필드·잘못된 값은 무시하고 나머지는 살린다
         let p = Prefs::decode(Some(r#"{"project_id":7,"preset":"days30","extra":1}"#));
         assert_eq!((p.project_id, p.preset), (Some(7), Preset::Days30));
-        let p = Prefs::decode(Some(r#"{"project_id":"x","preset":"forever","compare":true}"#));
-        assert_eq!(p, Prefs { compare: true, ..Prefs::default() });
+        let p = Prefs::decode(Some(
+            r#"{"project_id":"x","preset":"forever","compare":true}"#,
+        ));
+        assert_eq!(
+            p,
+            Prefs {
+                compare: true,
+                ..Prefs::default()
+            }
+        );
     }
 
     #[test]
     fn range_falls_back_on_bad_custom() {
         let today = Day::parse("2026-11-21").unwrap();
-        let mut p = Prefs { preset: Preset::Custom, ..Prefs::default() };
+        let mut p = Prefs {
+            preset: Preset::Custom,
+            ..Prefs::default()
+        };
         assert_eq!(p.range(today).days(), 7);
         p.custom_from = Some("2026-11-01".into());
         p.custom_to = Some("2026-11-03".into());

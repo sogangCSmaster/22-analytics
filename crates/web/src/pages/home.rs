@@ -13,7 +13,9 @@ pub fn Home() -> Element {
         let me = ctx.me.read();
         let wanted = ctx.prefs.peek().project_id;
         (
-            me.as_ref().and_then(|m| prefs::resolve(m, wanted)).map(|s| s.project_id),
+            me.as_ref()
+                .and_then(|m| prefs::resolve(m, wanted))
+                .map(|s| s.project_id),
             me.as_ref().is_some_and(|m| m.user.is_super_admin),
         )
     };

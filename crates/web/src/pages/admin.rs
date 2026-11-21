@@ -63,7 +63,15 @@ fn OrgsTab(sup: bool) -> Element {
         Ok(n) => {
             err.set(None);
             spawn(async move {
-                let r = api::send::<_, OrgDto>(Method::Post, "/v1/orgs", &CreateOrgRequest { name: n, memo: String::new() }).await;
+                let r = api::send::<_, OrgDto>(
+                    Method::Post,
+                    "/v1/orgs",
+                    &CreateOrgRequest {
+                        name: n,
+                        memo: String::new(),
+                    },
+                )
+                .await;
                 if ctx.report(&r, "광고주를 만들었어요") {
                     name.set(String::new());
                     orgs.restart();
@@ -133,8 +141,12 @@ fn OrgDrawer(org: OrgDto, onclose: EventHandler<bool>) -> Element {
     let mut name = use_signal(|| org.name.clone());
     let mut memo = use_signal(|| org.memo.clone());
     let mut changed = use_signal(|| false);
-    let mut members = use_resource(move || async move { api::get::<Vec<MemberDto>>(&format!("/v1/orgs/{id}/members")).await });
-    let mut projects = use_resource(move || async move { api::get::<Vec<ProjectDto>>(&format!("/v1/orgs/{id}/projects")).await });
+    let mut members = use_resource(move || async move {
+        api::get::<Vec<MemberDto>>(&format!("/v1/orgs/{id}/members")).await
+    });
+    let mut projects = use_resource(move || async move {
+        api::get::<Vec<ProjectDto>>(&format!("/v1/orgs/{id}/projects")).await
+    });
     let mut m_email = use_signal(String::new);
     let mut m_role = use_signal(|| Role::Viewer);
     let mut p_name = use_signal(String::new);
@@ -147,7 +159,15 @@ fn OrgDrawer(org: OrgDto, onclose: EventHandler<bool>) -> Element {
         };
         ferr.set(None);
         spawn(async move {
-            let r = api::send::<_, OrgDto>(Method::Patch, &format!("/v1/orgs/{id}"), &UpdateOrgRequest { name: Some(n), memo: Some(memo()) }).await;
+            let r = api::send::<_, OrgDto>(
+                Method::Patch,
+                &format!("/v1/orgs/{id}"),
+                &UpdateOrgRequest {
+                    name: Some(n),
+                    memo: Some(memo()),
+                },
+            )
+            .await;
             if ctx.report(&r, "저장했어요") {
                 changed.set(true);
                 refresh_me(ctx).await;
@@ -161,7 +181,15 @@ fn OrgDrawer(org: OrgDto, onclose: EventHandler<bool>) -> Element {
         };
         ferr.set(None);
         spawn(async move {
-            let r = api::send::<_, MemberDto>(Method::Post, &format!("/v1/orgs/{id}/members"), &AddMemberRequest { email: e, role: m_role() }).await;
+            let r = api::send::<_, MemberDto>(
+                Method::Post,
+                &format!("/v1/orgs/{id}/members"),
+                &AddMemberRequest {
+                    email: e,
+                    role: m_role(),
+                },
+            )
+            .await;
             if ctx.report(&r, "멤버를 추가했어요") {
                 m_email.set(String::new());
                 members.restart();
@@ -175,15 +203,29 @@ fn OrgDrawer(org: OrgDto, onclose: EventHandler<bool>) -> Element {
         };
         ferr.set(None);
         spawn(async move {
-            let r = api::send::<_, ProjectDto>(Method::Post, &format!("/v1/orgs/{id}/projects"), &CreateProjectRequest { name: n, timezone: None, currency: None }).await;
-            if ctx.report(&r, "프로젝트를 만들었어요. 설치 코드는 설정에서 확인하세요") {
+            let r = api::send::<_, ProjectDto>(
+                Method::Post,
+                &format!("/v1/orgs/{id}/projects"),
+                &CreateProjectRequest {
+                    name: n,
+                    timezone: None,
+                    currency: None,
+                },
+            )
+            .await;
+            if ctx.report(&r, "프로젝트를 만들었어요. 설치 코드는 설정에서 확인하세요")
+            {
                 p_name.set(String::new());
                 projects.restart();
                 refresh_me(ctx).await;
             }
         });
     };
-    let roles = vec![(Role::Viewer, labels::role(Role::Viewer).to_string()), (Role::Analyst, labels::role(Role::Analyst).to_string()), (Role::Admin, labels::role(Role::Admin).to_string())];
+    let roles = vec![
+        (Role::Viewer, labels::role(Role::Viewer).to_string()),
+        (Role::Analyst, labels::role(Role::Analyst).to_string()),
+        (Role::Admin, labels::role(Role::Admin).to_string()),
+    ];
 
     rsx! {
         Drawer { open: true, title: org.name.clone(), onclose: move |_| onclose.call(changed()),
@@ -320,9 +362,15 @@ fn UsersTab() -> Element {
         }
         err.set(None);
         spawn(async move {
-            let req = CreateUserRequest { email: e, password: pw(), name: uname().trim().to_owned(), is_super_admin: sup() };
+            let req = CreateUserRequest {
+                email: e,
+                password: pw(),
+                name: uname().trim().to_owned(),
+                is_super_admin: sup(),
+            };
             let r = api::send::<_, UserDto>(Method::Post, "/v1/users", &req).await;
-            if ctx.report(&r, "사용자를 만들었어요. 초기 비밀번호를 따로 전달하세요") {
+            if ctx.report(&r, "사용자를 만들었어요. 초기 비밀번호를 따로 전달하세요")
+            {
                 email.set(String::new());
                 uname.set(String::new());
                 pw.set(String::new());

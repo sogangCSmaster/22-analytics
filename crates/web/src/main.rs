@@ -89,7 +89,10 @@ impl Route {
             Route::Events { .. } => Route::Events { pid },
             Route::Funnel { .. } => Route::Funnel { pid },
             Route::Revenue { .. } => Route::Revenue { pid },
-            Route::Settings { tab, .. } => Route::Settings { pid, tab: tab.clone() },
+            Route::Settings { tab, .. } => Route::Settings {
+                pid,
+                tab: tab.clone(),
+            },
             _ => Route::Overview { pid },
         }
     }

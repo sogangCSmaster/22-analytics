@@ -245,8 +245,16 @@ fn UserBlock() -> Element {
     let Some(m) = me else {
         return rsx! {};
     };
-    let display = if m.user.name.trim().is_empty() { m.user.email.clone() } else { m.user.name.clone() };
-    let initial: String = display.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+    let display = if m.user.name.trim().is_empty() {
+        m.user.email.clone()
+    } else {
+        m.user.name.clone()
+    };
+    let initial: String = display
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_default();
     rsx! {
         div { class: "user-block",
             div { class: "avatar", aria_hidden: "true", "{initial}" }

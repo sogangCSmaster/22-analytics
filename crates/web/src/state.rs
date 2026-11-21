@@ -60,7 +60,10 @@ impl AppCtx {
     }
 
     pub fn is_super_admin(&self) -> bool {
-        self.me.read().as_ref().is_some_and(|m| m.user.is_super_admin)
+        self.me
+            .read()
+            .as_ref()
+            .is_some_and(|m| m.user.is_super_admin)
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {

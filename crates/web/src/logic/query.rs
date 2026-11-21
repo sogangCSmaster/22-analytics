@@ -114,7 +114,11 @@ pub fn pages(pid: i32, r: DateRange, q: &str, limit: u32) -> String {
     format!(
         "{}/reports/pages{}",
         project(pid),
-        Query::new().range(r).opt("q", Some(q)).push("limit", limit).build()
+        Query::new()
+            .range(r)
+            .opt("q", Some(q))
+            .push("limit", limit)
+            .build()
     )
 }
 
@@ -226,8 +230,14 @@ mod tests {
     #[test]
     fn query_builder() {
         assert_eq!(Query::new().build(), "");
-        assert_eq!(Query::new().push("a", 1).push("b", "x y").build(), "?a=1&b=x%20y");
-        assert_eq!(Query::new().opt("q", Some("")).opt("n", None::<u8>).build(), "");
+        assert_eq!(
+            Query::new().push("a", 1).push("b", "x y").build(),
+            "?a=1&b=x%20y"
+        );
+        assert_eq!(
+            Query::new().opt("q", Some("")).opt("n", None::<u8>).build(),
+            ""
+        );
         assert_eq!(Query::new().opt("q", Some("p")).build(), "?q=p");
     }
 
@@ -269,7 +279,10 @@ mod tests {
             order(3, "ORD/1#2", 30),
             "/v1/projects/3/reports/orders/ORD%2F1%232?lookback=30"
         );
-        assert_eq!(origin(3, "shop.client.com"), "/v1/projects/3/origins/shop.client.com");
+        assert_eq!(
+            origin(3, "shop.client.com"),
+            "/v1/projects/3/origins/shop.client.com"
+        );
     }
 
     #[test]

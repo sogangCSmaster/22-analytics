@@ -211,7 +211,8 @@ pub fn datetime_kr(s: &str) -> String {
     let (Some(d), true) = (ok.then(|| Day::parse(&s[..10])).flatten(), ok) else {
         return s.to_owned();
     };
-    let hm: i64 = s[11..13].parse::<i64>().unwrap_or(0) * 60 + s[14..16].parse::<i64>().unwrap_or(0);
+    let hm: i64 =
+        s[11..13].parse::<i64>().unwrap_or(0) * 60 + s[14..16].parse::<i64>().unwrap_or(0);
     // 초·소수점 뒤의 오프셋 (`Z`, `+09:00`, `-05:00`). 없으면 서울 시각으로 본다.
     let tail = &s[16..];
     let offset_min = match tail.find(['Z', '+', '-']) {
@@ -219,7 +220,10 @@ pub fn datetime_kr(s: &str) -> String {
         Some(i) => {
             let o = &tail[i + 1..];
             let sign = if tail.as_bytes()[i] == b'-' { -1 } else { 1 };
-            match (o.get(0..2).and_then(|h| h.parse::<i64>().ok()), o.get(3..5).and_then(|m| m.parse::<i64>().ok())) {
+            match (
+                o.get(0..2).and_then(|h| h.parse::<i64>().ok()),
+                o.get(3..5).and_then(|m| m.parse::<i64>().ok()),
+            ) {
                 (Some(h), Some(m)) if o.len() == 5 => Some(sign * (h * 60 + m)),
                 _ => None,
             }
@@ -271,8 +275,19 @@ mod tests {
 
     #[test]
     fn parse_is_strict() {
-        assert_eq!(Day::parse("2026-11-21").map(Day::iso).as_deref(), Some("2026-11-21"));
-        for bad in ["", "2026-1-21", "2026-11-21T00:00", "2026/11/21", "２０２６-11-21", "abcd-ef-gh", "2026-02-30"] {
+        assert_eq!(
+            Day::parse("2026-11-21").map(Day::iso).as_deref(),
+            Some("2026-11-21")
+        );
+        for bad in [
+            "",
+            "2026-1-21",
+            "2026-11-21T00:00",
+            "2026/11/21",
+            "２０２６-11-21",
+            "abcd-ef-gh",
+            "2026-02-30",
+        ] {
             assert_eq!(Day::parse(bad), None, "{bad}");
         }
     }
@@ -281,7 +296,10 @@ mod tests {
     fn seoul_today_crosses_utc_midnight() {
         assert_eq!(Day::seoul_today(NOV21_0030_KST).iso(), "2026-11-21");
         // 1시간 전은 서울 기준 전날 23:30
-        assert_eq!(Day::seoul_today(NOV21_0030_KST - 3_600_000).iso(), "2026-11-20");
+        assert_eq!(
+            Day::seoul_today(NOV21_0030_KST - 3_600_000).iso(),
+            "2026-11-20"
+        );
         // 1970 이전 (음수)도 내림으로 계산
         assert_eq!(Day::seoul_today(-SEOUL_OFFSET_MS - 1).iso(), "1969-12-31");
     }
@@ -298,7 +316,10 @@ mod tests {
     fn presets_include_today() {
         let today = Day::parse("2026-11-21").unwrap();
         let r = preset_range(Preset::Days7, today).unwrap();
-        assert_eq!((r.from.iso(), r.to.iso()), ("2026-11-15".into(), "2026-11-21".into()));
+        assert_eq!(
+            (r.from.iso(), r.to.iso()),
+            ("2026-11-15".into(), "2026-11-21".into())
+        );
         assert_eq!(r.days(), 7);
         assert_eq!(preset_range(Preset::Today, today).unwrap().days(), 1);
         assert_eq!(preset_range(Preset::Days90, today).unwrap().days(), 90);
@@ -313,12 +334,20 @@ mod tests {
         assert_eq!(p.days(), 30);
         assert_eq!(p.to.add(1), r.from);
         let t = preset_range(Preset::Today, today).unwrap().previous();
-        assert_eq!((t.from.iso(), t.to.iso()), ("2026-02-28".into(), "2026-02-28".into()));
+        assert_eq!(
+            (t.from.iso(), t.to.iso()),
+            ("2026-02-28".into(), "2026-02-28".into())
+        );
     }
 
     #[test]
     fn each_day_lists_all() {
-        let r = custom_range("2026-12-30", "2027-01-02", Day::parse("2027-01-05").unwrap()).unwrap();
+        let r = custom_range(
+            "2026-12-30",
+            "2027-01-02",
+            Day::parse("2027-01-05").unwrap(),
+        )
+        .unwrap();
         let v: Vec<String> = r.each_day().into_iter().map(Day::iso).collect();
         assert_eq!(v, ["2026-12-30", "2026-12-31", "2027-01-01", "2027-01-02"]);
     }
@@ -328,17 +357,35 @@ mod tests {
         let today = Day::parse("2026-11-21").unwrap();
         assert!(custom_range("2026-11-01", "2026-11-21", today).is_ok());
         assert!(custom_range(" 2026-11-01 ", "2026-11-01", today).is_ok());
-        assert_eq!(custom_range("2026-11-22", "2026-11-21", today).unwrap_err(), "시작일이 종료일보다 늦습니다");
-        assert_eq!(custom_range("2026-11-01", "2026-11-22", today).unwrap_err(), "미래 날짜는 선택할 수 없습니다");
-        assert_eq!(custom_range("x", "2026-11-21", today).unwrap_err(), "날짜 형식이 올바르지 않습니다");
-        assert_eq!(custom_range("2025-01-01", "2026-11-21", today).unwrap_err(), "기간은 최대 366일까지 선택할 수 있습니다");
+        assert_eq!(
+            custom_range("2026-11-22", "2026-11-21", today).unwrap_err(),
+            "시작일이 종료일보다 늦습니다"
+        );
+        assert_eq!(
+            custom_range("2026-11-01", "2026-11-22", today).unwrap_err(),
+            "미래 날짜는 선택할 수 없습니다"
+        );
+        assert_eq!(
+            custom_range("x", "2026-11-21", today).unwrap_err(),
+            "날짜 형식이 올바르지 않습니다"
+        );
+        assert_eq!(
+            custom_range("2025-01-01", "2026-11-21", today).unwrap_err(),
+            "기간은 최대 366일까지 선택할 수 있습니다"
+        );
     }
 
     #[test]
     fn range_labels() {
         let today = Day::parse("2026-11-21").unwrap();
-        assert_eq!(preset_range(Preset::Days7, today).unwrap().label(), "2026.11.15 – 11.21");
-        assert_eq!(preset_range(Preset::Today, today).unwrap().label(), "2026.11.21");
+        assert_eq!(
+            preset_range(Preset::Days7, today).unwrap().label(),
+            "2026.11.15 – 11.21"
+        );
+        assert_eq!(
+            preset_range(Preset::Today, today).unwrap().label(),
+            "2026.11.21"
+        );
         let r = custom_range("2025-12-30", "2026-01-02", today).unwrap();
         assert_eq!(r.label(), "2025.12.30 – 2026.01.02");
     }
@@ -348,7 +395,10 @@ mod tests {
         assert_eq!(datetime_kr("2026-11-21T14:03:59+09:00"), "11월 21일 14:03");
         // UTC·다른 오프셋은 서울 시각으로 바꾼다
         assert_eq!(datetime_kr("2026-01-05T09:00:00Z"), "1월 5일 18:00");
-        assert_eq!(datetime_kr("2026-11-21T01:53:31.409821Z"), "11월 21일 10:53");
+        assert_eq!(
+            datetime_kr("2026-11-21T01:53:31.409821Z"),
+            "11월 21일 10:53"
+        );
         assert_eq!(datetime_kr("2026-12-31T23:30:00+00:00"), "1월 1일 08:30");
         assert_eq!(datetime_kr("2026-11-21T00:10:00-05:00"), "11월 21일 14:10");
         assert_eq!(datetime_kr("나쁜값<script>"), "나쁜값<script>");
