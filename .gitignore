@@ -7,3 +7,4 @@ tracker/dist/
 /var/
 .wrangler/
 crates/web/dist/
+.claude/worktrees/
