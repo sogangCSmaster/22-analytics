@@ -1,5 +1,6 @@
 //! PostgreSQL 메타데이터 계층.
 
+pub mod attribution_settings;
 pub mod projects;
 pub mod seed;
 

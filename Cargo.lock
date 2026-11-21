@@ -39,6 +39,7 @@ name = "analytics-ch"
 version = "0.1.0"
 dependencies = [
  "analytics-core",
+ "analytics-testkit",
  "anyhow",
  "clickhouse",
  "serde",
@@ -96,11 +97,17 @@ dependencies = [
  "analytics-ch",
  "analytics-core",
  "analytics-pg",
+ "analytics-testkit",
  "anyhow",
  "clap",
+ "clickhouse",
+ "serde",
+ "serde_json",
+ "sqlx",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -108,11 +115,13 @@ name = "analytics-pg"
 version = "0.1.0"
 dependencies = [
  "analytics-core",
+ "analytics-testkit",
  "anyhow",
  "hex",
  "rand 0.9.5",
  "serde_json",
  "sqlx",
+ "tokio",
  "tracing",
 ]
 
