@@ -8,6 +8,20 @@ publish.workspace = true
 
 [dependencies]
 dioxus = { version = "0.7", features = ["router"] }
+analytics-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# 브라우저 전용 (fetch, localStorage, 타이머). 네이티브 테스트 빌드에서는 빠진다.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-net = { version = "0.6", default-features = false, features = ["http"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+web-sys = { version = "0.3", features = ["Window", "Storage", "Location", "History"] }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+[dev-dependencies]
+dioxus-ssr = "0.7"
 
 [features]
 default = ["web"]

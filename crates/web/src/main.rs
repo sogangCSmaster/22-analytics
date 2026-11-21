@@ -5,6 +5,7 @@
 
 mod components;
 mod format;
+mod logic;
 mod mock;
 mod pages;
 
