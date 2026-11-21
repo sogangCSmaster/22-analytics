@@ -123,12 +123,13 @@ impl OrderStatus {
 }
 
 /// S2S 전송 포맷 1건 (ARCHITECTURE §5.1). 세 이벤트 유형의 필드를 모두 담는다.
+///
+/// `visitor_id`는 여기 없다: 형식이 틀려도 주문을 거부하지 않도록 [`validate`]가 따로 읽는다
+/// (모르는 필드는 무시하므로 역직렬화는 그 키를 건너뛴다).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WireOrder {
     pub event_type: String,
     pub order_id: String,
-    #[serde(default)]
-    pub visitor_id: Option<String>,
     #[serde(default)]
     pub member_id_hash: Option<String>,
     #[serde(default)]
@@ -310,10 +311,8 @@ pub fn validate(
             parsed
         }
     };
-    let mut fields = obj.clone();
-    fields.remove("visitor_id");
-    let w: WireOrder = serde_json::from_value(serde_json::Value::Object(fields))
-        .map_err(|e| OrderError::InvalidPayload(e.to_string()))?;
+    // `&Value`를 바로 역직렬화한다 (객체 복사 없음).
+    let w = WireOrder::deserialize(raw).map_err(|e| OrderError::InvalidPayload(e.to_string()))?;
 
     let event_type = OrderEventType::parse(&w.event_type).ok_or(OrderError::UnknownEventType)?;
     if !valid_order_id(&w.order_id) {

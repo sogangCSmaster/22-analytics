@@ -12,11 +12,28 @@ use time::OffsetDateTime;
 
 const MAX_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
 
+/// 쓴 바이트 수를 세는 래퍼 (이벤트마다 중간 `Vec`을 만들지 않고 바로 버퍼에 직렬화한다).
+struct Counting<W> {
+    inner: W,
+    bytes: u64,
+}
+
+impl<W: Write> Write for Counting<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.bytes += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 struct Segment {
     path: PathBuf,
-    out: BufWriter<File>,
+    out: Counting<BufWriter<File>>,
     opened: Instant,
-    bytes: u64,
 }
 
 pub struct SegmentWriter {
@@ -46,12 +63,10 @@ impl SegmentWriter {
         }
         let seg = self.current.as_mut().expect("방금 열었다");
         for e in events {
-            let line = serde_json::to_vec(e)?;
-            seg.out.write_all(&line)?;
+            serde_json::to_writer(&mut seg.out, e)?;
             seg.out.write_all(b"\n")?;
-            seg.bytes += line.len() as u64 + 1;
         }
-        if seg.bytes >= MAX_SEGMENT_BYTES {
+        if seg.out.bytes >= MAX_SEGMENT_BYTES {
             self.rotate_now()?;
         }
         Ok(())
@@ -113,9 +128,11 @@ impl SegmentWriter {
             .open(&path)?;
         Ok(Segment {
             path,
-            out: BufWriter::with_capacity(256 * 1024, file),
+            out: Counting {
+                inner: BufWriter::with_capacity(256 * 1024, file),
+                bytes: 0,
+            },
             opened: Instant::now(),
-            bytes: 0,
         })
     }
 }
@@ -145,4 +162,21 @@ fn leftover_segments(dir: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counting_writer_counts_bytes() {
+        let mut w = Counting {
+            inner: Vec::new(),
+            bytes: 0,
+        };
+        serde_json::to_writer(&mut w, &serde_json::json!({"a": "한글"})).unwrap();
+        w.write_all(b"\n").unwrap();
+        assert_eq!(w.bytes, w.inner.len() as u64);
+        assert_eq!(w.inner, "{\"a\":\"한글\"}\n".as_bytes());
+    }
 }
