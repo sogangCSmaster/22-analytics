@@ -71,7 +71,7 @@ pub async fn create(
         CreateUserError::Other(e) => ApiError::internal(e),
     })?;
     audit(
-        &state,
+        &state.pg,
         None,
         user.id(),
         "user.create",

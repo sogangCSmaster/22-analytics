@@ -52,7 +52,7 @@ pub async fn put_settings(
             .ok_or_else(ApiError::not_found)?;
     if changed {
         audit(
-            &state,
+            &state.pg,
             Some(access.project.org_id),
             access.user.id(),
             "project.settings.update",
@@ -88,7 +88,7 @@ pub async fn add_origin(
     let created = analytics_pg::projects::add_origin(&state.pg, access.id(), &origin).await?;
     if created {
         audit(
-            &state,
+            &state.pg,
             Some(access.project.org_id),
             access.user.id(),
             "origin.add",
@@ -119,7 +119,7 @@ pub async fn remove_origin(
     };
     if analytics_pg::projects::remove_origin(&state.pg, access.id(), &origin).await? {
         audit(
-            &state,
+            &state.pg,
             Some(access.project.org_id),
             access.user.id(),
             "origin.remove",
@@ -175,7 +175,7 @@ pub async fn create_rule(
     )
     .await?;
     audit(
-        &state,
+        &state.pg,
         Some(access.project.org_id),
         access.user.id(),
         "channel_rule.create",
@@ -213,7 +213,7 @@ pub async fn update_rule(
         .await?
         .ok_or_else(ApiError::not_found)?;
     audit(
-        &state,
+        &state.pg,
         Some(access.project.org_id),
         access.user.id(),
         "channel_rule.update",
@@ -236,7 +236,7 @@ pub async fn delete_rule(
     let id = rule_id(&params)?;
     if analytics_pg::channel_rules::delete(&state.pg, access.id(), id).await? {
         audit(
-            &state,
+            &state.pg,
             Some(access.project.org_id),
             access.user.id(),
             "channel_rule.delete",
@@ -293,7 +293,7 @@ pub async fn put_attribution(
     }
     let saved = analytics_pg::attribution::put(&state.pg, access.id(), &s).await?;
     audit(
-        &state,
+        &state.pg,
         Some(access.project.org_id),
         access.user.id(),
         "attribution.update",

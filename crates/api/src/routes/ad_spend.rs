@@ -110,7 +110,7 @@ pub async fn upload(
         rows.iter().map(|r| r.day).max(),
     );
     audit(
-        &state,
+        &state.pg,
         Some(access.project.org_id),
         access.user.id(),
         "ad_spend.upload",

@@ -72,7 +72,7 @@ pub async fn login(
         .await?
         .ok_or_else(ApiError::invalid_credentials)?;
     audit(
-        &state,
+        &state.pg,
         None,
         user_id,
         "auth.login",
@@ -96,7 +96,7 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> ApiRes
     if let (Some(token), Some(user)) = (token, user) {
         analytics_pg::sessions::delete(&state.pg, &token).await?;
         audit(
-            &state,
+            &state.pg,
             None,
             user.id,
             "auth.logout",

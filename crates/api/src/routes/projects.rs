@@ -52,7 +52,7 @@ pub async fn create(
     let currency = validate::currency(req.currency.as_deref().unwrap_or(DEFAULT_CURRENCY))?;
     let p = analytics_pg::projects::create(&state.pg, access.id(), &name, &tz, &currency).await?;
     audit(
-        &state,
+        &state.pg,
         Some(access.id()),
         access.user.id(),
         "project.create",
@@ -93,7 +93,7 @@ pub async fn update(
     .await?
     .ok_or_else(ApiError::not_found)?;
     audit(
-        &state,
+        &state.pg,
         Some(p.org_id),
         access.user.id(),
         "project.update",

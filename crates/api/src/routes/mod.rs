@@ -9,7 +9,6 @@ pub mod projects;
 pub mod reports;
 pub mod users;
 
-use crate::AppState;
 use crate::error::ApiResult;
 use analytics_core::dto::admin::{OrgDto, ProjectDto, ProjectStatus, Role, UserDto};
 use time::OffsetDateTime;
@@ -63,9 +62,9 @@ pub fn project_dto(p: &analytics_pg::projects::Project, role: Role) -> ProjectDt
     }
 }
 
-/// 감사 로그 기록.
-pub async fn audit(
-    state: &AppState,
+/// 감사 로그 기록. 변경과 같은 트랜잭션(`&mut *tx`)을 넘겨, 기록이 실패하면 변경도 되돌린다.
+pub async fn audit<'e>(
+    ex: impl sqlx::PgExecutor<'e>,
     org_id: Option<i64>,
     user_id: i64,
     action: &str,
@@ -73,7 +72,7 @@ pub async fn audit(
     payload: serde_json::Value,
 ) -> ApiResult<()> {
     analytics_pg::audit::record(
-        &state.pg,
+        ex,
         analytics_pg::audit::Entry {
             org_id,
             user_id: Some(user_id),

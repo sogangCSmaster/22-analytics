@@ -57,7 +57,7 @@ pub async fn create(
         analytics_pg::api_keys::create(&state.pg, access.id(), Some(access.user.id())).await?;
     // 감사 로그에는 prefix만 남긴다 (평문 키 금지).
     audit(
-        &state,
+        &state.pg,
         Some(access.project.org_id),
         access.user.id(),
         "api_key.create",
@@ -83,7 +83,7 @@ pub async fn revoke(
     let id: i64 = parse_id(params.get("key_id").map(String::as_str).unwrap_or(""))?;
     if analytics_pg::api_keys::revoke(&state.pg, access.id(), id).await? {
         audit(
-            &state,
+            &state.pg,
             Some(access.project.org_id),
             access.user.id(),
             "api_key.revoke",
