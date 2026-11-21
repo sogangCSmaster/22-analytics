@@ -117,6 +117,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "analytics-testkit"
+version = "0.1.0"
+dependencies = [
+ "analytics-ch",
+ "analytics-pg",
+ "anyhow",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "analytics-web"
 version = "0.1.0"
 dependencies = [

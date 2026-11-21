@@ -7,11 +7,13 @@ members = [
     "crates/ingest",
     "crates/api",
     "crates/jobs",
+    "crates/testkit",
     "crates/web",
     "edge/worker",
 ]
 # web(Dioxus)와 edge(Cloudflare Worker)는 wasm32 타깃으로 따로 빌드한다.
 default-members = [
+    "crates/testkit",
     "crates/core",
     "crates/ch",
     "crates/pg",
@@ -31,6 +33,7 @@ rust-version = "1.85"
 analytics-core = { path = "crates/core" }
 analytics-ch = { path = "crates/ch" }
 analytics-pg = { path = "crates/pg" }
+analytics-testkit = { path = "crates/testkit" }
 
 anyhow = "1"
 thiserror = "2"

@@ -1,0 +1,15 @@
+[package]
+name = "analytics-testkit"
+description = "통합 테스트 도구: 테스트마다 격리된 Postgres·ClickHouse 데이터베이스"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+analytics-ch.workspace = true
+analytics-pg.workspace = true
+anyhow.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+uuid.workspace = true

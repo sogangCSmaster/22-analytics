@@ -7,6 +7,7 @@
 pub mod attribution;
 pub mod channel;
 pub mod collect;
+pub mod dto;
 pub mod edge_auth;
 pub mod event;
 pub mod ids;
