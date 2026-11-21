@@ -172,6 +172,38 @@ mod tests {
     }
 
     #[test]
+    fn query_without_stripped_params_is_kept_verbatim() {
+        // 제거할 파라미터가 없으면 쿼리 문자열을 다시 인코딩하지 않는다 (순서·인코딩 그대로)
+        let s = TrackingSettings::default();
+        let q = "b=2&a=1&utm_source=naver&q=%ED%95%9C%EA%B8%80&x=a+b&y=c%20d&empty=&flag&gclid=G1";
+        let p = parse_page_url(&format!("https://Shop.Example.com/p?{q}#frag"), &s).unwrap();
+        assert_eq!(p.url, format!("https://shop.example.com/p?{q}"));
+        assert_eq!(p.host, "shop.example.com");
+        assert_eq!(p.campaign.utm_source, "naver");
+        assert_eq!(p.campaign.click_id_type, "gclid");
+        assert_eq!(p.campaign.click_id, "G1");
+    }
+
+    #[test]
+    fn stripped_params_removed_and_rest_kept_in_order() {
+        let s = TrackingSettings {
+            strip_query_params: vec!["Coupon".into()],
+            ..Default::default()
+        };
+        let p = parse_page_url(
+            "https://a.com/?z=1&EMAIL=x%40y.com&coupon=C&a=%ED%95%9C",
+            &s,
+        )
+        .unwrap();
+        assert_eq!(p.url, "https://a.com/?z=1&a=%ED%95%9C");
+        // 모두 제거되면 `?`도 남기지 않는다
+        let p = parse_page_url("https://a.com/x?email=a&phone=1", &s).unwrap();
+        assert_eq!(p.url, "https://a.com/x");
+        let p = parse_page_url("https://a.com/x?", &s).unwrap();
+        assert_eq!(p.url, "https://a.com/x");
+    }
+
+    #[test]
     fn rejects_non_http() {
         assert!(parse_page_url("javascript:alert(1)", &TrackingSettings::default()).is_none());
     }
@@ -191,6 +223,13 @@ mod tests {
         assert!(host_allowed("client.com", &allowed));
         assert!(host_allowed("www.client.com", &allowed));
         assert!(!host_allowed("evilclient.com", &allowed));
+        let allowed = vec![" *.Client.com ".to_string(), "b.org".to_string()];
+        assert!(host_allowed("WWW.CLIENT.COM", &allowed));
+        assert!(host_allowed("client.com", &allowed));
+        assert!(host_allowed("b.org", &allowed));
+        assert!(!host_allowed("xclient.com", &allowed));
+        assert!(!host_allowed("client.com.evil.io", &allowed));
+        assert!(!host_allowed("anything", &[]));
     }
 
     #[test]
